@@ -1,8 +1,6 @@
 import re
 from typing import Any
 
-from youtube_transcript_api import YouTubeTranscriptApi
-
 from app.storage.documents import DocumentStore
 
 YOUTUBE_PATTERNS = [
@@ -31,6 +29,16 @@ def _format_transcript(segments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _fetch_transcript_segments(video_id: str) -> list[dict]:
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    api = YouTubeTranscriptApi()
+    fetched = api.fetch(video_id, languages=["en"])
+    if hasattr(fetched, "to_raw_data"):
+        return fetched.to_raw_data()
+    return list(fetched)
+
+
 async def ingest_youtube(
     store: DocumentStore,
     *,
@@ -43,13 +51,7 @@ async def ingest_youtube(
         raise ValueError("Could not extract YouTube video ID from URL")
 
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript = transcript_list.find_transcript(["en"])
-        try:
-            transcript = transcript.translate("en")
-        except Exception:
-            pass
-        segments = transcript.fetch()
+        segments = _fetch_transcript_segments(video_id)
     except Exception as exc:
         raise ValueError(
             f"No transcript available for this video ({video_id}). "
@@ -57,6 +59,9 @@ async def ingest_youtube(
         ) from exc
 
     text = _format_transcript(segments)
+    if not text.strip():
+        raise ValueError(f"Transcript for {video_id} was empty.")
+
     meta = dict(metadata or {})
     meta.update({"video_id": video_id, "source_url": url})
 

@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 from app.ingest.text import ingest_text
 from app.ingest.url import ingest_url
-from app.ingest.youtube import ingest_youtube
 from app.ingest.pdf import ingest_pdf_file
 from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
@@ -238,6 +237,8 @@ async def ingest_url_route(body: UrlIngestRequest):
 
 @router.post("/ingest/youtube")
 async def ingest_youtube_route(body: YoutubeIngestRequest):
+    from app.ingest.youtube import ingest_youtube
+
     _, store, _, _, _ = await _get_services()
     try:
         doc = await ingest_youtube(
