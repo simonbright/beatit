@@ -268,13 +268,26 @@
         if (!data?.version) return;
         const el = document.getElementById("app-version");
         if (!el) return;
-        const updated = data.updated
-          ? new Date(`${data.updated}T12:00:00`).toLocaleDateString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            })
-          : "";
+        const updated = data.updated_display
+          || (data.updated
+            ? (() => {
+                const iso = data.updated.includes("T") ? data.updated : `${data.updated}T12:00:00`;
+                const dt = new Date(iso);
+                const date = dt.toLocaleDateString("en-US", {
+                  timeZone: "America/New_York",
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                });
+                const time = dt.toLocaleTimeString("en-US", {
+                  timeZone: "America/New_York",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  hour12: true,
+                });
+                return `${date} · ${time} ET`;
+              })()
+            : "");
         el.textContent = `${data.name || "BeatIt"} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
       })
       .catch(() => {});

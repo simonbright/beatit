@@ -623,8 +623,20 @@ textarea { resize: vertical; min-height: 100px; }
   border-top: 1px solid var(--border);
 }
 
+.library-pagination .btn {
+  margin-top: 0;
+  min-height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .library-page-info {
   min-width: 8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   text-align: center;
 }
 

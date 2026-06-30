@@ -113,11 +113,22 @@ function sleep(ms) {
 function formatVersionUpdated(isoDate) {
   if (!isoDate) return "";
   try {
-    return new Date(`${isoDate}T12:00:00`).toLocaleDateString(undefined, {
+    const iso = isoDate.includes("T") ? isoDate : `${isoDate}T12:00:00`;
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return isoDate;
+    const date = dt.toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
       year: "numeric",
-      month: "short",
+      month: "long",
       day: "numeric",
     });
+    const time = dt.toLocaleTimeString("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `${date} · ${time} ET`;
   } catch {
     return isoDate;
   }
@@ -126,7 +137,7 @@ function formatVersionUpdated(isoDate) {
 function renderAppVersion(data) {
   const el = $("#app-version");
   if (!el || !data?.version) return;
-  const updated = formatVersionUpdated(data.updated);
+  const updated = data.updated_display || formatVersionUpdated(data.updated);
   const name = data.name || "BeatIt";
   el.textContent = `${name} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
 }
@@ -1110,7 +1121,7 @@ async function savePatientContext() {
   if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
 
-const LIBRARY_PAGE_SIZE = 50;
+const LIBRARY_PAGE_SIZE = 10;
 
 const LIBRARY_TYPE_LABELS = {
   text: "Clinical notes",
