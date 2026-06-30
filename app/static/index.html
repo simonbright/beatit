@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BeatIt — Oncology Case Analysis</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem("beatit-theme");
+      if (t === "day" || t === "night") document.documentElement.setAttribute("data-theme", t);
+      else if (window.matchMedia("(prefers-color-scheme: light)").matches)
+        document.documentElement.setAttribute("data-theme", "day");
+      else document.documentElement.setAttribute("data-theme", "night");
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <h1>BeatIt</h1>
+        <p class="subtitle">Pancreatic cancer case workspace</p>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch to day theme" title="Toggle day/night theme">
+          <span class="theme-icon theme-icon-sun" aria-hidden="true">☀</span>
+          <span class="theme-icon theme-icon-moon" aria-hidden="true">☾</span>
+        </button>
+        <div class="status-pill" id="llm-status">Checking LLM…</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="card patient-banner">
+      <h2>Patient context</h2>
+      <p>Woman in her 70s · Recently diagnosed pancreatic cancer · Possible liver metastasis</p>
+      <p class="muted">Store evidence, identify gaps, and synthesize treatment options. Not a substitute for in-person oncology care.</p>
+    </section>
+
+    <div id="upload-result" class="card upload-result hidden" aria-live="polite">
+      <h3>Last upload</h3>
+      <p id="upload-result-title" class="upload-result-title"></p>
+      <div id="upload-result-paths" class="doc-paths"></div>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="ingest" role="tab">Add data</button>
+      <button class="tab" data-tab="library" role="tab">Library</button>
+      <button class="tab" data-tab="analyze" role="tab">Analyze</button>
+      <button class="tab" data-tab="history" role="tab">History</button>
+      <button class="tab" data-tab="settings" role="tab">Settings</button>
+    </div>
+
+    <!-- INGEST -->
+    <section id="panel-ingest" class="panel active">
+      <div class="ingest-grid">
+        <article class="card">
+          <h3>Clinical notes / text</h3>
+          <label>Title<input type="text" id="text-title" placeholder="e.g. Oncologist visit notes — June 2026"></label>
+          <label>Content<textarea id="text-content" rows="8" placeholder="Paste pathology, imaging summaries, consult notes…"></textarea></label>
+          <button class="btn primary" id="btn-ingest-text">Save text</button>
+        </article>
+
+        <article class="card">
+          <h3>Web page or URL</h3>
+          <label>URL<input type="url" id="url-input" placeholder="https://…"></label>
+          <label>Title (optional)<input type="text" id="url-title" placeholder="Auto-detected from page"></label>
+          <button class="btn primary" id="btn-ingest-url">Fetch &amp; store</button>
+        </article>
+
+        <article class="card">
+          <h3>YouTube</h3>
+          <label>Video URL<input type="url" id="youtube-input" placeholder="https://youtube.com/watch?v=…"></label>
+          <label>Title (optional)<input type="text" id="youtube-title"></label>
+          <p class="muted small">Uses available captions/transcripts. Videos without captions cannot be ingested yet.</p>
+          <button class="btn primary" id="btn-ingest-youtube">Ingest transcript</button>
+        </article>
+
+        <article class="card">
+          <h3>PDF document</h3>
+          <label>Title (optional)<input type="text" id="pdf-title"></label>
+          <label class="file-label">
+            <input type="file" id="pdf-file" accept=".pdf,application/pdf">
+            <span>Choose PDF file</span>
+          </label>
+          <button class="btn primary" id="btn-ingest-pdf">Upload PDF</button>
+        </article>
+
+        <article class="card">
+          <h3>Video file</h3>
+          <label>Title (optional)<input type="text" id="video-title"></label>
+          <label>Notes / transcript (optional)<textarea id="video-notes" rows="4" placeholder="Manual notes until transcription is connected"></textarea></label>
+          <label class="file-label">
+            <input type="file" id="video-file" accept="video/*">
+            <span>Choose video file</span>
+          </label>
+          <button class="btn primary" id="btn-ingest-video">Upload video</button>
+        </article>
+      </div>
+    </section>
+
+    <!-- LIBRARY -->
+    <section id="panel-library" class="panel">
+      <div class="card">
+        <div class="row-between">
+          <h3>Stored documents</h3>
+          <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
+        </div>
+        <div id="documents-list" class="documents-list"></div>
+      </div>
+      <div class="card hidden" id="doc-detail">
+        <div class="row-between">
+          <h3 id="doc-detail-title">Document</h3>
+          <button class="btn ghost" id="btn-close-detail">Close</button>
+        </div>
+        <div id="doc-detail-paths" class="doc-paths"></div>
+        <pre id="doc-detail-text" class="doc-text"></pre>
+      </div>
+    </section>
+
+    <!-- ANALYZE -->
+    <section id="panel-analyze" class="panel">
+      <div class="card">
+        <h3>Medical synthesis</h3>
+        <p class="muted">Uses OpenRouter by default until Ollama is configured. Analysis uses all stored documents unless you select specific ones in the library.</p>
+
+        <div class="analyze-actions">
+          <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
+          <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
+        </div>
+
+        <label>Your question
+          <textarea id="analyze-query" rows="4" placeholder="e.g. What staging workup is still needed? What are resectability considerations with possible liver mets?"></textarea>
+        </label>
+
+        <div class="row-between wrap">
+          <span class="muted small" id="selected-count">Using all documents</span>
+          <button class="btn primary" id="btn-analyze">Run analysis</button>
+        </div>
+
+        <div id="analyze-loading" class="loading hidden">Running analysis… this may take a minute.</div>
+        <article id="analyze-result" class="result hidden"></article>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="panel-history" class="panel">
+      <div class="card">
+        <div class="row-between">
+          <h3>Analysis history</h3>
+          <button class="btn secondary" id="btn-refresh-history">Refresh</button>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="panel-settings" class="panel">
+      <div class="card settings-card">
+        <h3>LLM settings</h3>
+        <p class="muted">OpenRouter model used for medical synthesis. Budget models cost less; premium models may give deeper analysis.</p>
+
+        <label for="settings-model">OpenRouter model
+          <select id="settings-model"></select>
+        </label>
+        <p id="settings-model-desc" class="muted small settings-model-desc"></p>
+
+        <div class="row-between wrap settings-actions">
+          <span class="muted small" id="settings-current">Loading…</span>
+          <button class="btn primary" id="btn-save-settings">Save model</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

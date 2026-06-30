@@ -1,0 +1,57 @@
+import os
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # LLM: openrouter (default), ollama, or auto (Ollama when ready, else OpenRouter)
+    llm_provider: str = "openrouter"
+
+    openrouter_api_key: str = ""
+    openrouter_model: str = "google/gemini-2.0-flash-lite-001"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str = "http://localhost:8080"
+    openrouter_app_title: str = "BeatIt"
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
+
+    # Secured access (required on Render — set both username and password)
+    auth_username: str = ""
+    auth_password: str = ""
+
+    data_dir: Path = Path("./data")
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.auth_username and self.auth_password)
+
+    @property
+    def documents_dir(self) -> Path:
+        return self.data_dir / "documents"
+
+    @property
+    def extracted_dir(self) -> Path:
+        return self.data_dir / "extracted"
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "beatit.db"
+
+
+settings = Settings()
+
+# Render and other PaaS providers inject PORT.
+_env_port = os.getenv("PORT")
+if _env_port:
+    settings.port = int(_env_port)
+
+# Prefer explicit public URL, then Render's auto-set external URL.
+_public_url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+if _public_url:
+    settings.openrouter_http_referer = _public_url.rstrip("/")
