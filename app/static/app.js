@@ -380,7 +380,7 @@ function scrollToAssessmentResults() {
   target.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function scrollToOpenGaps() {
+function scrollToOpenItems() {
   if (!$("#panel-analyze")?.classList.contains("active")) {
     switchTab("analyze");
   }
@@ -396,7 +396,7 @@ function initCaseStatusNavigation() {
     event.preventDefault();
     const target = link.dataset.caseNav;
     if (target === "library") switchTab("library");
-    else if (target === "open-gaps") scrollToOpenGaps();
+    else if (target === "open-items") scrollToOpenItems();
   });
 }
 
@@ -453,7 +453,7 @@ function renderCaseStatus() {
         `<span class="case-status-sep">·</span>`,
         `<span>${escapeHtml(formatEasternTimestamp(analysis.created_at))}</span>`,
         `<span class="case-status-sep">·</span>`,
-        `<a href="#" class="case-status-link" data-case-nav="open-gaps">${openCount} open gap${openCount === 1 ? "" : "s"}</a>`
+        `<a href="#" class="case-status-link" data-case-nav="open-items">${openCount} open item${openCount === 1 ? "" : "s"}</a>`
       );
     } else {
       parts.push(

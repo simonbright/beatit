@@ -111,7 +111,7 @@ def format_audit_summary(event: dict[str, Any]) -> str:
     if event_type == ANALYSIS_REQUESTED:
         return f'{meta.get("job_type", "analysis")} job queued'
     if event_type == ANALYSIS_COMPLETED:
-        return f'{meta.get("analysis_type", "analysis")} finished · {meta.get("open_items_count", 0)} open gaps'
+        return f'{meta.get("analysis_type", "analysis")} finished · {meta.get("open_items_count", 0)} open items'
     if event_type == ANALYSIS_FAILED:
         return meta.get("error_preview") or "Analysis job failed"
     if event_type == OPEN_ITEM_COMMENT_ADDED:
@@ -170,7 +170,7 @@ def format_audit_details(event: dict[str, Any]) -> list[str]:
         add("Documents", meta.get("document_count"))
         add("Model", meta.get("model"))
         add("Analysis ID", meta.get("analysis_id"))
-        add("Open gaps", meta.get("open_items_count"))
+        add("Open items", meta.get("open_items_count"))
         if meta.get("error_preview"):
             add("Error", meta.get("error_preview"))
     elif event_type == OPEN_ITEM_COMMENT_ADDED:

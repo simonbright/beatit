@@ -1,7 +1,7 @@
 """Single source of truth for app version — bump when releasing."""
 
 APP_NAME = "BeatIt"
-APP_VERSION = "0.3.8"
+APP_VERSION = "0.3.10"
 APP_UPDATED = "2026-06-30"
 
 
