@@ -80,6 +80,7 @@ class Database:
                 await self.set_setting("patient_context", DEFAULT_PATIENT_CONTEXT)
 
             await self._migrate_documents_citation_display_name(db)
+            await self._migrate_documents_indexes(db)
             await self._migrate_analyses_columns(db)
             await self._migrate_open_items_table(db)
             await self._migrate_analysis_jobs_table(db)
@@ -664,6 +665,15 @@ class Database:
             await db.execute("ALTER TABLE documents ADD COLUMN citation_display_name TEXT")
             await db.commit()
 
+    async def _migrate_documents_indexes(self, db: aiosqlite.Connection) -> None:
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_source_type ON documents(source_type, created_at DESC)"
+        )
+        await db.commit()
+
     async def _migrate_analyses_columns(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(analyses)")
         columns = {row[1] for row in await cursor.fetchall()}
@@ -686,6 +696,10 @@ class Database:
         if "promoted_at" not in columns:
             await db.execute("ALTER TABLE analyses ADD COLUMN promoted_at TEXT")
             await db.commit()
+        for col_name in ("created_by", "annotation_title", "annotation_header", "annotation_notes"):
+            if col_name not in columns:
+                await db.execute(f"ALTER TABLE analyses ADD COLUMN {col_name} TEXT")
+                await db.commit()
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_analyses_record_status ON analyses(record_status, created_at DESC)"
         )
@@ -747,14 +761,77 @@ class Database:
             await db.commit()
         return self._row_to_doc(row)
 
-    async def list_documents(self) -> list[dict[str, Any]]:
+    async def list_documents(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        source_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if source_type:
+            clauses.append("source_type = ?")
+            params.append(source_type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order = "ORDER BY created_at DESC"
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "LIMIT ? OFFSET ?"
+            params.extend([limit, max(0, offset)])
+        sql = f"SELECT * FROM documents {where} {order} {limit_clause}".strip()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
+        return [self._row_to_doc(dict(row)) for row in rows]
+
+    async def count_documents(self, source_type: str | None = None) -> int:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if source_type:
+            clauses.append("source_type = ?")
+            params.append(source_type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"SELECT COUNT(*) FROM documents {where}".strip(),
+                params,
+            )
+            row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def document_type_counts(self) -> dict[str, int]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM documents ORDER BY created_at DESC"
+                "SELECT source_type, COUNT(*) AS count FROM documents GROUP BY source_type"
             )
             rows = await cursor.fetchall()
-        return [self._row_to_doc(dict(row)) for row in rows]
+        return {row["source_type"]: int(row["count"]) for row in rows}
+
+    async def list_document_index(self) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT id, title, source_type, source_uri, citation_display_name, created_at
+                FROM documents
+                ORDER BY created_at DESC
+                """
+            )
+            rows = await cursor.fetchall()
+        return [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "source_type": row["source_type"],
+                "source_uri": row["source_uri"],
+                "citation_display_name": row["citation_display_name"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     async def get_document(self, doc_id: str) -> dict[str, Any] | None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -831,6 +908,7 @@ class Database:
         executive_summary: str | None = None,
         open_items_json: str | None = None,
         record_status: str = "official",
+        created_by: str | None = None,
     ) -> dict[str, Any]:
         analysis_id = str(uuid4())
         now = _now_iso()
@@ -845,6 +923,10 @@ class Database:
             "open_items_json": open_items_json or "[]",
             "record_status": record_status,
             "promoted_at": None,
+            "created_by": created_by,
+            "annotation_title": None,
+            "annotation_header": None,
+            "annotation_notes": None,
             "created_at": now,
         }
         async with aiosqlite.connect(self.db_path) as db:
@@ -852,9 +934,11 @@ class Database:
                 """
                 INSERT INTO analyses
                 (id, query, response, document_ids_json, model, analysis_type,
-                 executive_summary, open_items_json, record_status, promoted_at, created_at)
+                 executive_summary, open_items_json, record_status, promoted_at,
+                 created_by, annotation_title, annotation_header, annotation_notes, created_at)
                 VALUES (:id, :query, :response, :document_ids_json, :model, :analysis_type,
-                        :executive_summary, :open_items_json, :record_status, :promoted_at, :created_at)
+                        :executive_summary, :open_items_json, :record_status, :promoted_at,
+                        :created_by, :annotation_title, :annotation_header, :annotation_notes, :created_at)
                 """,
                 row,
             )
@@ -913,6 +997,51 @@ class Database:
 
     async def list_draft_analyses(self, limit: int = 50) -> list[dict[str, Any]]:
         return await self.list_analyses(limit=limit, record_status="draft")
+
+    async def update_analysis_annotations(
+        self,
+        analysis_id: str,
+        *,
+        annotation_title: str | None = None,
+        annotation_header: str | None = None,
+        annotation_notes: str | None = None,
+    ) -> dict[str, Any] | None:
+        updates: dict[str, str | None] = {}
+        if annotation_title is not None:
+            updates["annotation_title"] = annotation_title.strip() or None
+        if annotation_header is not None:
+            updates["annotation_header"] = annotation_header.strip() or None
+        if annotation_notes is not None:
+            updates["annotation_notes"] = annotation_notes.strip() or None
+        if not updates:
+            return await self.get_analysis_by_id(analysis_id)
+
+        set_clause = ", ".join(f"{column} = ?" for column in updates)
+        values = list(updates.values()) + [analysis_id]
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"UPDATE analyses SET {set_clause} WHERE id = ?",
+                values,
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                return None
+        return await self.get_analysis_by_id(analysis_id)
+
+    async def get_analysis_job_for_analysis_id(self, analysis_id: str) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM analysis_jobs
+                WHERE analysis_id = ?
+                ORDER BY completed_at DESC
+                LIMIT 1
+                """,
+                (analysis_id,),
+            )
+            row = await cursor.fetchone()
+        return self._analysis_job_row(dict(row)) if row else None
 
     async def promote_analysis(self, analysis_id: str) -> dict[str, Any] | None:
         now = _now_iso()
@@ -989,6 +1118,10 @@ class Database:
 
     async def _enrich_analysis_row(self, row: dict[str, Any]) -> dict[str, Any]:
         analysis = self._analysis_row(row)
+        if not analysis.get("created_by"):
+            job = await self.get_analysis_job_for_analysis_id(analysis["id"])
+            if job and job.get("requested_by"):
+                analysis["created_by"] = job["requested_by"]
         db_items = await self.list_open_items_for_analysis(analysis["id"])
         if db_items:
             analysis["open_items"] = db_items
@@ -1071,6 +1204,10 @@ class Database:
             "open_items": open_items,
             "record_status": row.get("record_status") or "official",
             "promoted_at": row.get("promoted_at"),
+            "created_by": row.get("created_by"),
+            "annotation_title": row.get("annotation_title"),
+            "annotation_header": row.get("annotation_header"),
+            "annotation_notes": row.get("annotation_notes"),
             "created_at": row["created_at"],
         }
 

@@ -37,10 +37,10 @@
           <p class="subtitle">Oncology case analysis</p>
         </div>
       </div>
-      <div class="report-meta" aria-label="Date and time">
-        <time id="report-datetime" datetime=""></time>
-      </div>
       <div class="header-actions">
+        <button type="button" class="btn secondary header-export-btn hidden" id="btn-export-pdf" title="Download assessment as PDF">
+          Export PDF
+        </button>
         <div class="status-pill hidden" id="llm-status" aria-live="polite"></div>
         <button type="button" class="header-icon-btn theme-toggle" id="theme-toggle" aria-label="Switch to day theme" title="Toggle day/night theme">
           <span class="theme-icon theme-icon-sun" aria-hidden="true">☀</span>
@@ -55,6 +55,17 @@
         </button>
       </div>
     </div>
+    <nav class="header-nav" aria-label="Main navigation">
+      <div class="tabs header-tabs" role="tablist">
+        <button class="tab active" data-tab="analyze" role="tab" aria-selected="true">Home</button>
+        <button class="tab" data-tab="custom-tasks" role="tab">Custom Tasks</button>
+        <button class="tab" data-tab="ingest" role="tab">Add data</button>
+        <button class="tab" data-tab="library" role="tab">Library</button>
+        <button class="tab" data-tab="history" role="tab">History</button>
+        <button class="tab" data-tab="howto" role="tab">How to</button>
+        <button class="tab" data-tab="settings" role="tab">Settings</button>
+      </div>
+    </nav>
   </header>
 
   <main class="container">
@@ -67,65 +78,47 @@
       <div id="upload-result-paths" class="doc-paths"></div>
     </div>
 
-    <div class="tabs" role="tablist">
-      <button class="tab active" data-tab="analyze" role="tab">Home</button>
-      <button class="tab" data-tab="custom-tasks" role="tab">Custom Tasks</button>
-      <button class="tab" data-tab="ingest" role="tab">Add data</button>
-      <button class="tab" data-tab="library" role="tab">Library</button>
-      <button class="tab" data-tab="history" role="tab">History</button>
-      <button class="tab" data-tab="settings" role="tab">Settings</button>
-    </div>
-
     <!-- HOME / ANALYZE -->
     <section id="panel-analyze" class="panel active">
-      <div class="card case-status-card" id="case-status-card">
-        <div class="case-status-row row-between wrap">
-          <p id="case-status-summary" class="case-status-summary">Loading…</p>
-          <div class="case-status-header-actions">
-            <button type="button" class="btn secondary hidden" id="btn-export-pdf" title="Download assessment as PDF">
-              Export PDF
-            </button>
-            <button type="button" class="btn ghost" id="btn-case-add-data">Add data</button>
-          </div>
-        </div>
-        <div id="case-status-cta" class="case-status-cta hidden">
-          <button type="button" class="btn primary" id="btn-case-run-baseline">Run baseline assessment</button>
-        </div>
-      </div>
-
       <div id="analyze-results-section" class="analyze-results-section hidden">
-        <div class="card executive-summary-card" id="executive-summary-card">
-          <h3>Executive summary</h3>
-          <p class="assessment-as-of muted small">As of <time id="executive-summary-time"></time></p>
-
-          <details class="source-legend-wrap" id="source-legend-wrap">
-            <summary class="source-legend-summary">How source citations work</summary>
-            <div class="source-legend" id="source-legend">
-              <ul class="source-legend-list" id="source-legend-list">
-                <li><span class="source-tag source-document">Doc</span> Clinical record — hard data from stored files</li>
-                <li><span class="source-tag source-diagnostic">Diag</span> Diagnostic test — imaging and pathology</li>
-                <li><span class="source-tag source-context">Ctx</span> Patient context — from settings, not verified</li>
-                <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
-                <li><span class="source-tag source-unknown">?</span> Not documented — not in stored records</li>
-              </ul>
-              <p class="source-legend-note">Colored shorthand tags like <span class="source-tag source-diagnostic">Diag</span><sup class="ref-cite">[1]</sup> link to the reference lists and appendix. Document sources also link to the Library.</p>
+        <div class="answer-layout" id="home-answer-layout">
+          <div class="answer-main">
+            <div class="card executive-summary-card answer-article" id="executive-summary-card">
+              <h3 class="answer-section-label">Executive summary</h3>
+              <p class="section-updated muted small hidden">Last updated <time id="executive-summary-time"></time></p>
+              <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
+              <div id="executive-summary-text" class="executive-summary-text"></div>
             </div>
-          </details>
 
-          <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
+            <div class="card full-assessment-card answer-article hidden" id="full-assessment-card">
+              <h3 class="answer-section-label">Full assessment</h3>
+              <p class="section-updated muted small hidden">Last updated <time id="full-assessment-time"></time></p>
+              <div id="full-assessment-body" class="sourced-text assessment-body-text numbered-text"></div>
+            </div>
+          </div>
 
-          <div id="executive-summary-text" class="executive-summary-text"></div>
-          <div id="executive-summary-refs" class="section-references hidden"></div>
+          <aside class="sources-sidebar hidden" id="home-sources-sidebar" aria-label="Sources">
+            <div id="home-sources-sidebar-inner" class="sources-sidebar-inner"></div>
+          </aside>
         </div>
 
-        <div class="card full-assessment-card hidden" id="full-assessment-card">
-          <h3>Full assessment</h3>
-          <div id="full-assessment-body" class="sourced-text assessment-body-text numbered-text"></div>
-          <div id="full-assessment-refs" class="section-references hidden"></div>
-        </div>
+        <details class="source-legend-wrap card" id="source-legend-wrap">
+          <summary class="source-legend-summary">How source citations work</summary>
+          <div class="source-legend" id="source-legend">
+            <ul class="source-legend-list" id="source-legend-list">
+              <li><span class="source-tag source-document">Doc</span> Clinical record — hard data from stored files</li>
+              <li><span class="source-tag source-diagnostic">Diag</span> Diagnostic test — imaging and pathology</li>
+              <li><span class="source-tag source-context">Ctx</span> Patient context — from settings, not verified</li>
+              <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
+              <li><span class="source-tag source-unknown">?</span> Not documented — not in stored records</li>
+            </ul>
+            <p class="source-legend-note">Inline pills link to sites when a URL is available, or to the sources panel for library records. Document and web sources open originals when available.</p>
+          </div>
+        </details>
 
         <div class="card open-items-card" id="open-items-card">
           <h3>Open items</h3>
+          <p class="section-updated muted small hidden">Last updated <time id="open-items-time"></time></p>
           <p class="muted small open-items-hint">Prioritized items still to resolve. Click Explore on a row to investigate.</p>
           <div class="table-wrap">
             <table class="open-items-table" id="open-items-table">
@@ -232,11 +225,6 @@
           <p class="muted small custom-analysis-note">Custom questions run as <strong>drafts</strong> in the Custom Tasks tab until you add them to the medical record.</p>
         </div>
       </details>
-
-      <div id="references-appendix" class="card references-appendix hidden">
-        <h4 class="references-appendix-heading">Appendix: References</h4>
-        <ol id="references-appendix-list" class="references-appendix-list"></ol>
-      </div>
     </section>
 
     <!-- CUSTOM TASKS -->
@@ -274,25 +262,49 @@
       </div>
 
       <div id="custom-task-detail" class="card custom-task-detail hidden">
-        <div class="row-between wrap">
-          <h3 id="custom-task-detail-title">Draft analysis</h3>
-          <button type="button" class="btn ghost" id="btn-close-custom-task">Close</button>
+        <div id="custom-task-detail-top" class="custom-task-detail-top row-between wrap">
+          <p id="custom-task-query-pill" class="query-pill hidden"></p>
+          <div class="custom-task-detail-actions row-between wrap">
+            <button type="button" class="btn ghost" id="btn-close-custom-task">Close</button>
+            <div class="custom-task-toolbar-share">
+              <button type="button" class="btn secondary" id="btn-export-custom-task-pdf">PDF</button>
+              <button type="button" class="btn secondary hidden" id="btn-native-share-custom-task">Share</button>
+            </div>
+          </div>
         </div>
-        <p class="muted small" id="custom-task-detail-meta"></p>
-        <div class="custom-task-actions row-between wrap">
-          <button type="button" class="btn primary" id="btn-promote-custom-task">Add to medical record</button>
-          <button type="button" class="btn danger" id="btn-discard-custom-task">Discard draft</button>
+
+        <p class="muted small custom-task-detail-meta" id="custom-task-detail-meta"></p>
+
+        <div class="custom-task-toolbar row-between wrap">
+          <button type="button" class="btn primary" id="btn-promote-custom-task">Add to record</button>
+          <button type="button" class="btn danger" id="btn-discard-custom-task">Discard</button>
         </div>
-        <div class="card executive-summary-card custom-task-summary">
-          <h4>Executive summary</h4>
-          <div id="custom-task-summary" class="executive-summary-text numbered-text"></div>
-          <div id="custom-task-summary-refs" class="section-references hidden"></div>
+
+        <div class="answer-layout">
+          <div class="answer-main card custom-task-answer-card">
+            <p class="section-updated muted small hidden">Last updated <time id="custom-task-answer-time"></time></p>
+            <div id="custom-task-answer" class="answer-body numbered-text"></div>
+          </div>
+          <aside class="sources-sidebar hidden" id="custom-task-sources-sidebar" aria-label="Sources">
+            <div id="custom-task-sources-sidebar-inner" class="sources-sidebar-inner"></div>
+          </aside>
         </div>
-        <div class="card full-assessment-card">
-          <h4>Full response</h4>
-          <div id="custom-task-body" class="sourced-text assessment-body-text numbered-text"></div>
-          <div id="custom-task-body-refs" class="section-references hidden"></div>
-        </div>
+
+        <details class="custom-task-extras">
+          <summary class="custom-task-extras-summary">Notes (optional)</summary>
+          <div class="custom-task-extras-body">
+            <label>Title
+              <input type="text" id="custom-task-annotation-title" maxlength="500" placeholder="Short label for this draft">
+            </label>
+            <label>Notes
+              <textarea id="custom-task-annotation-notes" rows="3" placeholder="Context for collaborators…"></textarea>
+            </label>
+            <div class="row-between wrap">
+              <span class="muted small" id="custom-task-annotation-status"></span>
+              <button type="button" class="btn secondary" id="btn-save-custom-task-annotations">Save</button>
+            </div>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -343,18 +355,18 @@
         </article>
 
         <article class="card ingest-card-wide">
-          <h3>Medical imaging</h3>
-          <p class="muted small">CT, MRI, X-ray, and DICOM files. Choose multiple files or upload an entire study folder — large batches upload one file at a time.</p>
+          <h3>DICOM / medical imaging</h3>
+          <p class="muted small">Upload <strong>.dcm</strong> / <strong>.dicom</strong> slices, extensionless DICOM files from a CD/study folder, JPEG/PNG exports, or ZIP archives. DICOM files can be viewed in the Library after upload.</p>
           <label>Title prefix (optional)<input type="text" id="imaging-title-prefix" placeholder="e.g. CT abdomen — June 2026"></label>
           <label>Clinical notes (optional)<textarea id="imaging-notes" rows="3" placeholder="Study context, comparison notes, or findings summary for analysis"></textarea></label>
           <div class="imaging-picker-actions">
             <label class="btn secondary file-picker-btn">
               <input type="file" id="imaging-files" multiple accept=".dcm,.dicom,.jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.webp,.nii,.mha,.mhd,.zip,application/dicom,application/zip,image/*" hidden>
-              Choose files
+              Choose DICOM / image files
             </label>
             <label class="btn secondary file-picker-btn">
-              <input type="file" id="imaging-folder" webkitdirectory multiple hidden>
-              Choose folder
+              <input type="file" id="imaging-folder" webkitdirectory multiple accept=".dcm,.dicom,application/dicom" hidden>
+              Choose DICOM folder
             </label>
             <button type="button" class="btn ghost" id="btn-clear-imaging">Clear selection</button>
           </div>
@@ -389,11 +401,25 @@
       </div>
 
       <div class="card">
-        <div class="row-between">
+        <div class="row-between wrap">
           <h3>Stored documents</h3>
           <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
         </div>
+        <div class="library-toolbar">
+          <label class="library-filter-label" for="library-type-filter">
+            Type
+            <select id="library-type-filter" class="library-type-filter">
+              <option value="">All types</option>
+            </select>
+          </label>
+          <p id="library-summary" class="library-summary muted small"></p>
+        </div>
         <div id="documents-list" class="documents-list"></div>
+        <div id="library-pagination" class="library-pagination hidden">
+          <button type="button" class="btn secondary" id="btn-library-prev">Previous</button>
+          <span id="library-page-info" class="library-page-info muted small"></span>
+          <button type="button" class="btn secondary" id="btn-library-next">Next</button>
+        </div>
       </div>
     </section>
 
@@ -407,6 +433,138 @@
         <p class="muted small">All past assessments, newest first. Each entry is timestamped.</p>
         <div id="history-list" class="history-list"></div>
       </div>
+    </section>
+
+    <!-- HOW TO -->
+    <section id="panel-howto" class="panel">
+      <div class="card howto-intro-card">
+        <h3>How BeatIt works</h3>
+        <p class="muted howto-lead">BeatIt builds an oncology case assessment from your stored documents. Start with the three steps below, then explore each tab when you need it.</p>
+
+        <div class="workflow-steps howto-quickstart" aria-label="Quick start">
+          <button type="button" class="workflow-step" data-howto-nav="ingest">
+            <span class="workflow-step-num">Step 1</span>
+            <span class="workflow-step-label">Add data</span>
+            <span class="workflow-step-hint">Notes, PDFs, imaging, URLs, transcripts</span>
+          </button>
+          <button type="button" class="workflow-step" data-howto-nav="settings">
+            <span class="workflow-step-num">Step 2</span>
+            <span class="workflow-step-label">Patient context</span>
+            <span class="workflow-step-hint">Diagnosis, line of therapy, biomarkers, ECOG</span>
+          </button>
+          <button type="button" class="workflow-step" data-howto-nav="analyze">
+            <span class="workflow-step-num">Step 3</span>
+            <span class="workflow-step-label">Run baseline</span>
+            <span class="workflow-step-hint">Executive summary, full assessment, open items</span>
+          </button>
+        </div>
+      </div>
+
+      <details class="card howto-section" open>
+        <summary class="howto-section-summary">Home — your medical record</summary>
+        <div class="howto-section-body">
+          <p>The Home tab is the official case view. After a baseline assessment you get:</p>
+          <ul>
+            <li><strong>Executive summary</strong> — short overview with source citations.</li>
+            <li><strong>Full assessment</strong> — detailed synthesis from your documents.</li>
+            <li><strong>Open items</strong> — gaps and follow-ups to resolve. Tap <strong>Explore</strong> on a row to investigate.</li>
+          </ul>
+          <p class="muted small">The status line at the top shows document count and open items. Use <strong>Export PDF</strong> to download the assessment.</p>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="analyze">Go to Home</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">Open items — resolve gaps</summary>
+        <div class="howto-section-body">
+          <p>Open items are prioritized questions still missing from the record — staging details, missing labs, unclear pathology, and similar.</p>
+          <ul>
+            <li>Tap <strong>Explore</strong> to run a focused investigation.</li>
+            <li>Review the draft, edit if needed, then <strong>Accept findings</strong> or save as a comment.</li>
+            <li>Mark an item <strong>Resolve</strong> when it is closed.</li>
+          </ul>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="open-items">Go to open items</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">Custom Tasks — ask your own questions</summary>
+        <div class="howto-section-body">
+          <p>Custom analyses (trial lists, regimen comparisons, focused questions) run as <strong>drafts</strong> first. They do not change Home until you promote them.</p>
+          <ul>
+            <li>Run a task from the Custom Tasks tab or from <strong>Run further analysis</strong> on Home.</li>
+            <li>Add optional <strong>notes</strong> at the bottom of a draft. Use <strong>PDF</strong> or <strong>Share</strong> to send to collaborators.</li>
+            <li>List items show <strong>Sources</strong> — library documents link to originals; otherwise it says when nothing is stored.</li>
+            <li>When finished, review the draft and tap <strong>Add to medical record</strong> or <strong>Discard draft</strong>.</li>
+            <li>For trial searches, fill in patient context in Settings first — line of therapy and biomarkers help tailor results.</li>
+          </ul>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="custom-tasks">Go to Custom Tasks</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">Add data — build the case library</summary>
+        <div class="howto-section-body">
+          <p>Everything you upload is stored and used in analysis:</p>
+          <ul>
+            <li><strong>Clinical notes</strong> — paste visit notes, pathology, imaging summaries.</li>
+            <li><strong>PDFs &amp; URLs</strong> — reports and web pages.</li>
+            <li><strong>DICOM / imaging</strong> — upload <code>.dcm</code> or <code>.dicom</code> slices (or a whole study folder), then view them in the Library.</li>
+            <li><strong>YouTube</strong> — caption-based transcripts when available.</li>
+          </ul>
+          <p class="muted small">After upload, check the Library tab to confirm content was extracted correctly.</p>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="ingest">Go to Add data</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">Library — stored documents</summary>
+        <div class="howto-section-body">
+          <p>All ingested files and notes live here. Open a document to read extracted text, set a <strong>citation display name</strong> (how it appears in assessments), or remove it.</p>
+          <p class="muted small">Colored source tags in assessments link back to Library entries when the source is a stored document.</p>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="library">Go to Library</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">Source citations — read the tags</summary>
+        <div class="howto-section-body">
+          <p>Colored shorthand tags show where each claim comes from:</p>
+          <ul class="source-legend-list howto-source-list">
+            <li><span class="source-tag source-document">Doc</span> Clinical record from stored files</li>
+            <li><span class="source-tag source-diagnostic">Diag</span> Imaging or pathology</li>
+            <li><span class="source-tag source-context">Ctx</span> Patient context from Settings</li>
+            <li><span class="source-tag source-inference">AI</span> AI inference — verify independently</li>
+            <li><span class="source-tag source-unknown">?</span> Not documented in stored records</li>
+          </ul>
+          <p class="muted small">Superscript numbers link to reference lists. Customize badge labels under Settings → Source labels.</p>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">History, Settings &amp; audit</summary>
+        <div class="howto-section-body">
+          <ul>
+            <li><strong>History</strong> — past assessments, newest first.</li>
+            <li><strong>Settings</strong> — patient context, source label names, LLM model.</li>
+            <li><strong>Audit trail</strong> — who changed what: uploads, analyses, comments, sign-ins.</li>
+          </ul>
+          <div class="howto-go howto-go-row">
+            <button type="button" class="btn secondary" data-howto-nav="history">History</button>
+            <button type="button" class="btn secondary" data-howto-nav="settings">Settings</button>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- SETTINGS -->

@@ -5,6 +5,7 @@ from app.services.llm import LLMClient
 from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_content
 from app.services.source_policy import (
     CUSTOM_QUERY_RESPONSE_STRUCTURE,
+    LIST_ITEM_SOURCE_RULES,
     RESPONSE_STRUCTURE_WITH_SOURCES,
     SOURCE_ATTRIBUTION_RULES,
     TRIAL_SEARCH_QUERY_INSTRUCTIONS,
@@ -83,7 +84,7 @@ def _is_trial_search_query(query: str) -> bool:
 
 def _response_structure_for_analysis(*, analysis_type: str, query: str) -> str:
     if analysis_type == "query":
-        structure = CUSTOM_QUERY_RESPONSE_STRUCTURE
+        structure = f"{CUSTOM_QUERY_RESPONSE_STRUCTURE}\n\n{LIST_ITEM_SOURCE_RULES}"
         if _is_trial_search_query(query):
             structure = f"{structure}\n\n{TRIAL_SEARCH_QUERY_INSTRUCTIONS}"
         return structure
@@ -108,6 +109,7 @@ class SynthesisService:
         document_ids: list[str] | None = None,
         include_baseline_assessment: bool = False,
         analysis_type: str = "query",
+        created_by: str | None = None,
     ) -> dict[str, Any]:
         corpus = await self.store.get_corpus(document_ids)
         corpus_text = _format_corpus(corpus)
@@ -177,6 +179,7 @@ Use clear ### headings for each section."""
             executive_summary=parsed["executive_summary"],
             open_items_json=open_items_to_json(parsed["open_items"]),
             record_status=record_status,
+            created_by=created_by,
         )
         return saved
 

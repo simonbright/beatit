@@ -1,6 +1,8 @@
 SOURCE_ATTRIBUTION_RULES = """
 SOURCE ATTRIBUTION (mandatory — every clinical claim must be tagged):
-- [SOURCE: Document "<exact document title>"] — fact directly supported by stored document text
+- [SOURCE: Document "<exact document title>"] — fact directly supported by stored document text (includes URL-ingested pages — the link is shown automatically)
+- [SOURCE: Web — https://example.org/page] — external web page where you found the fact (ClinicalTrials.gov, NCI, journal, guideline site). Use the full https URL.
+- [SOURCE: Web — NCT01234567] — clinical trial by NCT ID (links to ClinicalTrials.gov automatically)
 - [SOURCE: Patient context] — from configured patient context only (not verified clinical record)
 - [SOURCE: AI inference — not verified] — your interpretation; NOT hard data
 - [SOURCE: Unknown] — gap not supported by stored documents; do NOT present as established fact
@@ -65,6 +67,23 @@ Tag gaps with [SOURCE: Unknown].
 Do NOT include baseline-only sections such as "What we know", "Staging & workup", or "Questions for the oncology team" unless the user explicitly asked for them.
 """
 
+LIST_ITEM_SOURCE_RULES = """
+LIST & TABLE SOURCE RULES (mandatory for numbered lists of trials, drugs, regimens, tests, or options):
+
+Each numbered list item MUST include exactly ONE "- Sources:" sub-bullet at the end of that item (not on every sub-line):
+
+- Sources: [SOURCE: Document "<exact title>"] — when the item or trial is named in stored documents (copy title from ### headers).
+- Sources: Not in stored records — verify on ClinicalTrials.gov or with the treating team. Suggested search: "<terms>" [SOURCE: Unknown]
+  Use this when the item comes from general oncology knowledge and there is NO matching document or URL in the library.
+- Sources: [SOURCE: Web — https://clinicaltrials.gov/study/NCT…] when you cite a specific trial page or external guideline URL.
+- Sources: [SOURCE: Patient context] — only when the list item is purely about a patient fact from settings (e.g. a biomarker), not for therapies/trials.
+
+Do NOT put [SOURCE: AI inference — not verified] on every mechanism or relevance sub-bullet. Put source attribution once on the "- Sources:" line.
+Sub-bullets (mechanism, relevance, verification) may omit SOURCE tags unless they cite a specific document or patient fact.
+
+If a trial name, NCT ID, or URL appears in stored documents, you MUST cite that document — do not use AI inference for it.
+"""
+
 TRIAL_SEARCH_QUERY_INSTRUCTIONS = """
 The user is asking for CLINICAL TRIALS and/or THERAPEUTIC OPTIONS — not a case summary.
 
@@ -73,16 +92,19 @@ Each item MUST use this format:
 
 1. Trial or therapy name — phase/approval status — setting (e.g. metastatic PDAC, 1L, maintenance)
    - Regimen / mechanism (short)
-   - Why it may fit THIS patient (age, metastatic disease, biomarkers, prior therapy from documents/context) [SOURCE: …]
-   - Key eligibility or exclusion considerations for this patient [SOURCE: …]
-   - Verification note [SOURCE: AI inference — not verified] if not from stored documents
+   - Why it may fit THIS patient (biomarkers, prior therapy, age — cite document or context only when factual)
+   - Key eligibility or exclusion considerations for this patient
+   - Sources: (required — pick ONE pattern below)
+     • [SOURCE: Document "<exact title>"] if mentioned in stored records
+     • Not in stored records — verify on ClinicalTrials.gov. Suggested search: "<disease, biomarker, setting>" [SOURCE: Unknown]
 
 Rules:
-- If stored documents mention specific trials, regimens, or referrals, list those FIRST with [SOURCE: Document "..."].
-- For trials/therapies from general oncology knowledge, tag [SOURCE: AI inference — not verified] and state that NCT numbers and availability must be verified on ClinicalTrials.gov or with the treating team.
-- Include both clinical trials (where applicable) AND standard approved systemic options if relevant to the question.
-- Do NOT respond with only a pancreatic cancer overview or duplicate the baseline assessment.
-- In ### Limitations & verification, give ClinicalTrials.gov search terms tailored to this patient (e.g. metastatic pancreatic, liver metastasis, biomarker if known).
+- List document-backed trials/regimens FIRST with Document sources.
+- For items from general knowledge: say explicitly "Not in stored records" on the Sources line — do NOT imply they came from the chart.
+- Include NCT IDs or URLs ONLY if they appear in stored documents; otherwise say they must be looked up.
+- Include both clinical trials (where applicable) AND standard approved systemic options if relevant.
+- Do NOT respond with only a disease overview or duplicate the baseline assessment.
+- In ### Limitations & verification, give ClinicalTrials.gov search terms tailored to this patient.
 """
 
 INVESTIGATION_PROMPT_TEMPLATE = """

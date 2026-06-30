@@ -111,7 +111,7 @@ def format_reference_label(label: str, catalog: SourceCatalog | None = None) -> 
     if "inference" in lower and "not verified" in lower:
         return "AI inference — not verified"
     if lower.startswith("unknown"):
-        return "Not documented"
+        return "Not in stored records — verify externally"
     return cleaned
 
 

@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Any
 
+from app.services.dicom_preview import dicom_view_metadata, is_dicom_document
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
 PDF_EXTENSIONS = {".pdf"}
@@ -85,6 +87,8 @@ def build_document_view(doc: dict[str, Any]) -> dict[str, Any]:
 
     if source_type == "pdf" or ext in PDF_EXTENSIONS:
         view_kind = "pdf"
+    elif is_dicom_document(doc, ext):
+        view_kind = "dicom"
     elif source_type == "video" or ext in VIDEO_EXTENSIONS:
         view_kind = "video"
     elif ext in IMAGE_EXTENSIONS:
@@ -92,10 +96,14 @@ def build_document_view(doc: dict[str, Any]) -> dict[str, Any]:
     else:
         view_kind = "download"
 
+    preview_url = f"/api/documents/{doc_id}/preview" if view_kind == "dicom" else None
+
     return {
         "has_file": True,
         "file_url": file_url,
         "view_kind": view_kind,
         "source_url": source_url,
         "media_type": guess_media_type(Path(doc["file_path"]).name, source_type),
+        "preview_url": preview_url,
+        "dicom_metadata": dicom_view_metadata(doc) if view_kind == "dicom" else [],
     }

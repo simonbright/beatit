@@ -13,3 +13,7 @@ requests>=2.31.0
 defusedxml>=0.7.1
 fpdf2>=2.8.0
 pydicom>=3.0.0
+numpy>=2.0.0
+pillow>=11.0.0
+pylibjpeg>=2.0.0
+pylibjpeg-libjpeg>=2.2.0

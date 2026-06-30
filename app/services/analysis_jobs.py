@@ -51,6 +51,7 @@ async def _run_job(job_id: str) -> None:
                 document_ids=document_ids,
                 include_baseline_assessment=job["include_baseline_assessment"],
                 analysis_type=job["job_type"],
+                created_by=job.get("requested_by"),
             )
 
         await db.update_analysis_job(

@@ -33,25 +33,59 @@ def _safe_text(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _format_eastern(dt: datetime) -> str:
+def _parse_iso_datetime(iso: str | None) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _to_eastern(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    eastern = dt.astimezone(EASTERN)
+    return dt.astimezone(EASTERN)
+
+
+def _eastern_tz_label(dt: datetime) -> str:
+    label = _to_eastern(dt).strftime("%Z")
+    return "ET" if label in ("EST", "EDT") else label
+
+
+def _format_eastern_date(dt: datetime) -> str:
+    return _to_eastern(dt).strftime("%B %d, %Y").replace(" 0", " ")
+
+
+def _format_eastern_time(dt: datetime) -> str:
+    eastern = _to_eastern(dt)
     hour = eastern.strftime("%I").lstrip("0") or "12"
-    return (
-        f"{eastern.strftime('%A, %B')} {eastern.day}, {eastern.strftime('%Y')} "
-        f"at {hour}:{eastern.strftime('%M %p')} EST"
-    )
+    return f"{hour}:{eastern.strftime('%M %p')} {_eastern_tz_label(dt)}"
+
+
+def _format_eastern(dt: datetime) -> str:
+    return f"{_format_eastern_date(dt)} · {_format_eastern_time(dt)}"
 
 
 def _format_timestamp(iso: str | None) -> str:
-    if not iso:
-        return "Unknown date"
-    try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return _format_eastern(dt)
-    except ValueError:
-        return iso
+    dt = _parse_iso_datetime(iso)
+    if not dt:
+        return "Unknown date and time"
+    return _format_eastern(dt)
+
+
+def _format_timestamp_parts(iso: str | None) -> tuple[str, str]:
+    dt = _parse_iso_datetime(iso)
+    if not dt:
+        return "Unknown date", "Unknown time"
+    return _format_eastern_date(dt), _format_eastern_time(dt)
+
+
+def _format_filename_stamp(iso: str | None) -> str:
+    dt = _parse_iso_datetime(iso)
+    if not dt:
+        return "unknown"
+    return _to_eastern(dt).strftime("%Y-%m-%d_%H%M")
 
 
 def _analysis_type_label(analysis_type: str | None) -> str | None:
@@ -59,7 +93,68 @@ def _analysis_type_label(analysis_type: str | None) -> str | None:
         return "Baseline assessment"
     if analysis_type == "summarize":
         return "Document summary"
+    if analysis_type == "query":
+        return "Custom task"
     return None
+
+
+def _display_title(analysis: dict[str, Any]) -> str | None:
+    title = (analysis.get("annotation_title") or "").strip()
+    if title:
+        return title
+    return None
+
+
+def _write_collaboration_block(pdf: FPDF, analysis: dict[str, Any]) -> None:
+    display_title = _display_title(analysis)
+    header = (analysis.get("annotation_header") or "").strip()
+    notes = (analysis.get("annotation_notes") or "").strip()
+    created_by = (analysis.get("created_by") or "").strip()
+    query = (analysis.get("query") or "").strip()
+
+    if not any([display_title, header, notes, created_by, query]):
+        return
+
+    if display_title:
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.set_text_color(14, 116, 144)
+        pdf.multi_cell(0, 8, _safe_text(display_title), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+    meta_lines: list[str] = []
+    created_at = _format_timestamp(analysis.get("created_at"))
+    if created_at != "Unknown date and time":
+        meta_lines.append(f"Generated: {created_at}")
+    if created_by:
+        meta_lines.append(f"By: {created_by}")
+    if query and analysis.get("analysis_type") == "query":
+        preview = query if len(query) <= 240 else query[:237] + "..."
+        meta_lines.append(f"Question: {preview}")
+    if meta_lines:
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(80, 80, 80)
+        for line in meta_lines:
+            _pdf_multiline(pdf, _safe_text(line), h=4)
+        pdf.ln(2)
+
+    if header:
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(0, 0, 0)
+        _pdf_multiline(pdf, _break_long_words(_safe_text(header)), h=5)
+        pdf.ln(3)
+
+    if notes:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(60, 60, 60)
+        pdf.cell(0, 5, "Collaborator notes", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.set_text_color(0, 0, 0)
+        _pdf_multiline(pdf, _break_long_words(_safe_text(notes)), h=5)
+        pdf.ln(4)
+
+    pdf.set_draw_color(14, 165, 233)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(6)
 
 
 def _draw_duck_logo(pdf: FPDF, x: float, y: float, scale: float = 1.0) -> None:
@@ -76,10 +171,19 @@ def _draw_duck_logo(pdf: FPDF, x: float, y: float, scale: float = 1.0) -> None:
 
 
 class AssessmentPDF(FPDF):
-    def __init__(self, *, report_timestamp: str, report_type: str | None):
+    def __init__(
+        self,
+        *,
+        report_date: str,
+        report_time: str,
+        report_type: str | None,
+        exported_at: str | None = None,
+    ):
         super().__init__()
-        self.report_timestamp = report_timestamp
+        self.report_date = report_date
+        self.report_time = report_time
         self.report_type = report_type
+        self.exported_at = exported_at
 
     def header(self) -> None:
         _draw_duck_logo(self, 16, 9, 1.15)
@@ -95,21 +199,42 @@ class AssessmentPDF(FPDF):
         self.set_xy(118, 11)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(30, 30, 30)
-        self.multi_cell(74, 4, _safe_text(self.report_timestamp), align="R")
+        self.multi_cell(
+            74,
+            4,
+            _safe_text(self.report_date),
+            align="R",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        self.set_x(118)
+        self.multi_cell(
+            74,
+            4,
+            _safe_text(self.report_time),
+            align="R",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
         if self.report_type:
             self.set_x(118)
             self.set_font("Helvetica", "I", 8)
             self.set_text_color(80, 80, 80)
             self.cell(74, 4, _safe_text(self.report_type), align="R")
 
-        self.set_y(32)
+        self.set_y(34)
+        self.set_x(self.l_margin)
         self.set_draw_color(14, 165, 233)
         self.set_line_width(0.4)
         self.line(16, self.get_y(), self.w - 16, self.get_y())
         self.ln(6)
 
     def footer(self) -> None:
-        self.set_y(-24)
+        self.set_y(-28)
+        if self.exported_at:
+            self.set_font("Helvetica", "", 7)
+            self.set_text_color(100, 100, 100)
+            self.cell(0, 3, _safe_text(f"Exported {self.exported_at}"), align="C", new_x="LMARGIN", new_y="NEXT")
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(60, 60, 60)
         self.cell(0, 4, "Medical Confidential - Susan Brajtman", align="C", new_x="LMARGIN", new_y="NEXT")
@@ -129,6 +254,17 @@ def _break_long_words(text: str, limit: int = 72) -> str:
         if word:
             parts.append(word)
     return " ".join(parts)
+
+
+def _pdf_multiline(
+    pdf: FPDF,
+    text: str,
+    *,
+    h: float = 5,
+    w: float = 0,
+    align: str = "L",
+) -> None:
+    pdf.multi_cell(w, h, text, align=align, new_x="LMARGIN", new_y="NEXT")
 
 
 def _clean_markdown_emphasis(text: str) -> str:
@@ -152,7 +288,7 @@ def _write_body_lines(pdf: FPDF, body: str) -> None:
             pdf.ln(2 if level > 1 else 4)
             pdf.set_font("Helvetica", "B", 13 if level == 1 else 11)
             pdf.set_text_color(20, 60, 90)
-            pdf.multi_cell(0, 6, title)
+            _pdf_multiline(pdf, title, h=6)
             pdf.set_font("Helvetica", "", 10)
             pdf.set_text_color(0, 0, 0)
             continue
@@ -162,12 +298,12 @@ def _write_body_lines(pdf: FPDF, body: str) -> None:
         if numbered:
             prefix = numbered.group(1)
             content = _break_long_words(_safe_text(numbered.group(2)))
-            pdf.multi_cell(0, 5, f"  {prefix} {content}")
+            _pdf_multiline(pdf, f"  {prefix} {content}", h=5)
         elif bullet:
             content = _break_long_words(_safe_text(bullet.group(1)))
-            pdf.multi_cell(0, 5, f"  - {content}")
+            _pdf_multiline(pdf, f"  - {content}", h=5)
         else:
-            pdf.multi_cell(0, 5, _break_long_words(_safe_text(stripped)))
+            _pdf_multiline(pdf, _break_long_words(_safe_text(stripped)), h=5)
 
 
 def _write_references_block(
@@ -192,7 +328,7 @@ def _write_references_block(
         if shorthand:
             prefix = f"{prefix} [{shorthand}]"
         pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(0, 4, f"  {prefix} {label}")
+        _pdf_multiline(pdf, f"  {prefix} {label}", h=4)
     pdf.ln(2)
 
 
@@ -209,7 +345,7 @@ def _write_section_with_references(
     if not body.strip():
         pdf.set_font("Helvetica", "I", 10)
         pdf.set_text_color(120, 120, 120)
-        pdf.multi_cell(0, 5, "(No content)")
+        _pdf_multiline(pdf, "(No content)", h=5)
         pdf.set_text_color(0, 0, 0)
         return
 
@@ -230,7 +366,12 @@ def _write_section_with_references(
     pdf.ln(4)
 
 
-def _write_appendix_references(pdf: FPDF, appendix: list[dict[str, Any]]) -> None:
+def _write_appendix_references(
+    pdf: FPDF,
+    appendix: list[dict[str, Any]],
+    *,
+    as_of: str | None = None,
+) -> None:
     if not appendix:
         return
 
@@ -242,6 +383,10 @@ def _write_appendix_references(pdf: FPDF, appendix: list[dict[str, Any]]) -> Non
     pdf.set_text_color(14, 116, 144)
     pdf.set_x(pdf.l_margin)
     pdf.cell(0, 10, "Appendix: References", new_x="LMARGIN", new_y="NEXT", align="L")
+    if as_of:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(0, 5, f"As of {_safe_text(as_of)}", new_x="LMARGIN", new_y="NEXT", align="L")
     pdf.set_draw_color(14, 165, 233)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
     pdf.ln(4)
@@ -256,7 +401,7 @@ def _write_appendix_references(pdf: FPDF, appendix: list[dict[str, Any]]) -> Non
         if shorthand:
             prefix = f"{prefix} [{shorthand}]"
         pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(0, 5, f"{prefix} {label}", align="L")
+        _pdf_multiline(pdf, f"{prefix} {label}", h=5)
         pdf.ln(1)
 
 
@@ -267,7 +412,12 @@ def build_assessment_pdf(
     catalog: SourceCatalog | None = None,
 ) -> bytes:
     report_timestamp = _format_timestamp(analysis.get("created_at"))
+    report_date, report_time = _format_timestamp_parts(analysis.get("created_at"))
+    exported_at = _format_timestamp(datetime.now(timezone.utc).isoformat())
     report_type = _analysis_type_label(analysis.get("analysis_type"))
+    display_title = _display_title(analysis)
+    if display_title and analysis.get("analysis_type") == "query":
+        report_type = display_title
 
     ref_bundle = build_reference_bundle(
         executive_summary=analysis.get("executive_summary") or "",
@@ -276,7 +426,12 @@ def build_assessment_pdf(
         catalog=catalog,
     )
 
-    pdf = AssessmentPDF(report_timestamp=report_timestamp, report_type=report_type)
+    pdf = AssessmentPDF(
+        report_date=report_date,
+        report_time=report_time,
+        report_type=report_type,
+        exported_at=exported_at,
+    )
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=28)
     pdf.set_margins(18, 38, 18)
@@ -284,17 +439,26 @@ def build_assessment_pdf(
 
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(80, 80, 80)
-    pdf.cell(0, 5, _safe_text(f"Model: {analysis.get('model') or 'Unknown'}"), new_x="LMARGIN", new_y="NEXT")
+    meta_bits = [f"Generated: {report_timestamp}", f"Model: {analysis.get('model') or 'Unknown'}"]
+    if analysis.get("created_by"):
+        meta_bits.append(f"By: {analysis.get('created_by')}")
+    pdf.cell(0, 5, _safe_text(" · ".join(meta_bits)), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
-    pdf.multi_cell(
-        0,
-        4,
+    _pdf_multiline(
+        pdf,
         _safe_text(
             "Decision-support only — not a substitute for in-person oncology care. "
             "Bracketed numbers [1], [2], ... cite the reference lists below and in the appendix."
         ),
+        h=4,
     )
     pdf.ln(4)
+
+    _write_collaboration_block(pdf, analysis)
+
+    response_title = "Latest Assessment"
+    if analysis.get("analysis_type") == "query":
+        response_title = "Full response"
 
     _write_section_with_references(
         pdf,
@@ -304,8 +468,9 @@ def build_assessment_pdf(
     )
     _write_section_with_references(
         pdf,
-        "Latest Assessment",
+        response_title,
         ref_bundle["sections"]["response"],
+        as_of=report_timestamp,
     )
 
     patient_section = ref_bundle["sections"]["patient_context"]
@@ -315,9 +480,10 @@ def build_assessment_pdf(
             pdf,
             "Patient Context (Settings)",
             patient_section,
+            as_of=report_timestamp,
         )
 
-    _write_appendix_references(pdf, ref_bundle["appendix"])
+    _write_appendix_references(pdf, ref_bundle["appendix"], as_of=report_timestamp)
 
     buffer = BytesIO()
     pdf.output(buffer)
@@ -325,13 +491,16 @@ def build_assessment_pdf(
 
 
 def assessment_pdf_filename(analysis: dict[str, Any]) -> str:
-    created = analysis.get("created_at") or ""
-    date_part = "unknown-date"
-    if created:
-        try:
-            date_part = datetime.fromisoformat(
-                created.replace("Z", "+00:00")
-            ).strftime("%Y-%m-%d")
-        except ValueError:
-            date_part = created[:10] or date_part
-    return f"beatit-assessment-{date_part}.pdf"
+    stamp = _format_filename_stamp(analysis.get("created_at"))
+
+    title = (analysis.get("annotation_title") or "").strip()
+    if title:
+        slug = re.sub(r"[^\w\s-]", "", title.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:40]
+        if slug:
+            prefix = "custom-task" if analysis.get("analysis_type") == "query" else "assessment"
+            return f"beatit-{prefix}-{slug}-{stamp}.pdf"
+
+    if analysis.get("analysis_type") == "query":
+        return f"beatit-custom-task-{stamp}.pdf"
+    return f"beatit-assessment-{stamp}.pdf"

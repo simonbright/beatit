@@ -53,8 +53,44 @@ def imaging_extension(filename: str) -> str | None:
     return None
 
 
+def is_dicom_bytes(content: bytes) -> bool:
+    """Detect DICOM by preamble or pydicom parse (handles extensionless slices)."""
+    if not content:
+        return False
+    if len(content) >= 132 and content[128:132] == b"DICM":
+        return True
+    try:
+        import pydicom
+
+        pydicom.dcmread(BytesIO(content), stop_before_pixels=True, force=True)
+        return True
+    except Exception:
+        return False
+
+
+def resolve_imaging_type(filename: str, content: bytes) -> tuple[str, str] | None:
+    ext = imaging_extension(filename)
+    if ext:
+        return ext, FORMAT_LABELS.get(ext, ext.lstrip("."))
+    if is_dicom_bytes(content):
+        return ".dcm", "DICOM"
+    return None
+
+
+def is_allowed_imaging_upload(filename: str, content: bytes) -> bool:
+    return resolve_imaging_type(filename, content) is not None
+
+
 def is_allowed_imaging_filename(filename: str) -> bool:
     return imaging_extension(filename) is not None
+
+
+def storage_filename_for_upload(filename: str, ext: str) -> str:
+    """Ensure stored files have a usable extension (many DICOM slices have none)."""
+    name = Path(filename or "imaging").name
+    if ext == ".dcm" and not imaging_extension(name):
+        return f"{name}.dcm" if name else "imaging.dcm"
+    return name or "imaging.dcm"
 
 
 def _format_bytes(size: int) -> str:
@@ -166,14 +202,22 @@ async def ingest_imaging_file(
     notes: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ext = imaging_extension(filename)
-    if not ext:
+    resolved = resolve_imaging_type(filename, content)
+    if not resolved:
         allowed = ", ".join(sorted(ALLOWED_IMAGING_EXTENSIONS))
-        raise ValueError(f"Unsupported imaging file type. Allowed: {allowed}")
+        raise ValueError(
+            f"Unsupported imaging file type. Allowed extensions: {allowed}. "
+            "Extensionless DICOM slices are also accepted when the file content is valid DICOM."
+        )
+
+    ext, format_label = resolved
+    storage_name = storage_filename_for_upload(filename, ext)
 
     dicom_meta: dict[str, str] = {}
-    if ext in {".dcm", ".dicom"}:
+    if ext in {".dcm", ".dicom"} or is_dicom_bytes(content):
         dicom_meta = _extract_dicom_metadata(content)
+        ext = ".dcm"
+        format_label = "DICOM"
 
     meta = dict(metadata or {})
     meta.update(
@@ -183,7 +227,8 @@ async def ingest_imaging_file(
             "file_extension": ext,
             "file_size": len(content),
             "file_size_label": _format_bytes(len(content)),
-            "imaging_format": FORMAT_LABELS.get(ext, ext.lstrip(".")),
+            "imaging_format": format_label,
+            "is_dicom": ext == ".dcm" or bool(dicom_meta),
         }
     )
     meta.update({f"dicom_{key}": value for key, value in dicom_meta.items()})
@@ -208,7 +253,7 @@ async def ingest_imaging_file(
         title=doc_title,
         source_type="imaging",
         extracted_text=extracted,
-        raw_filename=filename,
+        raw_filename=storage_name,
         raw_content=content,
         metadata=meta,
     )

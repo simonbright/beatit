@@ -6,6 +6,38 @@ from copy import deepcopy
 from typing import Any
 
 DOCUMENT_LABEL_RE = re.compile(r'^document\s+"([^"]+)"\s*$', re.IGNORECASE)
+URL_IN_TEXT_RE = re.compile(r"""https?://[^\s\]\)"'<>]+""", re.IGNORECASE)
+NCT_ID_RE = re.compile(r"\b(NCT\d{8})\b", re.IGNORECASE)
+WEB_PREFIX_RE = re.compile(r"^web\s*[—:\-–]\s*", re.IGNORECASE)
+
+
+def extract_source_uri_from_label(label: str) -> str | None:
+    text = (label or "").strip()
+    if not text:
+        return None
+    match = URL_IN_TEXT_RE.search(text)
+    if match:
+        return match.group(0).rstrip(".,;)")
+    nct = NCT_ID_RE.search(text)
+    if nct:
+        return f"https://clinicaltrials.gov/study/{nct.group(1).upper()}"
+    return None
+
+
+def publisher_label_from_uri(uri: str) -> str:
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(uri).hostname or ""
+    except Exception:
+        return uri
+    host = host.removeprefix("www.")
+    if not host:
+        return uri
+    if host.endswith(".gov"):
+        base = host[: -len(".gov")]
+        return f"{base} (.gov)" if base else host
+    return host
 
 SOURCE_TYPE_KEYS = (
     "document",
@@ -166,18 +198,47 @@ class SourceCatalog:
         title = parse_document_title(label)
         if title is not None:
             doc = self.doc_index.get(title.casefold())
+            if doc is None:
+                for stored in self.doc_index.values():
+                    names = {
+                        str(stored.get("title") or "").casefold(),
+                        str(stored.get("citation_display_name") or "").casefold(),
+                    }
+                    if title.casefold() in names:
+                        doc = stored
+                        break
             type_key = document_source_type_key(doc.get("source_type") if doc else None)
             display_name = (
                 (doc.get("citation_display_name") if doc else None)
                 or title
             ).strip()
+            source_uri = doc.get("source_uri") if doc else None
             return self._build_entry(
                 type_key,
                 label,
                 display_label=display_name,
                 document_id=doc.get("id") if doc else None,
                 document_title=title,
+                source_uri=source_uri,
             )
+
+        source_uri = extract_source_uri_from_label(label)
+        if source_uri:
+            cleaned = WEB_PREFIX_RE.sub("", label).strip()
+            display = cleaned if cleaned and cleaned != source_uri else publisher_label_from_uri(source_uri)
+            if display.startswith("http"):
+                display = publisher_label_from_uri(source_uri)
+            return self._build_entry(
+                "web",
+                label,
+                display_label=display,
+                source_uri=source_uri,
+            )
+
+        if WEB_PREFIX_RE.match(label):
+            remainder = WEB_PREFIX_RE.sub("", label).strip()
+            if remainder:
+                return self._build_entry("web", label, display_label=remainder)
 
         return self._build_entry("inference", label, display_label=label)
 
@@ -189,6 +250,7 @@ class SourceCatalog:
         display_label: str,
         document_id: str | None = None,
         document_title: str | None = None,
+        source_uri: str | None = None,
     ) -> dict[str, Any]:
         type_def = self.type_info(type_key)
         return {
@@ -200,6 +262,7 @@ class SourceCatalog:
             "raw_label": raw_label,
             "document_id": document_id,
             "document_title": document_title,
+            "source_uri": source_uri,
         }
 
     def enrich_reference(self, raw_label: str, num: int) -> dict[str, Any]:

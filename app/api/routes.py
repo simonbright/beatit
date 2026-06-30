@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from app.ingest.text import ingest_text
 from app.ingest.url import ingest_url
 from app.ingest.pdf import ingest_pdf_file
-from app.ingest.imaging import ingest_imaging_file, is_allowed_imaging_filename
+from app.ingest.imaging import ingest_imaging_file, is_allowed_imaging_upload
 from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
 from app.services.openrouter_client import OpenRouterClient
@@ -23,6 +23,7 @@ from app.services.analysis_jobs import (
 )
 from app.services.synthesis import SynthesisService
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
+from app.services.dicom_preview import is_dicom_document, render_dicom_preview_png
 from app.services.investigation import InvestigationService
 from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
 from app.services.source_catalog import (
@@ -51,6 +52,7 @@ from app.services.audit import (
     OPEN_ITEM_INVESTIGATION_STARTED,
     OPEN_ITEM_STATUS_CHANGED,
     PDF_EXPORTED,
+    ANALYSIS_ANNOTATIONS_UPDATED,
     SETTINGS_MODEL_UPDATED,
     SETTINGS_PATIENT_CONTEXT_UPDATED,
     SETTINGS_SOURCE_LABELS_UPDATED,
@@ -139,6 +141,12 @@ class InvestigateOpenItemRequest(BaseModel):
 
 class AcceptInvestigationRequest(BaseModel):
     edited_response: str | None = Field(default=None, max_length=50000)
+
+
+class AnalysisAnnotationsUpdate(BaseModel):
+    annotation_title: str | None = Field(default=None, max_length=500)
+    annotation_header: str | None = Field(default=None, max_length=5000)
+    annotation_notes: str | None = Field(default=None, max_length=20000)
 
 
 async def _source_catalog(db: Database, documents: list[dict[str, Any]] | None = None) -> SourceCatalog:
@@ -402,14 +410,48 @@ async def list_audit_events(
     }
 
 
-@router.get("/documents")
-async def list_documents():
+@router.get("/documents/index")
+async def document_index():
     db, _, _, _, _ = await _get_services()
-    documents = await db.list_documents()
+    return {
+        "documents": await db.list_document_index(),
+        "total": await db.count_documents(),
+        "counts_by_type": await db.document_type_counts(),
+    }
+
+
+@router.get("/documents")
+async def list_documents(
+    limit: int = 50,
+    offset: int = 0,
+    source_type: str | None = None,
+):
+    db, _, _, _, _ = await _get_services()
+    page_size = max(1, min(limit, 100))
+    page_offset = max(0, offset)
+    normalized_type = source_type.strip().lower() if source_type and source_type.strip() else None
+    if normalized_type == "all":
+        normalized_type = None
+
+    total = await db.count_documents(normalized_type)
+    counts_by_type = await db.document_type_counts()
+    documents = await db.list_documents(
+        limit=page_size,
+        offset=page_offset,
+        source_type=normalized_type,
+    )
     catalog = await _source_catalog(db, documents)
     for doc in documents:
         doc["source_info"] = catalog.describe_document(doc)
-    return {"documents": documents, "source_legend": catalog.legend()}
+    return {
+        "documents": documents,
+        "total": total,
+        "limit": page_size,
+        "offset": page_offset,
+        "source_type": normalized_type,
+        "counts_by_type": counts_by_type,
+        "source_legend": catalog.legend(),
+    }
 
 
 @router.get("/documents/{doc_id}")
@@ -445,6 +487,33 @@ async def get_document_file(doc_id: str):
         media_type=guess_media_type(filename, doc.get("source_type")),
         filename=filename,
         content_disposition_type="inline",
+    )
+
+
+@router.get("/documents/{doc_id}/preview")
+async def get_document_preview(doc_id: str):
+    db, _, _, _, _ = await _get_services()
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not file_is_available(doc):
+        raise HTTPException(status_code=404, detail="Original file not available")
+    if not is_dicom_document(doc):
+        raise HTTPException(status_code=400, detail="Preview is only available for DICOM files")
+
+    path = Path(doc["file_path"])
+    try:
+        png_bytes = render_dicom_preview_png(file_path=path)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not render DICOM preview: {exc}",
+        ) from exc
+
+    return FastAPIResponse(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 
@@ -664,16 +733,19 @@ async def ingest_imaging_route(
     relative_path: str | None = Form(default=None),
     notes: str | None = Form(default=None),
 ):
-    _, store, _, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
     filename = Path(file.filename or "imaging.dcm").name
-    if not is_allowed_imaging_filename(filename):
+    if not is_allowed_imaging_upload(filename, content):
         raise HTTPException(
             status_code=400,
-            detail="Unsupported imaging file type. Use DICOM, JPEG, PNG, TIFF, NIfTI, or ZIP.",
+            detail=(
+                "Unsupported imaging file type. Use DICOM (.dcm), JPEG, PNG, TIFF, NIfTI, or ZIP. "
+                "Extensionless DICOM slices from a study folder are accepted when the file content is valid DICOM."
+            ),
         )
 
     try:
@@ -894,7 +966,14 @@ async def export_latest_assessment_pdf(request: Request):
     analysis = await db.get_latest_analysis()
     if not analysis or not (analysis.get("response") or analysis.get("executive_summary")):
         raise HTTPException(status_code=404, detail="No assessment available to export")
+    return await _export_analysis_pdf_response(db, request, analysis)
 
+
+async def _export_analysis_pdf_response(
+    db: Database,
+    request: Request,
+    analysis: dict[str, Any],
+) -> FastAPIResponse:
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
     catalog = await _source_catalog(db)
     pdf_bytes = build_assessment_pdf(
@@ -913,6 +992,8 @@ async def export_latest_assessment_pdf(request: Request):
             "analysis_id": analysis.get("id"),
             "filename": filename,
             "analysis_type": analysis.get("analysis_type"),
+            "record_status": analysis.get("record_status"),
+            "created_by": analysis.get("created_by"),
         },
     )
     return FastAPIResponse(
@@ -920,6 +1001,61 @@ async def export_latest_assessment_pdf(request: Request):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/analyses/{analysis_id}/export.pdf")
+async def export_analysis_pdf(analysis_id: str, request: Request):
+    db, _, _, _, _ = await _get_services()
+    analysis = await db.get_analysis_by_id(analysis_id)
+    if not analysis or not (analysis.get("response") or analysis.get("executive_summary")):
+        raise HTTPException(status_code=404, detail="Analysis not found or empty")
+    return await _export_analysis_pdf_response(db, request, analysis)
+
+
+@router.patch("/analyses/{analysis_id}/annotations")
+async def update_analysis_annotations(
+    analysis_id: str,
+    body: AnalysisAnnotationsUpdate,
+    request: Request,
+):
+    db, _, _, _, _ = await _get_services()
+    existing = await db.get_analysis_by_id(analysis_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if existing.get("record_status") == "discarded":
+        raise HTTPException(status_code=400, detail="Discarded analyses cannot be edited")
+
+    if (
+        body.annotation_title is None
+        and body.annotation_header is None
+        and body.annotation_notes is None
+    ):
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    analysis = await db.update_analysis_annotations(
+        analysis_id,
+        annotation_title=body.annotation_title,
+        annotation_header=body.annotation_header,
+        annotation_notes=body.annotation_notes,
+    )
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    await _audit(
+        db,
+        request,
+        ANALYSIS_ANNOTATIONS_UPDATED,
+        resource_type="analysis",
+        resource_id=analysis_id,
+        metadata={
+            "analysis_id": analysis_id,
+            "annotation_title": analysis.get("annotation_title"),
+            "query_preview": preview_text(existing.get("query")),
+            "created_by": analysis.get("created_by"),
+            "record_status": analysis.get("record_status"),
+        },
+    )
+    return {"analysis": analysis}
 
 
 @router.get("/analyses/{analysis_id}")

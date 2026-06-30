@@ -1,5 +1,10 @@
 const state = {
   documents: [],
+  documentIndex: [],
+  libraryPage: 1,
+  libraryFilter: "",
+  libraryTotal: 0,
+  libraryCounts: {},
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
@@ -418,8 +423,7 @@ function finishCustomTaskRun(analysis, queryText = "") {
 
 function scrollToAssessmentResults() {
   const target = $("#executive-summary-card") || $("#analyze-results-section");
-  if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollToElement(target);
 }
 
 function scrollToOpenItems() {
@@ -427,18 +431,65 @@ function scrollToOpenItems() {
     switchTab("analyze");
   }
   requestAnimationFrame(() => {
-    $("#open-items-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollToElement($("#open-items-card"));
   });
 }
 
-function initCaseStatusNavigation() {
-  $("#case-status-summary")?.addEventListener("click", (event) => {
-    const link = event.target.closest("[data-case-nav]");
-    if (!link) return;
+function getStickyHeaderOffset(extra = 16) {
+  const header = document.querySelector(".header");
+  if (!header) return 96 + extra;
+  return header.getBoundingClientRect().height + extra;
+}
+
+function scrollToElement(element, { behavior = "smooth", offset = null } = {}) {
+  if (!element) return;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const scrollBehavior = reduceMotion ? "auto" : behavior;
+  const topOffset = offset ?? getStickyHeaderOffset();
+  const targetTop = element.getBoundingClientRect().top + window.scrollY - topOffset;
+  window.scrollTo({ top: Math.max(0, targetTop), behavior: scrollBehavior });
+}
+
+function scrollToCustomTaskDetail() {
+  const anchor = $("#custom-task-detail-top") || $("#custom-task-detail");
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => scrollToElement(anchor));
+  });
+}
+
+function updateHomeToolbar() {
+  const hasAssessment = Boolean(state.latestAnalysis);
+  const onHome = $("#panel-analyze")?.classList.contains("active");
+  $("#btn-export-pdf")?.classList.toggle("hidden", !(hasAssessment && onHome));
+}
+
+function updateHomeWorkflow() {
+  updateHomeToolbar();
+}
+
+function renderHomeState(hasAssessment) {
+  $("#analyze-results-section")?.classList.toggle("hidden", !hasAssessment);
+  $("#analyze-actions-card")?.classList.toggle("analyze-actions-secondary", hasAssessment);
+  if (hasAssessment && !state.analysisRunning) {
+    setAnalyzeActionsExpanded(false);
+  } else if (!hasAssessment) {
+    setAnalyzeActionsExpanded(true);
+  }
+  updateHomeToolbar();
+}
+
+function initHowToNavigation() {
+  $("#panel-howto")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-howto-nav]");
+    if (!btn) return;
     event.preventDefault();
-    const target = link.dataset.caseNav;
-    if (target === "library") switchTab("library");
-    else if (target === "open-items") scrollToOpenItems();
+    const target = btn.dataset.howtoNav;
+    if (target === "open-items") {
+      scrollToOpenItems();
+      return;
+    }
+    switchTab(target);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
 }
 
@@ -469,67 +520,6 @@ function setAnalyzeActionsExpanded(expanded) {
   if (!card) return;
   if (expanded) card.setAttribute("open", "");
   else card.removeAttribute("open");
-}
-
-function renderCaseStatus() {
-  const summary = $("#case-status-summary");
-  const cta = $("#case-status-cta");
-  const runBtn = $("#btn-case-run-baseline");
-  const docCount = state.documents.length;
-  const analysis = state.latestAnalysis;
-  const openCount = analysis?.open_items?.length || 0;
-
-  $("#btn-export-pdf")?.classList.toggle("hidden", !analysis);
-
-  if (summary) {
-    const parts = [`<span class="case-status-heading">Case status</span>`];
-    const docLabel = `${docCount} document${docCount === 1 ? "" : "s"}`;
-    parts.push(
-      `<a href="#" class="case-status-link" data-case-nav="library">${docLabel}</a>`
-    );
-
-    if (analysis) {
-      parts.push(
-        `<span class="case-status-sep">·</span>`,
-        `<span>${escapeHtml(analysisTypeLabel(analysis.analysis_type))}</span>`,
-        `<span class="case-status-sep">·</span>`,
-        `<span>${escapeHtml(formatEasternTimestamp(analysis.created_at))}</span>`,
-        `<span class="case-status-sep">·</span>`,
-        `<a href="#" class="case-status-link" data-case-nav="open-items">${openCount} open item${openCount === 1 ? "" : "s"}</a>`
-      );
-    } else {
-      parts.push(
-        `<span class="case-status-sep">·</span>`,
-        `<span>${docCount === 0 ? "No documents yet" : "No assessment"}</span>`
-      );
-    }
-
-    summary.innerHTML = parts.join(" ");
-  }
-
-  if (cta && runBtn) {
-    if (analysis) {
-      cta.classList.add("hidden");
-    } else {
-      cta.classList.remove("hidden");
-      runBtn.textContent = docCount === 0 ? "Add data" : "Run baseline assessment";
-    }
-  }
-}
-
-function updateHomeWorkflow() {
-  renderCaseStatus();
-}
-
-function renderHomeState(hasAssessment) {
-  $("#analyze-results-section")?.classList.toggle("hidden", !hasAssessment);
-  $("#analyze-actions-card")?.classList.toggle("analyze-actions-secondary", hasAssessment);
-  if (hasAssessment && !state.analysisRunning) {
-    setAnalyzeActionsExpanded(false);
-  } else if (!hasAssessment) {
-    setAnalyzeActionsExpanded(true);
-  }
-  renderCaseStatus();
 }
 
 async function resumeActiveAnalysisJob() {
@@ -575,14 +565,21 @@ function resumeActiveAnalysisJobInBackground() {
   });
 }
 
-function switchTab(name) {
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+function switchTab(name, options = {}) {
+  $$(".tab").forEach((t) => {
+    const active = t.dataset.tab === name;
+    t.classList.toggle("active", active);
+    t.setAttribute("aria-selected", active ? "true" : "false");
+  });
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${name}`));
-  if (name === "library") loadDocuments();
+  if (name === "library" && !options.skipLibraryLoad) {
+    loadDocuments().catch((e) => toast(e.message, "error"));
+  }
   if (name === "history") loadHistory();
   if (name === "analyze") loadLatestAssessment();
   if (name === "custom-tasks") loadCustomTasks();
   if (name === "settings") loadSettings();
+  updateHomeToolbar();
 }
 
 function jobStatusLabel(status) {
@@ -627,6 +624,10 @@ function updateCustomTasksBadge() {
   badge.textContent = running ? `${running} running · ${drafts} draft${drafts === 1 ? "" : "s"}` : `${drafts} draft${drafts === 1 ? "" : "s"}`;
 }
 
+function formatActor(actor) {
+  return actor || "Unknown user";
+}
+
 function renderCustomTasksList() {
   const list = $("#custom-tasks-drafts-list");
   if (!list) return;
@@ -642,8 +643,12 @@ function renderCustomTasksList() {
         <div class="custom-task-item-main">
           <span class="badge">Draft</span>
           <time class="muted small">${escapeHtml(formatTimestamp(draft.created_at))}</time>
+          <span class="muted small custom-task-item-by">By ${escapeHtml(formatActor(draft.created_by))}</span>
         </div>
-        <p class="custom-task-item-query">${escapeHtml(truncate(draft.query, 180))}</p>
+        ${draft.annotation_title
+          ? `<p class="custom-task-annotation-preview">${escapeHtml(truncate(draft.annotation_title, 120))}</p>
+             <p class="custom-task-item-query muted small">${escapeHtml(truncate(draft.query, 160))}</p>`
+          : `<p class="custom-task-item-query">${escapeHtml(truncate(draft.query, 180))}</p>`}
         <button type="button" class="btn ghost btn-view-custom-task" data-id="${escapeHtml(draft.id)}">Review</button>
       </article>`
     )
@@ -660,42 +665,107 @@ function renderCustomTasksList() {
   });
 }
 
+function getSelectedCustomTaskDraft() {
+  const id = state.selectedCustomTaskId;
+  if (!id) return null;
+  return (state.customTasks?.drafts || []).find((d) => d.id === id) || null;
+}
+
+function buildCustomTaskShareContent(analysis) {
+  const lines = [];
+  if (analysis.annotation_title) lines.push(`Title: ${analysis.annotation_title}`);
+  if (analysis.created_by) lines.push(`Generated by: ${analysis.created_by}`);
+  if (analysis.query) lines.push(`Question: ${analysis.query}`);
+  if (analysis.annotation_notes) {
+    lines.push("");
+    lines.push(analysis.annotation_notes);
+  }
+  lines.push("", "BeatIt custom task export (PDF attached).");
+  const defaultSubject =
+    (analysis.annotation_title || "").trim() ||
+    truncate(analysis.query || "", 120) ||
+    "BeatIt custom task";
+  return {
+    subject: `BeatIt: ${defaultSubject}`,
+    body: lines.join("\n"),
+  };
+}
+
+function updateNativeShareButton() {
+  const btn = $("#btn-native-share-custom-task");
+  if (!btn) return;
+  const canShare = typeof navigator.share === "function";
+  btn.classList.toggle("hidden", !canShare);
+}
+
 function renderCustomTaskDetail(analysis) {
   const panel = $("#custom-task-detail");
   if (!panel || !analysis) return;
 
   panel.classList.remove("hidden");
-  $("#custom-task-detail-title").textContent = "Draft analysis";
-  const queryLine = analysis.query ? `Question: ${analysis.query}` : "";
-  $("#custom-task-detail-meta").textContent = [queryLine, `${formatTimestamp(analysis.created_at)} · ${analysis.model || "Unknown model"}`]
-    .filter(Boolean)
-    .join(" · ");
 
-  const isTrialQuery = /trial|therapeutic|nct|investigational|study/i.test(analysis.query || "");
-  const summaryHeading = panel.querySelector(".custom-task-summary h4");
-  const bodyHeading = panel.querySelector(".full-assessment-card h4");
-  if (summaryHeading) summaryHeading.textContent = isTrialQuery ? "Summary" : "Executive summary";
-  if (bodyHeading) bodyHeading.textContent = isTrialQuery ? "Trials & therapeutics list" : "Full response";
+  const queryPill = $("#custom-task-query-pill");
+  if (queryPill) {
+    if (analysis.query?.trim()) {
+      queryPill.textContent = analysis.query.trim();
+      queryPill.classList.remove("hidden");
+    } else {
+      queryPill.textContent = "";
+      queryPill.classList.add("hidden");
+    }
+  }
 
-  state.referenceRegistry = analysis.reference_registry || {};
+  const metaParts = [
+    `Generated by ${formatActor(analysis.created_by)}`,
+    formatTimestamp(analysis.created_at),
+    analysis.model || "Unknown model",
+  ];
+  $("#custom-task-detail-meta").textContent = metaParts.join(" · ");
+
+  const titleInput = $("#custom-task-annotation-title");
+  const notesInput = $("#custom-task-annotation-notes");
+  if (titleInput) titleInput.value = analysis.annotation_title || "";
+  if (notesInput) notesInput.value = analysis.annotation_notes || "";
+  const status = $("#custom-task-annotation-status");
+  if (status) status.textContent = "";
+
+  updateNativeShareButton();
+
+  const refPrefix = analysis.id;
   const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
   const responseDisplay = analysis.response_display || analysis.response || "";
+  const updatedAt = analysis.created_at;
 
-  const summaryEl = $("#custom-task-summary");
-  const bodyEl = $("#custom-task-body");
-  if (summaryEl) {
-    summaryEl.innerHTML = summaryDisplay
-      ? formatNumberedReferences(summaryDisplay)
-      : '<p class="muted">No executive summary returned.</p>';
+  state.referenceRegistry = analysis.reference_registry || {};
+
+  setSectionLastUpdated($("#custom-task-answer-time"), updatedAt);
+
+  const answerEl = $("#custom-task-answer");
+  const answerParts = [];
+  if (summaryDisplay) {
+    answerParts.push(
+      `<div class="answer-section">${formatNumberedReferences(summaryDisplay, state.referenceRegistry, refPrefix)}</div>`
+    );
   }
-  if (bodyEl) {
-    bodyEl.innerHTML = responseDisplay
-      ? formatNumberedReferences(responseDisplay)
-      : '<p class="muted">No response text returned.</p>';
+  if (responseDisplay) {
+    answerParts.push(
+      `<div class="answer-section">${formatNumberedReferences(responseDisplay, state.referenceRegistry, refPrefix)}</div>`
+    );
   }
-  renderReferencesBlock($("#custom-task-summary-refs"), analysis.executive_summary_refs || []);
-  renderReferencesBlock($("#custom-task-body-refs"), analysis.response_refs || [], "References");
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (answerEl) {
+    answerEl.innerHTML = answerParts.length
+      ? answerParts.join('<hr class="answer-divider">')
+      : '<p class="muted">No response returned.</p>';
+  }
+
+  renderSourcesSidebar({
+    wrap: $("#custom-task-sources-sidebar"),
+    inner: $("#custom-task-sources-sidebar-inner"),
+    appendix: analysis.references || [],
+    idPrefix: refPrefix,
+  });
+
+  scrollToCustomTaskDetail();
 }
 
 function selectCustomTask(id) {
@@ -749,6 +819,112 @@ async function promoteCustomTask() {
   if (data.analysis) {
     renderLatestAssessment(data.analysis);
     scrollToAssessmentResults();
+  }
+}
+
+async function saveCustomTaskAnnotations() {
+  const id = state.selectedCustomTaskId;
+  if (!id) return;
+  const status = $("#custom-task-annotation-status");
+  const btn = $("#btn-save-custom-task-annotations");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api(`/api/analyses/${id}/annotations`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        annotation_title: $("#custom-task-annotation-title")?.value.trim() ?? "",
+        annotation_notes: $("#custom-task-annotation-notes")?.value.trim() ?? "",
+      }),
+    });
+    const idx = (state.customTasks?.drafts || []).findIndex((d) => d.id === id);
+    if (idx >= 0 && data.analysis) {
+      state.customTasks.drafts[idx] = data.analysis;
+    }
+    renderCustomTaskDetail(data.analysis);
+    renderCustomTasksList();
+    if (status) status.textContent = "Saved";
+    toast("Annotations saved");
+  } catch (err) {
+    if (status) status.textContent = "";
+    toast(err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function downloadAnalysisPdf(analysisId, { silent = false } = {}) {
+  const res = await fetch(`/api/analyses/${analysisId}/export.pdf`, {
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    window.location.href = "/login";
+    return null;
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Export failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match?.[1] || `beatit-custom-task-${analysisId.slice(0, 8)}.pdf`;
+  return { blob, filename, silentHandled: silent };
+}
+
+function triggerPdfDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function exportCustomTaskPdf(options = {}) {
+  const id = state.selectedCustomTaskId;
+  if (!id) return toast("Select a custom task first", "error");
+  const btn = $("#btn-export-custom-task-pdf");
+  if (btn) btn.disabled = true;
+  try {
+    const result = await downloadAnalysisPdf(id, options);
+    if (!result) return;
+    triggerPdfDownload(result.blob, result.filename);
+    if (!options.silent) toast("PDF downloaded");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function nativeShareCustomTask() {
+  const draft = getSelectedCustomTaskDraft();
+  if (!draft) return toast("Select a custom task first", "error");
+  if (typeof navigator.share !== "function") {
+    return toast("Sharing is not supported on this device — use PDF", "error");
+  }
+
+  const btn = $("#btn-native-share-custom-task");
+  if (btn) btn.disabled = true;
+  try {
+    const { subject, body } = buildCustomTaskShareContent(draft);
+    const result = await downloadAnalysisPdf(draft.id, { silent: true });
+    if (!result) return;
+
+    const file = new File([result.blob], result.filename, { type: "application/pdf" });
+    const shareData = { title: subject, text: body };
+    if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
+      shareData.files = [file];
+    }
+
+    await navigator.share(shareData);
+    toast("Shared");
+  } catch (err) {
+    if (err?.name !== "AbortError") toast(err.message || "Share failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -934,6 +1110,39 @@ async function savePatientContext() {
   if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
 
+const LIBRARY_PAGE_SIZE = 50;
+
+const LIBRARY_TYPE_LABELS = {
+  text: "Clinical notes",
+  url: "Web page",
+  youtube: "YouTube",
+  pdf: "PDF",
+  video: "Video",
+  imaging: "DICOM / imaging",
+};
+
+function libraryTypeLabel(type) {
+  return LIBRARY_TYPE_LABELS[type] || type || "Unknown";
+}
+
+function findDocumentById(id) {
+  return state.documents.find((doc) => doc.id === id) || state.documentIndex.find((doc) => doc.id === id);
+}
+
+function findDocumentByTitle(title) {
+  const key = String(title || "").trim();
+  if (!key) return null;
+  const fromPage = state.documents.find((doc) => doc.title === key || doc.citation_display_name === key);
+  if (fromPage) return fromPage;
+  return (
+    state.documentIndex.find((doc) => doc.title === key || doc.citation_display_name === key) || null
+  );
+}
+
+function libraryTotalPages() {
+  return Math.max(1, Math.ceil((state.libraryTotal || 0) / LIBRARY_PAGE_SIZE));
+}
+
 function updateSelectedLabel() {
   const el = $("#selected-count");
   const customScope = $("#custom-task-doc-scope");
@@ -951,8 +1160,29 @@ function updateSelectedLabel() {
 
 function renderDocuments() {
   const list = $("#documents-list");
+  const summary = $("#library-summary");
+  const pagination = $("#library-pagination");
+  if (!list) return;
+
+  const total = state.libraryTotal || 0;
+  const filterLabel = state.libraryFilter ? libraryTypeLabel(state.libraryFilter) : "All types";
+  if (summary) {
+    if (!total) {
+      summary.textContent = state.libraryFilter
+        ? `No ${filterLabel.toLowerCase()} documents`
+        : "No documents stored";
+    } else {
+      const start = (state.libraryPage - 1) * LIBRARY_PAGE_SIZE + 1;
+      const end = Math.min(state.libraryPage * LIBRARY_PAGE_SIZE, total);
+      summary.textContent = `Showing ${start}–${end} of ${total} · ${filterLabel}`;
+    }
+  }
+
   if (!state.documents.length) {
-    list.innerHTML = `<p class="muted">No documents yet. Add clinical notes, URLs, PDFs, imaging, or YouTube transcripts.</p>`;
+    list.innerHTML = state.libraryFilter
+      ? `<p class="muted">No documents match this filter.</p>`
+      : `<p class="muted">No documents yet. Add clinical notes, URLs, PDFs, imaging, or YouTube transcripts.</p>`;
+    if (pagination) pagination.classList.add("hidden");
     return;
   }
 
@@ -964,9 +1194,11 @@ function renderDocuments() {
         ? `${meta.page_count} pages`
         : meta.modality
           ? meta.modality
-          : meta.file_size_label
-            ? meta.file_size_label
-            : "";
+          : meta.imaging_format === "DICOM" || meta.is_dicom || [".dcm", ".dicom"].includes(meta.file_extension)
+            ? "DICOM"
+            : meta.file_size_label
+              ? meta.file_size_label
+              : "";
       const paths = renderPathLines(docPathLines(doc));
       const info = doc.source_info || {};
       const sourceBadge = info.shorthand
@@ -997,15 +1229,92 @@ function renderDocuments() {
     })
     .join("");
 
-  list.querySelectorAll(".btn-view").forEach((btn) =>
-    btn.addEventListener("click", () => viewDocument(btn.dataset.id))
-  );
-  list.querySelectorAll(".btn-select").forEach((btn) =>
-    btn.addEventListener("click", () => toggleSelect(btn.dataset.id))
-  );
-  list.querySelectorAll(".btn-delete").forEach((btn) =>
-    btn.addEventListener("click", () => deleteDocument(btn.dataset.id))
-  );
+  renderLibraryPagination();
+}
+
+function renderLibraryTypeFilter() {
+  const select = $("#library-type-filter");
+  if (!select) return;
+  const current = state.libraryFilter || "";
+  const counts = state.libraryCounts || {};
+  const allCount = Object.values(counts).reduce((a, b) => a + b, 0);
+  const typeKeys = [
+    ...Object.keys(LIBRARY_TYPE_LABELS).filter((type) => counts[type]),
+    ...Object.keys(counts).filter((type) => !LIBRARY_TYPE_LABELS[type]),
+  ].sort((a, b) => libraryTypeLabel(a).localeCompare(libraryTypeLabel(b)));
+  const options = [
+    `<option value="">All types (${allCount})</option>`,
+    ...typeKeys.map(
+      (type) =>
+        `<option value="${escapeHtml(type)}"${type === current ? " selected" : ""}>${escapeHtml(libraryTypeLabel(type))} (${counts[type]})</option>`
+    ),
+  ];
+  select.innerHTML = options.join("");
+}
+
+function renderLibraryPagination() {
+  const wrap = $("#library-pagination");
+  const info = $("#library-page-info");
+  const prev = $("#btn-library-prev");
+  const next = $("#btn-library-next");
+  if (!wrap || !info || !prev || !next) return;
+
+  const totalPages = libraryTotalPages();
+  if ((state.libraryTotal || 0) <= LIBRARY_PAGE_SIZE) {
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+  info.textContent = `Page ${state.libraryPage} of ${totalPages}`;
+  prev.disabled = state.libraryPage <= 1;
+  next.disabled = state.libraryPage >= totalPages;
+}
+
+async function loadDocumentIndex() {
+  const data = await api("/api/documents/index");
+  state.documentIndex = data.documents || [];
+  state.libraryCounts = data.counts_by_type || {};
+  if (!state.libraryFilter) {
+    state.libraryTotal = data.total || 0;
+  }
+  renderLibraryTypeFilter();
+}
+
+async function refreshLibrary(options = {}) {
+  await loadDocumentIndex();
+  await loadDocuments(options);
+}
+
+async function openLibraryAfterIngest() {
+  await refreshLibrary({ page: 1 });
+  switchTab("library", { skipLibraryLoad: true });
+}
+
+async function loadDocuments(options = {}) {
+  const page = options.page ?? state.libraryPage ?? 1;
+  const sourceType =
+    options.sourceType !== undefined ? options.sourceType : state.libraryFilter ?? "";
+  const params = new URLSearchParams({
+    limit: String(LIBRARY_PAGE_SIZE),
+    offset: String((page - 1) * LIBRARY_PAGE_SIZE),
+  });
+  if (sourceType) params.set("source_type", sourceType);
+
+  const data = await api(`/api/documents?${params}`);
+  state.documents = data.documents || [];
+  state.libraryPage = page;
+  state.libraryFilter = sourceType;
+  state.libraryTotal = data.total ?? 0;
+  state.libraryCounts = data.counts_by_type || state.libraryCounts;
+  if (data.source_legend) {
+    state.sourceLegend = data.source_legend;
+    renderSourceLegend(state.sourceLegend);
+  }
+  renderLibraryTypeFilter();
+  renderDocuments();
+  updateSelectedLabel();
+  updateHomeWorkflow();
 }
 
 function analysisTypeLabel(type) {
@@ -1044,42 +1353,18 @@ function formatEasternTimestamp(iso) {
   }
 }
 
-function formatReportDateTime(date) {
-  const compact = window.matchMedia("(max-width: 600px)").matches;
-  if (compact) {
-    return date.toLocaleString("en-US", {
-      timeZone: "America/New_York",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZoneName: "short",
-    });
-  }
-  return date.toLocaleString("en-US", {
-    timeZone: "America/New_York",
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  });
-}
-
-function updateReportDateTime(iso) {
-  const el = $("#report-datetime");
-  if (!el) return;
-  const date = iso ? new Date(iso) : new Date();
-  if (Number.isNaN(date.getTime())) {
-    el.textContent = iso || "";
-    el.removeAttribute("datetime");
+function setSectionLastUpdated(timeEl, iso) {
+  if (!timeEl) return;
+  const wrap = timeEl.closest(".section-updated");
+  if (!iso) {
+    timeEl.textContent = "";
+    timeEl.removeAttribute("datetime");
+    wrap?.classList.add("hidden");
     return;
   }
-  el.textContent = formatReportDateTime(date);
-  el.dateTime = iso || date.toISOString();
+  timeEl.textContent = formatEasternTimestamp(iso);
+  timeEl.dateTime = iso;
+  wrap?.classList.remove("hidden");
 }
 
 function escapeHtml(str) {
@@ -1156,7 +1441,7 @@ function describeSourceTagInner(inner) {
   if (lower.startsWith("document")) {
     const titleMatch = inner.match(/^document\s+"([^"]+)"/i);
     const title = titleMatch?.[1] || inner;
-    const doc = state.documents.find((d) => d.title === title);
+    const doc = findDocumentByTitle(title);
     if (doc?.source_info) return doc.source_info;
     return {
       css_class: "source-document",
@@ -1193,39 +1478,333 @@ function formatWithSources(text) {
   return formatMarkdownEmphasis(withTags).replace(/\n/g, "<br>");
 }
 
-function formatNumberedReferences(text, registry = state.referenceRegistry) {
+function refEntryId(idPrefix, num) {
+  return `ref-entry-${idPrefix}-${num}`;
+}
+
+function refEntryHash(idPrefix, num) {
+  return `#${refEntryId(idPrefix, num)}`;
+}
+
+function findRefNumByRawLabel(label, registry = state.referenceRegistry) {
+  const normalized = String(label || "").trim().toLowerCase();
+  if (!normalized || !registry) return null;
+  for (const [num, ref] of Object.entries(registry)) {
+    const raw = String(ref.raw_label || ref.label || "").trim().toLowerCase();
+    if (raw === normalized) return num;
+  }
+  return null;
+}
+
+const CITE_PILL_GENERIC_LABELS = new Set([
+  "ai inference",
+  "not documented",
+  "not verified",
+  "patient context",
+  "clinical record",
+  "diagnostic test",
+  "web source",
+]);
+
+function citePillLabel(ref) {
+  if (!ref) return "Source";
+  const type = ref.type || "";
+  const css = ref.css_class || "";
+  if (type === "unknown" || css.includes("unknown")) return "Not in library";
+  if (type === "inference" || css.includes("inference")) return "Not verified";
+  if (type === "patient_context" || css.includes("context")) return "Patient context";
+
+  const label = String(ref.display_label || ref.label || "").trim();
+  if (label && !CITE_PILL_GENERIC_LABELS.has(label.toLowerCase())) {
+    return truncate(label, 36);
+  }
+  if (ref.source_uri) {
+    try {
+      const host = new URL(ref.source_uri).hostname.replace(/^www\./, "");
+      if (host) return truncate(host, 36);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (ref.type === "web" || ref.css_class?.includes("web")) {
+    return truncate(label || "Web source", 36);
+  }
+  return truncate(label || "Source", 36);
+}
+
+const SOURCES_SIDEBAR_PREVIEW = 6;
+
+function sourceFaviconUrl(ref) {
+  if (!ref?.source_uri) return null;
+  try {
+    const host = new URL(ref.source_uri).hostname;
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`;
+  } catch (_) {
+    return null;
+  }
+}
+
+function sourceSidebarFaviconStack(appendix) {
+  const seen = new Set();
+  const icons = [];
+  for (const ref of appendix) {
+    const favicon = sourceFaviconUrl(ref);
+    if (!favicon) continue;
+    try {
+      const host = new URL(ref.source_uri).hostname;
+      if (seen.has(host)) continue;
+      seen.add(host);
+      icons.push(favicon);
+      if (icons.length >= 5) break;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (!icons.length) return "";
+  return `<span class="sources-favicon-stack" aria-hidden="true">${icons
+    .map((url) => `<img src="${escapeHtml(url)}" alt="" width="16" height="16" loading="lazy">`)
+    .join("")}</span>`;
+}
+
+const SOURCE_URL_PATTERN = /https?:\/\/[^\s\]\)"'<>]+/i;
+const SOURCE_NCT_PATTERN = /\b(NCT\d{8})\b/i;
+
+function extractSourceUriFromLabel(label) {
+  const text = String(label || "").trim();
+  if (!text) return null;
+  const urlMatch = text.match(SOURCE_URL_PATTERN);
+  if (urlMatch) return urlMatch[0].replace(/[.,;)]+$/, "");
+  const nctMatch = text.match(SOURCE_NCT_PATTERN);
+  if (nctMatch) return `https://clinicaltrials.gov/study/${nctMatch[1].toUpperCase()}`;
+  return null;
+}
+
+function enrichReference(ref) {
+  if (!ref) return ref;
+  let enriched = { ...ref };
+  if (!enriched.source_uri && enriched.document_id) {
+    const doc = findDocumentById(enriched.document_id);
+    if (doc?.source_uri) {
+      enriched = { ...enriched, source_uri: doc.source_uri };
+      if (doc.source_type === "url" || doc.source_type === "youtube") {
+        enriched.type = enriched.type || "web";
+        enriched.css_class = enriched.css_class || "source-web";
+      }
+    }
+  }
+  if (!enriched.source_uri) {
+    const uri = extractSourceUriFromLabel(enriched.raw_label || enriched.label || "");
+    if (uri) {
+      enriched = {
+        ...enriched,
+        source_uri: uri,
+        type: enriched.type === "inference" ? "web" : enriched.type || "web",
+        css_class: enriched.css_class === "source-inference" ? "source-web" : enriched.css_class || "source-web",
+      };
+    }
+  }
+  return enriched;
+}
+
+function enrichReferenceList(appendix) {
+  return (appendix || []).map(enrichReference);
+}
+
+function sortSourcesForSidebar(appendix) {
+  return [...appendix].sort((a, b) => {
+    const aLink = Boolean(a.source_uri);
+    const bLink = Boolean(b.source_uri);
+    if (aLink !== bLink) return aLink ? -1 : 1;
+    return (a.num || 0) - (b.num || 0);
+  });
+}
+
+function sourcePublisherLabel(ref) {
+  if (ref?.source_uri) {
+    try {
+      const host = new URL(ref.source_uri).hostname.replace(/^www\./, "");
+      if (host.endsWith(".gov")) {
+        const base = host.slice(0, -4);
+        return base ? `${base} (.gov)` : host;
+      }
+      return host;
+    } catch (_) {
+      return truncate(ref.source_uri, 36);
+    }
+  }
+  return citePillLabel(ref);
+}
+
+function sourceCardUrlLine(ref) {
+  if (!ref?.source_uri) return "";
+  return `<p class="source-card-url muted small">${escapeHtml(truncate(ref.source_uri, 96))}</p>`;
+}
+
+function sourceCardTitleHtml(ref) {
+  const title = ref.display_label || ref.label || `Source ${ref.num}`;
+  const safeTitle = escapeHtml(truncate(title, 120));
+  if (ref.source_uri) {
+    return `<a href="${escapeHtml(ref.source_uri)}" class="source-card-title-link" target="_blank" rel="noopener noreferrer">${safeTitle}</a>`;
+  }
+  return safeTitle;
+}
+
+function sourceCardSnippet(ref) {
+  const type = ref.type || "";
+  if (ref.source_uri) {
+    if (type === "web" || ref.css_class?.includes("web")) {
+      return "Web source cited in this answer — open the link to verify.";
+    }
+    if (ref.document_title) {
+      return `From your library: ${ref.document_title}`;
+    }
+    return "Linked source — open to view the original.";
+  }
+  if (type === "inference") {
+    return "General medical knowledge — not from your library. Verify independently.";
+  }
+  if (type === "unknown") {
+    return "Not in stored records. Verify on ClinicalTrials.gov or with your care team.";
+  }
+  if (type === "patient_context") {
+    return "From Settings → Patient context (not verified clinical record).";
+  }
+  if (ref.document_title) {
+    return `Stored document: ${ref.document_title}`;
+  }
+  return ref.type_display || ref.display_label || "";
+}
+
+function renderSourceSidebarCard(ref, idPrefix, { collapsed = false } = {}) {
+  const snippet = sourceCardSnippet(ref);
+  const publisher = sourcePublisherLabel(ref);
+  const favicon = sourceFaviconUrl(ref);
+  let action = "";
+  if (ref.source_uri) {
+    action = `<a href="${escapeHtml(ref.source_uri)}" class="source-card-link" target="_blank" rel="noopener noreferrer">Visit site ↗</a>`;
+  } else if (ref.document_id) {
+    action = `<button type="button" class="source-card-link ref-doc-link" data-doc-id="${escapeHtml(ref.document_id)}">Library</button>`;
+  }
+  const collapsedClass = collapsed ? " is-collapsed" : "";
+  const cardClass = ref.source_uri ? " source-card-linkable" : "";
+  const faviconHtml = favicon
+    ? `<img src="${escapeHtml(favicon)}" alt="" class="source-card-favicon" width="14" height="14" loading="lazy">`
+    : "";
+  return `<article id="${escapeHtml(refEntryId(idPrefix, ref.num))}" class="source-card${collapsedClass}${cardClass}" data-ref-num="${escapeHtml(String(ref.num))}">
+    <h5 class="source-card-title">${sourceCardTitleHtml(ref)}</h5>
+    <p class="source-card-snippet muted small">${escapeHtml(snippet)}</p>
+    ${sourceCardUrlLine(ref)}
+    <div class="source-card-footer">
+      <span class="source-card-publisher">${faviconHtml}${escapeHtml(publisher)}</span>
+      ${action}
+    </div>
+  </article>`;
+}
+
+function renderSourcesSidebar({ wrap, inner, appendix, idPrefix = "ref" }) {
+  if (!wrap || !inner) return;
+  wrap.classList.remove("is-expanded");
+  const enriched = sortSourcesForSidebar(enrichReferenceList(appendix));
+  if (!enriched.length) {
+    wrap.classList.add("hidden");
+    inner.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  const count = enriched.length;
+  const linkCount = enriched.filter((ref) => ref.source_uri).length;
+  const countLabel =
+    linkCount >= Math.max(1, Math.ceil(count * 0.4))
+      ? `${linkCount || count} site${(linkCount || count) === 1 ? "" : "s"}`
+      : `${count} source${count === 1 ? "" : "s"}`;
+  const favicons = sourceSidebarFaviconStack(enriched);
+  const hasMore = count > SOURCES_SIDEBAR_PREVIEW;
+  inner.innerHTML = `
+    <div class="sources-sidebar-header">
+      <div class="sources-sidebar-header-row">
+        ${favicons}
+        <h4>${countLabel}</h4>
+      </div>
+      <p class="sources-sidebar-sub muted small">Links and records cited in this answer</p>
+    </div>
+    <div class="sources-sidebar-list">
+      ${enriched
+        .map((ref, index) =>
+          renderSourceSidebarCard(ref, idPrefix, {
+            collapsed: hasMore && index >= SOURCES_SIDEBAR_PREVIEW,
+          })
+        )
+        .join("")}
+    </div>
+    ${
+      hasMore
+        ? `<button type="button" class="btn ghost sources-show-all" data-action="expand-sources">Show all</button>`
+        : ""
+    }`;
+}
+
+function formatNumberedReferences(text, registry = state.referenceRegistry, idPrefix = "ref") {
   if (!text) return "";
-  const escaped = escapeHtml(text);
+  let escaped = escapeHtml(text);
+  escaped = escaped.replace(/\[SOURCE:\s*([^\]]+)\]/gi, (_, inner) => {
+    const num = findRefNumByRawLabel(inner, registry);
+    if (num != null) return `[${num}]`;
+    return renderInlineSourceCitation(describeSourceTagInner(inner), inner);
+  });
   return formatMarkdownEmphasis(escaped)
     .replace(/\[(\d+)\]/g, (_, num) => {
-      const ref = refMetaFromRegistry(num, registry);
+      const ref = enrichReference(refMetaFromRegistry(num, registry));
+      const hash = refEntryHash(idPrefix, num);
+      const fullTitle = ref?.display_label || ref?.label || `Reference ${num}`;
       if (!ref) {
-        return `<a href="#ref-entry-${num}" class="ref-cite-link"><sup class="ref-cite" title="Reference ${num}">[${num}]</sup></a>`;
+        return `<a href="${hash}" class="cite-pill ref-cite-link" title="${escapeHtml(fullTitle)}">Source</a>`;
       }
       const cls = ref.css_class || sourceTagClass(ref.raw_label || ref.label || "");
-      const title = ref.display_label || ref.label || `Reference ${num}`;
       const docAttr = ref.document_id ? ` data-doc-id="${escapeHtml(ref.document_id)}"` : "";
-      return `<a href="#ref-entry-${num}" class="ref-cite-link ${cls}" title="${escapeHtml(title)}"${docAttr}>${renderSourceBadge(ref)}<sup class="ref-cite">[${num}]</sup></a>`;
+      const href = ref.source_uri || hash;
+      const externalAttr = ref.source_uri
+        ? ` target="_blank" rel="noopener noreferrer" data-external="1"`
+        : "";
+      return `<a href="${escapeHtml(href)}" class="cite-pill ref-cite-link ${cls}" title="${escapeHtml(fullTitle)}"${docAttr}${externalAttr}>${escapeHtml(citePillLabel(ref))}</a>`;
     })
     .replace(/\n/g, "<br>");
 }
 
-function renderReferenceEntry(ref) {
+function renderReferenceActions(ref) {
+  if (ref.source_uri) {
+    return `<a href="${escapeHtml(ref.source_uri)}" class="ref-external-link" target="_blank" rel="noopener noreferrer">Open source ↗</a>`;
+  }
+  if (ref.document_id) {
+    return `<button type="button" class="btn ghost ref-doc-link" data-doc-id="${escapeHtml(ref.document_id)}">Open in Library</button>`;
+  }
+  const type = ref.type || ref.css_class || "";
+  if (type === "inference" || String(type).includes("inference")) {
+    return `<span class="ref-no-source">No stored source — verify independently</span>`;
+  }
+  if (type === "unknown" || String(type).includes("unknown")) {
+    return `<span class="ref-no-source">Not in library — verify externally</span>`;
+  }
+  if (type === "patient_context" || String(type).includes("context")) {
+    return `<span class="ref-no-source">From patient context (Settings)</span>`;
+  }
+  return "";
+}
+
+function renderReferenceEntry(ref, idPrefix = "ref", { anchor = true } = {}) {
   const label = ref.display_label || ref.label || "";
-  const docLink = ref.document_id
-    ? `<button type="button" class="btn ghost ref-doc-link" data-doc-id="${escapeHtml(ref.document_id)}">Open in Library</button>`
-    : "";
-  return `<li id="ref-entry-${escapeHtml(String(ref.num))}" class="reference-entry">
+  const actions = renderReferenceActions(ref);
+  const idAttr = anchor ? ` id="${escapeHtml(refEntryId(idPrefix, ref.num))}"` : "";
+  return `<li${idAttr} class="reference-entry">
     ${renderSourceBadge(ref)}
     <span class="ref-num">[${escapeHtml(String(ref.num))}]</span>
     <span class="ref-label">${escapeHtml(label)}</span>
-    ${docLink}
+    ${actions}
   </li>`;
 }
 
-function renderReferenceList(refs, heading = "References") {
+function renderReferenceList(refs, heading = "References", idPrefix = "ref") {
   if (!refs || !refs.length) return "";
-  const items = refs.map((ref) => renderReferenceEntry(ref)).join("");
+  const items = refs.map((ref) => renderReferenceEntry(ref, idPrefix, { anchor: false })).join("");
   return `
     <div class="section-references-inner">
       <h5>${escapeHtml(heading)}</h5>
@@ -1233,7 +1812,7 @@ function renderReferenceList(refs, heading = "References") {
     </div>`;
 }
 
-function renderReferencesBlock(element, refs, heading = "References") {
+function renderReferencesBlock(element, refs, heading = "References", idPrefix = "ref") {
   if (!element) return;
   if (!refs || !refs.length) {
     element.classList.add("hidden");
@@ -1241,39 +1820,61 @@ function renderReferencesBlock(element, refs, heading = "References") {
     return;
   }
   element.classList.remove("hidden");
-  element.innerHTML = renderReferenceList(refs, heading);
+  element.innerHTML = renderReferenceList(refs, heading, idPrefix);
 }
 
-function renderReferencesAppendix(analysis) {
-  const wrap = $("#references-appendix");
-  const list = $("#references-appendix-list");
+function renderReferencesAppendix(
+  analysis,
+  { wrap, list, idPrefix } = {}
+) {
+  wrap = wrap || $("#references-appendix");
+  list = list || $("#references-appendix-list");
   const appendix = analysis?.references || [];
   if (!wrap || !list) return;
+  const prefix = idPrefix || analysis?.id || "home";
   if (!appendix.length) {
     wrap.classList.add("hidden");
     list.innerHTML = "";
     return;
   }
   wrap.classList.remove("hidden");
-  list.innerHTML = appendix.map((ref) => renderReferenceEntry(ref)).join("");
+  list.innerHTML = appendix.map((ref) => renderReferenceEntry(ref, prefix, { anchor: true })).join("");
 }
 
 function initReferenceNavigation() {
   document.addEventListener("click", (event) => {
+    const expandBtn = event.target.closest("[data-action=expand-sources]");
+    if (expandBtn) {
+      const sidebar = expandBtn.closest(".sources-sidebar");
+      sidebar?.classList.add("is-expanded");
+      expandBtn.remove();
+      return;
+    }
+
     const docLink = event.target.closest(".ref-doc-link,[data-doc-id].ref-cite-link");
     if (docLink?.dataset?.docId) {
       event.preventDefault();
       viewDocument(docLink.dataset.docId);
       return;
     }
-    const citeLink = event.target.closest("a.ref-cite-link");
-    if (citeLink?.hash) {
-      const target = document.querySelector(citeLink.hash);
-      if (target) {
-        event.preventDefault();
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-        target.classList.add("ref-highlight");
-        setTimeout(() => target.classList.remove("ref-highlight"), 1600);
+    const citeLink = event.target.closest("a.ref-cite-link, a.cite-pill");
+    if (citeLink) {
+      if (citeLink.dataset.external === "1" || /^https?:/i.test(citeLink.getAttribute("href") || "")) {
+        return;
+      }
+      if (citeLink.hash) {
+        const id = citeLink.hash.slice(1);
+        const panel = citeLink.closest(".panel.active, .custom-task-detail, .answer-layout");
+        const target =
+          panel?.querySelector(`#${CSS.escape(id)}`) ||
+          document.getElementById(id) ||
+          document.querySelector(citeLink.hash);
+        if (target) {
+          event.preventDefault();
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          target.classList.add("ref-highlight");
+          setTimeout(() => target.classList.remove("ref-highlight"), 1600);
+        }
       }
     }
   });
@@ -1343,7 +1944,7 @@ async function saveSourceLabels() {
     await loadLatestAssessment();
   }
   if ($("#panel-library")?.classList.contains("active")) {
-    await loadDocuments();
+    await refreshLibrary();
   }
   if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
@@ -1356,7 +1957,7 @@ async function saveDocumentCitation() {
     body: JSON.stringify({ citation_display_name: value || null }),
   });
   toast("Citation name saved");
-  await loadDocuments();
+  await refreshLibrary({ page: state.libraryPage, sourceType: state.libraryFilter });
   if (state.latestAnalysis) await loadLatestAssessment();
   viewDocument(state.activeDocumentId);
   if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
@@ -1774,22 +2375,21 @@ function renderLatestAssessment(analysis) {
   const legendWrap = $("#source-legend-wrap");
   const fullCard = $("#full-assessment-card");
   const fullBody = $("#full-assessment-body");
-  const fullRefs = $("#full-assessment-refs");
-  const summaryRefs = $("#executive-summary-refs");
 
   if (!execTextEl) return;
 
   if (!analysis) {
-    updateReportDateTime();
-    if (execTimeEl) {
-      execTimeEl.textContent = "";
-      execTimeEl.removeAttribute("datetime");
-    }
+    setSectionLastUpdated(execTimeEl, null);
+    setSectionLastUpdated($("#full-assessment-time"), null);
+    setSectionLastUpdated($("#open-items-time"), null);
     legendWrap?.removeAttribute("open");
     fullCard?.classList.add("hidden");
-    renderReferencesBlock(summaryRefs, []);
-    renderReferencesBlock(fullRefs, []);
-    renderReferencesAppendix(null);
+    renderSourcesSidebar({
+      wrap: $("#home-sources-sidebar"),
+      inner: $("#home-sources-sidebar-inner"),
+      appendix: [],
+      idPrefix: "home",
+    });
     state.referenceRegistry = {};
     execTextEl.innerHTML = "";
     if (fullBody) fullBody.innerHTML = "";
@@ -1797,48 +2397,49 @@ function renderLatestAssessment(analysis) {
     selectOpenItem(null);
     renderSourceAttributionNotice(null);
     renderHomeState(false);
-    renderCaseStatus();
     return;
   }
 
-  updateReportDateTime(analysis.created_at);
-  if (execTimeEl) {
-    execTimeEl.textContent = formatEasternTimestamp(analysis.created_at);
-    execTimeEl.dateTime = analysis.created_at;
-  }
-  legendWrap?.removeAttribute("open");
+  const refPrefix = analysis.id;
+  const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
+  const responseDisplay = analysis.response_display || analysis.response || "";
+  const updatedAt = analysis.created_at;
 
   state.referenceRegistry = analysis.reference_registry || {};
   state.sourceLegend = analysis.source_legend || state.sourceLegend;
   renderSourceLegend(state.sourceLegend);
 
-  const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
-  const responseDisplay = analysis.response_display || analysis.response || "";
+  setSectionLastUpdated(execTimeEl, summaryDisplay ? updatedAt : null);
+  setSectionLastUpdated($("#full-assessment-time"), responseDisplay ? updatedAt : null);
+  setSectionLastUpdated($("#open-items-time"), (analysis.open_items || []).length ? updatedAt : null);
+  legendWrap?.removeAttribute("open");
 
   renderHomeState(true);
   renderSourceAttributionNotice(analysis);
-  renderCaseStatus();
 
   if (summaryDisplay) {
-    execTextEl.innerHTML = `<div class="numbered-text">${formatNumberedReferences(summaryDisplay)}</div>`;
+    execTextEl.innerHTML = `<div class="numbered-text">${formatNumberedReferences(summaryDisplay, state.referenceRegistry, refPrefix)}</div>`;
   } else {
     execTextEl.innerHTML = '<p class="muted">No assessment text was returned.</p>';
   }
-  renderReferencesBlock(summaryRefs, analysis.executive_summary_refs || []);
 
   if (fullCard && fullBody) {
     if (responseDisplay) {
       fullCard.classList.remove("hidden");
-      fullBody.innerHTML = formatNumberedReferences(responseDisplay);
-      renderReferencesBlock(fullRefs, analysis.response_refs || []);
+      fullBody.innerHTML = formatNumberedReferences(responseDisplay, state.referenceRegistry, refPrefix);
     } else {
       fullCard.classList.add("hidden");
       fullBody.innerHTML = "";
-      renderReferencesBlock(fullRefs, []);
     }
   }
 
-  renderReferencesAppendix(analysis);
+  renderSourcesSidebar({
+    wrap: $("#home-sources-sidebar"),
+    inner: $("#home-sources-sidebar-inner"),
+    appendix: analysis.references || [],
+    idPrefix: refPrefix,
+  });
+
   renderOpenItemsTable(analysis.open_items || []);
 }
 
@@ -1855,7 +2456,7 @@ async function loadLatestAssessment() {
       renderLatestAssessment(null);
     }
   } finally {
-    renderCaseStatus();
+    updateHomeToolbar();
   }
 }
 
@@ -1868,29 +2469,9 @@ async function exportAssessmentPdf() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch("/api/analyses/latest/export.pdf", {
-      credentials: "include",
-    });
-    if (res.status === 401) {
-      window.location.href = "/login";
-      return;
-    }
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.detail || `Export failed (${res.status})`);
-    }
-    const blob = await res.blob();
-    const created = state.latestAnalysis.created_at || "";
-    const datePart = created.slice(0, 10) || "export";
-    const filename = `beatit-assessment-${datePart}.pdf`;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    const result = await downloadAnalysisPdf(state.latestAnalysis.id, { silent: true });
+    if (!result) return;
+    triggerPdfDownload(result.blob, result.filename);
     toast("PDF downloaded");
   } catch (err) {
     toast(err.message, "error");
@@ -1936,16 +2517,31 @@ async function loadHistory() {
   renderHistory();
 }
 
-async function loadDocuments() {
-  const data = await api("/api/documents");
-  state.documents = data.documents || [];
-  if (data.source_legend) {
-    state.sourceLegend = data.source_legend;
-    renderSourceLegend(state.sourceLegend);
-  }
-  renderDocuments();
-  updateSelectedLabel();
-  updateHomeWorkflow();
+function renderDicomMetaGrid(rows) {
+  if (!rows?.length) return "";
+  return rows
+    .map(
+      (row) =>
+        `<div class="dicom-meta-item"><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`
+    )
+    .join("");
+}
+
+function renderDicomViewer(data, doc) {
+  const previewUrl = data.preview_url || "";
+  const metaHtml = renderDicomMetaGrid(data.dicom_metadata || []);
+  const previewBlock = previewUrl
+    ? `<div class="dicom-preview-wrap">
+        <img class="doc-file-image dicom-preview" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(doc.title)}" loading="lazy">
+        <p class="dicom-preview-fallback muted small hidden">Preview unavailable for this slice. Download the original DICOM file to open it in a PACS or DICOM viewer.</p>
+      </div>`
+    : `<p class="muted">Preview unavailable. Download the original DICOM file to view it in a certified imaging application.</p>`;
+
+  return `<div class="dicom-viewer">
+    ${previewBlock}
+    ${metaHtml ? `<dl class="dicom-meta-grid">${metaHtml}</dl>` : ""}
+    <p class="muted small dicom-viewer-note">Browser preview is for orientation only. Clinical decisions must use original DICOM files and certified imaging tools.</p>
+  </div>`;
 }
 
 async function viewDocument(id) {
@@ -2013,6 +2609,17 @@ async function viewDocument(id) {
       if (data.view_kind === "pdf") {
         sourceEl.innerHTML = `<iframe class="doc-file-frame" src="${escapeHtml(data.file_url)}" title="${escapeHtml(doc.title)}"></iframe>`;
         sourceEl.classList.remove("hidden");
+      } else if (data.view_kind === "dicom") {
+        sourceEl.innerHTML = renderDicomViewer(data, doc);
+        sourceEl.classList.remove("hidden");
+        const previewImg = sourceEl.querySelector(".dicom-preview");
+        const fallback = sourceEl.querySelector(".dicom-preview-fallback");
+        if (previewImg && fallback) {
+          previewImg.addEventListener("error", () => {
+            previewImg.classList.add("hidden");
+            fallback.classList.remove("hidden");
+          });
+        }
       } else if (data.view_kind === "image") {
         sourceEl.innerHTML = `<img class="doc-file-image" src="${escapeHtml(data.file_url)}" alt="${escapeHtml(doc.title)}">`;
         sourceEl.classList.remove("hidden");
@@ -2059,11 +2666,15 @@ async function deleteDocument(id) {
   if (!confirm("Delete this document and its stored files?")) return;
   await api(`/api/documents/${id}`, { method: "DELETE" });
   state.selectedIds.delete(id);
+  state.documentIndex = state.documentIndex.filter((doc) => doc.id !== id);
   if ($("#doc-detail") && !$("#doc-detail").classList.contains("hidden")) {
     closeDocumentDetail();
   }
+  const totalAfter = Math.max(0, (state.libraryTotal || 1) - 1);
+  const maxPage = Math.max(1, Math.ceil(totalAfter / LIBRARY_PAGE_SIZE));
+  const page = Math.min(state.libraryPage, maxPage);
   toast("Document deleted");
-  await loadDocuments();
+  await refreshLibrary({ page, sourceType: state.libraryFilter });
 }
 
 async function runAnalysis({ query = "", baseline = false, summarize = false } = {}) {
@@ -2121,17 +2732,17 @@ function bootstrapUi() {
   initScrollTop();
   initInvestigationGuidancePresets();
   initUploadResultBanner();
-  initCaseStatusNavigation();
+  initHowToNavigation();
+  updateNativeShareButton();
   initReferenceNavigation();
-  updateReportDateTime();
-  renderCaseStatus();
+  updateHomeToolbar();
 }
 
 async function loadInitialData() {
   try {
-    await Promise.allSettled([loadDocuments(), loadLatestAssessment(), loadCustomTasks()]);
+    await Promise.allSettled([loadDocumentIndex(), loadLatestAssessment(), loadCustomTasks()]);
   } finally {
-    renderCaseStatus();
+    updateHomeToolbar();
   }
   resumeActiveAnalysisJobInBackground();
 }
@@ -2145,7 +2756,38 @@ $$(".tab").forEach((tab) =>
 
 safeOn("#btn-dismiss-upload", "click", dismissUploadResult);
 safeOn("#btn-close-detail", "click", () => closeDocumentDetail());
-safeOn("#btn-refresh-docs", "click", () => loadDocuments().catch((e) => toast(e.message, "error")));
+safeOn("#btn-refresh-docs", "click", () =>
+  refreshLibrary({ page: state.libraryPage, sourceType: state.libraryFilter }).catch((e) =>
+    toast(e.message, "error")
+  )
+);
+safeOn("#library-type-filter", "change", (event) =>
+  loadDocuments({ page: 1, sourceType: event.target.value }).catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-library-prev", "click", () => {
+  if (state.libraryPage <= 1) return;
+  loadDocuments({ page: state.libraryPage - 1 }).catch((e) => toast(e.message, "error"));
+});
+safeOn("#btn-library-next", "click", () => {
+  if (state.libraryPage >= libraryTotalPages()) return;
+  loadDocuments({ page: state.libraryPage + 1 }).catch((e) => toast(e.message, "error"));
+});
+safeOn("#documents-list", "click", (event) => {
+  const viewBtn = event.target.closest(".btn-view");
+  if (viewBtn?.dataset.id) {
+    viewDocument(viewBtn.dataset.id);
+    return;
+  }
+  const selectBtn = event.target.closest(".btn-select");
+  if (selectBtn?.dataset.id) {
+    toggleSelect(selectBtn.dataset.id);
+    return;
+  }
+  const deleteBtn = event.target.closest(".btn-delete");
+  if (deleteBtn?.dataset.id) {
+    deleteDocument(deleteBtn.dataset.id).catch((e) => toast(e.message, "error"));
+  }
+});
 safeOn("#btn-refresh-history", "click", () => loadHistory().catch((e) => toast(e.message, "error")));
 
 safeOn("#btn-ingest-text", "click", async () => {
@@ -2160,7 +2802,7 @@ safeOn("#btn-ingest-text", "click", async () => {
     $("#text-content").value = "";
     showUploadResult(data.document);
     toast("Text saved");
-    switchTab("library");
+    await openLibraryAfterIngest();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -2177,7 +2819,7 @@ safeOn("#btn-ingest-url", "click", async () => {
     });
     showUploadResult(data.document);
     toast("URL ingested");
-    switchTab("library");
+    await openLibraryAfterIngest();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -2194,7 +2836,7 @@ safeOn("#btn-ingest-youtube", "click", async () => {
     });
     showUploadResult(data.document);
     toast("YouTube transcript ingested");
-    switchTab("library");
+    await openLibraryAfterIngest();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -2218,7 +2860,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
       delete pdfTitle.dataset.userEdited;
     }
     toast(`PDF uploaded · ${file.name}`);
-    switchTab("library");
+    await openLibraryAfterIngest();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -2243,6 +2885,50 @@ const IMAGING_EXTENSIONS = new Set([
 ]);
 
 let imagingSelection = [];
+let imagingSelectionToken = 0;
+
+const IMAGING_SKIP_NAMES = new Set(["DICOMDIR", "DESKTOP.INI", "THUMBS.DB"]);
+
+function shouldSkipImagingFolderFile(file) {
+  const name = String(file?.name || "").trim();
+  if (!name || name.startsWith(".")) return true;
+  return IMAGING_SKIP_NAMES.has(name.toUpperCase());
+}
+
+async function fileHasDicomMagic(file) {
+  if (!file || file.size < 132) return false;
+  try {
+    const buf = await file.slice(128, 132).arrayBuffer();
+    return new TextDecoder().decode(buf) === "DICM";
+  } catch {
+    return false;
+  }
+}
+
+async function isImagingFileCandidate(file, { folderMode = false } = {}) {
+  if (!file || shouldSkipImagingFolderFile(file)) return false;
+  if (isImagingFile(file)) return true;
+  if (folderMode || !imagingExtension(file.name)) {
+    return fileHasDicomMagic(file);
+  }
+  return false;
+}
+
+async function setImagingSelection(files, { folderMode = false } = {}) {
+  const token = ++imagingSelectionToken;
+  const list = Array.from(files || []);
+  const panel = $("#imaging-selection");
+  const btn = $("#btn-ingest-imaging");
+  if (panel && btn && list.length) {
+    panel.classList.remove("hidden");
+    panel.innerHTML = `<p class="imaging-selection-summary muted">Scanning ${list.length} file(s) for DICOM…</p>`;
+    btn.disabled = true;
+  }
+  const checks = await Promise.all(list.map((file) => isImagingFileCandidate(file, { folderMode })));
+  if (token !== imagingSelectionToken) return;
+  imagingSelection = list.filter((_, index) => checks[index]);
+  renderImagingSelection();
+}
 
 function imagingExtension(name) {
   const lower = String(name || "").toLowerCase();
@@ -2295,12 +2981,8 @@ function renderImagingSelection() {
     <ul class="imaging-selection-list">${preview}${remainder}</ul>`;
 }
 
-function setImagingSelection(files) {
-  imagingSelection = Array.from(files || []).filter(isImagingFile);
-  renderImagingSelection();
-}
-
 function clearImagingSelection() {
+  imagingSelectionToken += 1;
   imagingSelection = [];
   $("#imaging-files").value = "";
   $("#imaging-folder").value = "";
@@ -2354,8 +3036,7 @@ async function uploadImagingSelection() {
       toast(`Uploaded ${total - failed}/${total} imaging files (${failed} failed)`, "error");
     }
     clearImagingSelection();
-    switchTab("library");
-    await loadDocuments();
+    await openLibraryAfterIngest();
   } catch (err) {
     toast(err.message, "error");
   } finally {
@@ -2366,16 +3047,19 @@ async function uploadImagingSelection() {
 
 $("#imaging-files")?.addEventListener("change", (event) => {
   $("#imaging-folder").value = "";
-  setImagingSelection(event.target.files);
+  setImagingSelection(event.target.files, { folderMode: false });
 });
 
-$("#imaging-folder")?.addEventListener("change", (event) => {
+$("#imaging-folder")?.addEventListener("change", async (event) => {
   $("#imaging-files").value = "";
   const allFiles = Array.from(event.target.files || []);
-  setImagingSelection(allFiles);
+  await setImagingSelection(allFiles, { folderMode: true });
   const skipped = allFiles.length - imagingSelection.length;
   if (skipped > 0) {
-    toast(`Skipped ${skipped} non-imaging file${skipped === 1 ? "" : "s"} in folder`, "error");
+    toast(`Skipped ${skipped} non-DICOM/non-imaging file${skipped === 1 ? "" : "s"} in folder`);
+  }
+  if (!imagingSelection.length && allFiles.length) {
+    toast("No DICOM or imaging files found in that folder", "error");
   }
 });
 
@@ -2399,7 +3083,7 @@ safeOn("#btn-ingest-video", "click", async () => {
     $("#video-file").value = "";
     $("#video-file").closest(".file-label")?.querySelector(".file-name")?.remove();
     toast(`Video stored · ${file.name}`);
-    switchTab("library");
+    await openLibraryAfterIngest();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -2407,14 +3091,6 @@ safeOn("#btn-ingest-video", "click", async () => {
 
 safeOn("#btn-baseline", "click", () => runAnalysis({ baseline: true }));
 safeOn("#btn-summarize", "click", () => runAnalysis({ summarize: true }));
-safeOn("#btn-case-add-data", "click", () => switchTab("ingest"));
-safeOn("#btn-case-run-baseline", "click", () => {
-  if (state.documents.length === 0) {
-    switchTab("ingest");
-    return;
-  }
-  runAnalysis({ baseline: true });
-});
 
 safeOn("#btn-analyze", "click", () => {
   const query = $("#analyze-query").value.trim();
@@ -2433,6 +3109,15 @@ $("#btn-save-source-labels")?.addEventListener("click", () =>
 );
 $("#btn-save-doc-citation")?.addEventListener("click", () =>
   saveDocumentCitation().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-save-custom-task-annotations", "click", () =>
+  saveCustomTaskAnnotations().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-export-custom-task-pdf", "click", () =>
+  exportCustomTaskPdf().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-native-share-custom-task", "click", () =>
+  nativeShareCustomTask().catch((e) => toast(e.message, "error"))
 );
 safeOn("#btn-close-custom-task", "click", closeCustomTaskDetail);
 safeOn("#btn-promote-custom-task", "click", () =>
@@ -2497,7 +3182,4 @@ loadAppVersion();
 initAuth();
 bindPdfFileInput();
 bindFileInput("#video-file");
-window.matchMedia("(max-width: 600px)").addEventListener("change", () => {
-  updateReportDateTime(state.latestAnalysis?.created_at);
-});
 void loadInitialData();

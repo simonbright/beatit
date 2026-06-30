@@ -134,6 +134,25 @@
       min-height: 1.25rem;
       text-align: center;
     }
+
+    .login-access-note {
+      margin: 1.25rem 0 0;
+      padding-top: 1.1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.84rem;
+      line-height: 1.5;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .login-access-note a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .login-access-note a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -180,6 +199,12 @@
         <button type="submit" class="btn primary">Sign in</button>
       </form>
       <p id="login-error" class="login-error" role="alert"></p>
+      <p class="login-access-note">
+        Need access? Email
+        <a href="mailto:simon.brightman@gmail.com">simon.brightman@gmail.com</a>
+        or text / WhatsApp
+        <a href="tel:+16474108186">1-647-410-8186</a>.
+      </p>
     </article>
   </div>
 
