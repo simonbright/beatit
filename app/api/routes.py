@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -19,6 +20,7 @@ from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
 from app.services.analysis_jobs import (
     ActiveAnalysisJobError,
     enqueue_analysis_job,
+    enqueue_refinement_job,
     get_job_payload,
 )
 from app.services.synthesis import SynthesisService
@@ -147,6 +149,12 @@ class AnalysisAnnotationsUpdate(BaseModel):
     annotation_title: str | None = Field(default=None, max_length=500)
     annotation_header: str | None = Field(default=None, max_length=5000)
     annotation_notes: str | None = Field(default=None, max_length=20000)
+
+
+class RefineDraftRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=20000)
+    refinement: str = Field(default="", max_length=10000)
+    document_ids: list[str] | None = None
 
 
 async def _source_catalog(db: Database, documents: list[dict[str, Any]] | None = None) -> SourceCatalog:
@@ -892,6 +900,63 @@ async def list_draft_analyses(limit: int = 50):
     return {"drafts": await db.list_draft_analyses(limit=limit)}
 
 
+@router.post("/analyses/{analysis_id}/refine", status_code=202)
+async def refine_draft_analysis(
+    analysis_id: str,
+    body: RefineDraftRequest,
+    request: Request,
+):
+    db, _, _, _, _ = await _get_services()
+    existing = await db.get_analysis_by_id(analysis_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if existing.get("record_status") != "draft":
+        raise HTTPException(status_code=400, detail="Only draft analyses can be refined")
+    if existing.get("analysis_type") != "query":
+        raise HTTPException(status_code=400, detail="Only custom task drafts can be refined")
+
+    query = body.query.strip()
+    refinement = body.refinement.strip()
+    if not refinement and query == (existing.get("query") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Change the question or add refinement instructions",
+        )
+
+    try:
+        job = await enqueue_refinement_job(
+            analysis_id=analysis_id,
+            query=query,
+            refinement=refinement,
+            document_ids=body.document_ids,
+            requested_by=_actor(request),
+        )
+    except ActiveAnalysisJobError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running",
+        ) from exc
+
+    await _audit(
+        db,
+        request,
+        ANALYSIS_REQUESTED,
+        resource_type="analysis",
+        resource_id=analysis_id,
+        metadata={
+            "job_id": job["id"],
+            "job_type": "query",
+            "refinement": True,
+            "refine_analysis_id": analysis_id,
+            "query_preview": preview_text(query),
+            "refinement_preview": preview_text(refinement),
+            "document_count": len(body.document_ids or existing.get("document_ids") or []),
+            "save_as_draft": True,
+        },
+    )
+    return {"job": job, "save_as_draft": True, "refine_analysis_id": analysis_id}
+
+
 @router.post("/analyses/{analysis_id}/promote")
 async def promote_draft_analysis(analysis_id: str, request: Request):
     db, _, _, _, _ = await _get_services()
@@ -981,7 +1046,8 @@ async def _export_analysis_pdf_response(
         patient_context=patient_context,
         catalog=catalog,
     )
-    filename = assessment_pdf_filename(analysis)
+    exported_at = datetime.now(timezone.utc)
+    filename = assessment_pdf_filename(analysis, exported_at=exported_at)
     await _audit(
         db,
         request,

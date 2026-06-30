@@ -492,6 +492,21 @@ class Database:
         )
         await db.commit()
         await self._migrate_analysis_jobs_requested_by(db)
+        await self._migrate_analysis_jobs_refinement(db)
+
+    async def _migrate_analysis_jobs_refinement(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(analysis_jobs)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        additions = {
+            "refine_analysis_id": "TEXT",
+            "refinement_notes": "TEXT",
+        }
+        for column, col_type in additions.items():
+            if column not in columns:
+                await db.execute(
+                    f"ALTER TABLE analysis_jobs ADD COLUMN {column} {col_type}"
+                )
+        await db.commit()
 
     async def _migrate_analysis_jobs_requested_by(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(analysis_jobs)")
@@ -548,6 +563,8 @@ class Database:
         document_ids: list[str] | None = None,
         include_baseline_assessment: bool = False,
         requested_by: str | None = None,
+        refine_analysis_id: str | None = None,
+        refinement_notes: str | None = None,
     ) -> dict[str, Any]:
         job_id = str(uuid4())
         now = _now_iso()
@@ -561,6 +578,8 @@ class Database:
             "analysis_id": None,
             "error": None,
             "requested_by": requested_by,
+            "refine_analysis_id": refine_analysis_id,
+            "refinement_notes": refinement_notes,
             "created_at": now,
             "started_at": None,
             "completed_at": None,
@@ -571,9 +590,11 @@ class Database:
                 INSERT INTO analysis_jobs
                 (id, status, job_type, query, document_ids_json,
                  include_baseline_assessment, analysis_id, error, requested_by,
+                 refine_analysis_id, refinement_notes,
                  created_at, started_at, completed_at)
                 VALUES (:id, :status, :job_type, :query, :document_ids_json,
                         :include_baseline_assessment, :analysis_id, :error, :requested_by,
+                        :refine_analysis_id, :refinement_notes,
                         :created_at, :started_at, :completed_at)
                 """,
                 row,
@@ -653,6 +674,8 @@ class Database:
             "analysis_id": row.get("analysis_id"),
             "error": row.get("error"),
             "requested_by": row.get("requested_by"),
+            "refine_analysis_id": row.get("refine_analysis_id"),
+            "refinement_notes": row.get("refinement_notes"),
             "created_at": row["created_at"],
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
@@ -700,6 +723,17 @@ class Database:
             if col_name not in columns:
                 await db.execute(f"ALTER TABLE analyses ADD COLUMN {col_name} TEXT")
                 await db.commit()
+        if "updated_at" not in columns:
+            await db.execute("ALTER TABLE analyses ADD COLUMN updated_at TEXT")
+            await db.execute(
+                "UPDATE analyses SET updated_at = created_at WHERE updated_at IS NULL"
+            )
+            await db.commit()
+        if "refinement_count" not in columns:
+            await db.execute(
+                "ALTER TABLE analyses ADD COLUMN refinement_count INTEGER NOT NULL DEFAULT 0"
+            )
+            await db.commit()
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_analyses_record_status ON analyses(record_status, created_at DESC)"
         )
@@ -928,6 +962,8 @@ class Database:
             "annotation_header": None,
             "annotation_notes": None,
             "created_at": now,
+            "updated_at": now,
+            "refinement_count": 0,
         }
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -935,10 +971,12 @@ class Database:
                 INSERT INTO analyses
                 (id, query, response, document_ids_json, model, analysis_type,
                  executive_summary, open_items_json, record_status, promoted_at,
-                 created_by, annotation_title, annotation_header, annotation_notes, created_at)
+                 created_by, annotation_title, annotation_header, annotation_notes,
+                 created_at, updated_at, refinement_count)
                 VALUES (:id, :query, :response, :document_ids_json, :model, :analysis_type,
                         :executive_summary, :open_items_json, :record_status, :promoted_at,
-                        :created_by, :annotation_title, :annotation_header, :annotation_notes, :created_at)
+                        :created_by, :annotation_title, :annotation_header, :annotation_notes,
+                        :created_at, :updated_at, :refinement_count)
                 """,
                 row,
             )
@@ -951,6 +989,52 @@ class Database:
             "document_ids": document_ids,
             "open_items": open_items,
         }
+
+    async def update_draft_analysis(
+        self,
+        analysis_id: str,
+        *,
+        query: str,
+        response: str,
+        document_ids: list[str],
+        model: str | None,
+        executive_summary: str | None,
+        open_items_json: str | None,
+    ) -> dict[str, Any] | None:
+        now = _now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT record_status, refinement_count FROM analyses WHERE id = ?",
+                (analysis_id,),
+            )
+            row = await cursor.fetchone()
+            if not row or row[0] != "draft":
+                return None
+            next_count = int(row[1] or 0) + 1
+            await db.execute(
+                """
+                UPDATE analyses
+                SET query = ?, response = ?, document_ids_json = ?, model = ?,
+                    executive_summary = ?, open_items_json = ?, updated_at = ?,
+                    refinement_count = ?
+                WHERE id = ? AND record_status = 'draft'
+                """,
+                (
+                    query,
+                    response,
+                    json.dumps(document_ids),
+                    model,
+                    executive_summary,
+                    open_items_json or "[]",
+                    now,
+                    next_count,
+                    analysis_id,
+                ),
+            )
+            await db.commit()
+        parsed_items = json.loads(open_items_json or "[]")
+        await self.sync_open_items_for_analysis(analysis_id, parsed_items)
+        return await self.get_analysis_by_id(analysis_id)
 
     async def get_latest_analysis(self) -> dict[str, Any] | None:
         item = await self.get_analysis_by_id_from_latest()
@@ -1209,6 +1293,8 @@ class Database:
             "annotation_header": row.get("annotation_header"),
             "annotation_notes": row.get("annotation_notes"),
             "created_at": row["created_at"],
+            "updated_at": row.get("updated_at") or row["created_at"],
+            "refinement_count": int(row.get("refinement_count") or 0),
         }
 
     async def insert_audit_event(

@@ -183,6 +183,107 @@ Use clear ### headings for each section."""
         )
         return saved
 
+    async def refine_custom_task(
+        self,
+        *,
+        analysis_id: str,
+        query: str,
+        refinement: str,
+        document_ids: list[str] | None = None,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        existing = await self.db.get_analysis_by_id(analysis_id)
+        if not existing or existing.get("record_status") != "draft":
+            raise ValueError("Only draft custom tasks can be refined")
+        if existing.get("analysis_type") != "query":
+            raise ValueError("Only custom task drafts can be refined")
+
+        doc_ids = document_ids if document_ids else existing.get("document_ids") or None
+        corpus = await self.store.get_corpus(doc_ids)
+        corpus_text = _format_corpus(corpus)
+        doc_titles = [d["title"] for d in corpus if d.get("title")]
+        title_list = "\n".join(f'- "{t}"' for t in doc_titles) if doc_titles else "[No documents stored]"
+
+        prior_query = (existing.get("query") or "").strip()
+        prior_summary = (existing.get("executive_summary") or "").strip()
+        prior_response = (existing.get("response") or "").strip()
+        prior_text = prior_summary
+        if prior_response and prior_response not in prior_text:
+            prior_text = f"{prior_text}\n\n{prior_response}".strip() if prior_text else prior_response
+
+        refinement_text = refinement.strip() or "Improve clarity and completeness while keeping what already works."
+        query_text = query.strip() or prior_query
+
+        prompt = f"""Use the following stored research and clinical material as your evidence base.
+If the documents do not contain information needed to answer, state the gap explicitly.
+
+DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags:
+{title_list}
+
+=== STORED DOCUMENTS ===
+{corpus_text}
+
+=== PRIOR DRAFT (user wants a revision — not a brand-new task) ===
+Original question:
+{prior_query}
+
+Previous draft:
+{prior_text[:120000]}
+
+=== REFINEMENT INSTRUCTIONS (apply these changes) ===
+{refinement_text}
+
+=== REVISED USER QUERY (answer this directly) ===
+{query_text}
+
+{_response_structure_for_analysis(analysis_type="query", query=query_text)}
+
+This is a REFINEMENT run. Revise the prior draft to address the refinement instructions.
+Keep strong sections that still fit; replace or expand parts the user asked to change.
+Do NOT start from scratch unless the refinement instructions require it.
+
+CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."] or another SOURCE tag.
+Do NOT write parenthetical citations like (CT Report). Use [SOURCE: Document "exact title"] only.
+Do NOT mention palliative care, hospice, or comfort care anywhere in the response.
+
+Use clear ### headings for each section."""
+
+        system = await build_medical_system_prompt(self.db)
+        system = f"{system}\n\n{SOURCE_ATTRIBUTION_RULES}"
+
+        response = await self.llm.generate(
+            prompt=prompt,
+            system=system,
+            temperature=0.2,
+        )
+
+        response = filter_palliative_content(response)
+        response, _attribution_level = enrich_with_sources(
+            response, doc_titles, annotate_staging=True
+        )
+        parsed = parse_assessment(response)
+        executive_summary, _ = enrich_with_sources(
+            parsed["executive_summary"], doc_titles, annotate_staging=False
+        )
+        parsed["executive_summary"] = filter_palliative_content(executive_summary)
+        doc_ids_used = [d["id"] for d in corpus]
+        provider_label = f"{self.llm.active_provider}:{self.llm.model_name}"
+
+        updated = await self.db.update_draft_analysis(
+            analysis_id,
+            query=query_text,
+            response=response,
+            document_ids=doc_ids_used,
+            model=provider_label,
+            executive_summary=parsed["executive_summary"],
+            open_items_json=open_items_to_json(parsed["open_items"]),
+        )
+        if not updated:
+            raise ValueError("Draft could not be updated")
+        if created_by and not updated.get("created_by"):
+            pass
+        return updated
+
     async def summarize_documents(
         self,
         document_ids: list[str] | None = None,

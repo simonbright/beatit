@@ -234,7 +234,7 @@
           <h3>Custom Tasks</h3>
           <span id="custom-tasks-badge" class="badge hidden"></span>
         </div>
-        <p class="muted small">Custom analyses run here as drafts. Review results, then add to the medical record on Home or discard.</p>
+        <p class="muted small">Custom analyses run here as drafts. Refine a draft until you are happy, then add it to the medical record on Home or discard.</p>
 
         <div class="card custom-task-compose">
           <h4>New custom task</h4>
@@ -279,6 +279,23 @@
           <button type="button" class="btn primary" id="btn-promote-custom-task">Add to record</button>
           <button type="button" class="btn danger" id="btn-discard-custom-task">Discard</button>
         </div>
+
+        <details class="custom-task-refine" id="custom-task-refine" open>
+          <summary class="custom-task-refine-summary">Refine this draft</summary>
+          <div class="custom-task-refine-body">
+            <p class="muted small">Adjust the question or describe what to change, then re-run. The same draft updates until you add it to the record or discard it.</p>
+            <label for="custom-task-refine-query">Question
+              <textarea id="custom-task-refine-query" rows="3" placeholder="Your question for this custom task"></textarea>
+            </label>
+            <label for="custom-task-refine-notes">What to change
+              <textarea id="custom-task-refine-notes" rows="3" placeholder="e.g. Focus on phase 3 trials only, shorten the summary, add Canadian sites, remove items not in the chart…"></textarea>
+            </label>
+            <div class="row-between wrap">
+              <span class="muted small" id="custom-task-refine-status"></span>
+              <button type="button" class="btn secondary" id="btn-refine-custom-task">Refine &amp; re-run</button>
+            </div>
+          </div>
+        </details>
 
         <div class="answer-layout">
           <div class="answer-main card custom-task-answer-card">

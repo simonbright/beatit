@@ -23,6 +23,7 @@ const state = {
   customTasks: { jobs: [], drafts: [], activeJob: null },
   selectedCustomTaskId: null,
   activeJobType: null,
+  refiningCustomTaskId: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -601,7 +602,7 @@ function jobStatusLabel(status) {
   return status || "Unknown";
 }
 
-function updateCustomTasksRunningBanner(running, query = "") {
+function updateCustomTasksRunningBanner(running, query = "", options = {}) {
   const section = $("#custom-tasks-running-section");
   const el = $("#custom-tasks-running");
   if (!section || !el) return;
@@ -610,12 +611,16 @@ function updateCustomTasksRunningBanner(running, query = "") {
     el.innerHTML = "";
     return;
   }
+  const label = options.refining ? "Refining" : "Running";
+  const hint = options.refining
+    ? "Updating this draft in place. The revised answer replaces the current draft when finished."
+    : "This may take several minutes. You can leave this tab — the draft will appear below when finished.";
   section.classList.remove("hidden");
   el.innerHTML = `
     <div class="custom-task-running-card" role="status" aria-live="polite">
-      <span class="badge status-running">Running</span>
+      <span class="badge status-running">${label}</span>
       <p class="custom-task-running-query">${escapeHtml(truncate(query || "Custom analysis", 200))}</p>
-      <p class="muted small">This may take several minutes. You can leave this tab — the draft will appear below when finished.</p>
+      <p class="muted small">${escapeHtml(hint)}</p>
     </div>`;
 }
 
@@ -647,13 +652,18 @@ function renderCustomTasksList() {
     list.innerHTML = `<p class="muted">No custom task drafts yet. Run a custom analysis from Home.</p>`;
     return;
   }
+  const refiningId =
+    state.customTasks?.activeJob?.refine_analysis_id ||
+    (state.analysisRunning ? state.refiningCustomTaskId : null);
   list.innerHTML = drafts
     .map(
       (draft) => `
-      <article class="custom-task-item${draft.id === state.selectedCustomTaskId ? " selected" : ""}" data-id="${escapeHtml(draft.id)}">
+      <article class="custom-task-item${draft.id === state.selectedCustomTaskId ? " selected" : ""}${draft.id === refiningId ? " refining" : ""}" data-id="${escapeHtml(draft.id)}">
         <div class="custom-task-item-main">
           <span class="badge">Draft</span>
-          <time class="muted small">${escapeHtml(formatTimestamp(draft.created_at))}</time>
+          ${draft.id === refiningId ? '<span class="badge status-running">Refining</span>' : ""}
+          ${draft.refinement_count ? `<span class="badge">${draft.refinement_count} refinement${draft.refinement_count === 1 ? "" : "s"}</span>` : ""}
+          <time class="muted small">${escapeHtml(formatTimestamp(draft.updated_at || draft.created_at))}</time>
           <span class="muted small custom-task-item-by">By ${escapeHtml(formatActor(draft.created_by))}</span>
         </div>
         ${draft.annotation_title
@@ -731,6 +741,11 @@ function renderCustomTaskDetail(analysis) {
     formatTimestamp(analysis.created_at),
     analysis.model || "Unknown model",
   ];
+  if (analysis.refinement_count > 0) {
+    metaParts.push(
+      `${analysis.refinement_count} refinement${analysis.refinement_count === 1 ? "" : "s"}`
+    );
+  }
   $("#custom-task-detail-meta").textContent = metaParts.join(" · ");
 
   const titleInput = $("#custom-task-annotation-title");
@@ -745,7 +760,7 @@ function renderCustomTaskDetail(analysis) {
   const refPrefix = analysis.id;
   const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
   const responseDisplay = analysis.response_display || analysis.response || "";
-  const updatedAt = analysis.created_at;
+  const updatedAt = analysis.updated_at || analysis.created_at;
 
   state.referenceRegistry = analysis.reference_registry || {};
 
@@ -776,7 +791,84 @@ function renderCustomTaskDetail(analysis) {
     idPrefix: refPrefix,
   });
 
+  updateCustomTaskRefineControls(analysis);
   scrollToCustomTaskDetail();
+}
+
+function updateCustomTaskRefineControls(analysis) {
+  const queryInput = $("#custom-task-refine-query");
+  const btn = $("#btn-refine-custom-task");
+  const status = $("#custom-task-refine-status");
+  if (queryInput) queryInput.value = analysis?.query || "";
+
+  const activeJob = state.customTasks?.activeJob;
+  const refiningThis =
+    state.analysisRunning &&
+    state.activeJobType === "query" &&
+    (activeJob?.refine_analysis_id === analysis?.id ||
+      state.refiningCustomTaskId === analysis?.id);
+
+  if (btn) btn.disabled = Boolean(state.analysisRunning);
+  if (status) {
+    if (refiningThis) status.textContent = "Refinement running…";
+    else if (analysis?.refinement_count > 0) {
+      status.textContent = `${analysis.refinement_count} prior refinement${analysis.refinement_count === 1 ? "" : "s"}`;
+    } else {
+      status.textContent = "";
+    }
+  }
+}
+
+async function refineCustomTask() {
+  const id = state.selectedCustomTaskId;
+  const draft = getSelectedCustomTaskDraft();
+  if (!id || !draft) return toast("Select a custom task first", "error");
+  if (state.analysisRunning) {
+    return toast("An analysis is already running. Please wait for it to finish.", "error");
+  }
+
+  const query = $("#custom-task-refine-query")?.value.trim();
+  const refinement = $("#custom-task-refine-notes")?.value.trim();
+  if (!query) return toast("Question is required", "error");
+  if (!refinement && query === (draft.query || "").trim()) {
+    return toast("Change the question or describe what to change", "error");
+  }
+
+  const docIds = state.selectedIds.size ? [...state.selectedIds] : null;
+  const btn = $("#btn-refine-custom-task");
+
+  try {
+    const data = await api(`/api/analyses/${id}/refine`, {
+      method: "POST",
+      body: JSON.stringify({
+        query,
+        refinement,
+        document_ids: docIds,
+      }),
+    });
+    const jobId = data.job.id;
+    state.refiningCustomTaskId = id;
+    setAnalysisRunning(true, jobId, "query");
+    updateCustomTasksRunningBanner(true, query, { refining: true });
+    updateCustomTaskRefineControls(draft);
+    toast("Refinement started");
+
+    const analysis = await pollAnalysisJob(jobId, { isCustomQuery: true });
+    finishCustomTaskRun(analysis, query);
+    if ($("#custom-task-refine-notes")) $("#custom-task-refine-notes").value = "";
+  } catch (err) {
+    if (err.status === 409) {
+      toast("An analysis is already running — resuming progress.", "error");
+      await resumeActiveAnalysisJob();
+      return;
+    }
+    toast(err.message, "error");
+  } finally {
+    state.refiningCustomTaskId = null;
+    setAnalysisRunning(false);
+    updateCustomTasksRunningBanner(false);
+    updateCustomTaskRefineControls(getSelectedCustomTaskDraft());
+  }
 }
 
 function selectCustomTask(id) {
@@ -801,7 +893,14 @@ async function loadCustomTasks() {
       activeJob: data.active_job || null,
     };
     if (state.customTasks.activeJob && ["pending", "running"].includes(state.customTasks.activeJob.status)) {
-      updateCustomTasksRunningBanner(true, state.customTasks.activeJob.query);
+      const job = state.customTasks.activeJob;
+      updateCustomTasksRunningBanner(true, job.query, {
+        refining: Boolean(job.refine_analysis_id),
+      });
+      if (job.refine_analysis_id) {
+        state.refiningCustomTaskId = job.refine_analysis_id;
+        state.selectedCustomTaskId = job.refine_analysis_id;
+      }
     } else if (!state.analysisRunning) {
       updateCustomTasksRunningBanner(false);
     }
@@ -863,7 +962,7 @@ async function saveCustomTaskAnnotations() {
   }
 }
 
-async function downloadAnalysisPdf(analysisId, { silent = false } = {}) {
+async function downloadAnalysisPdf(analysisId, { silent = false, analysis = null } = {}) {
   const res = await fetch(`/api/analyses/${analysisId}/export.pdf`, {
     credentials: "include",
   });
@@ -876,10 +975,78 @@ async function downloadAnalysisPdf(analysisId, { silent = false } = {}) {
     throw new Error(data.detail || `Export failed (${res.status})`);
   }
   const blob = await res.blob();
-  const disposition = res.headers.get("Content-Disposition") || "";
-  const match = disposition.match(/filename="([^"]+)"/);
-  const filename = match?.[1] || `beatit-custom-task-${analysisId.slice(0, 8)}.pdf`;
+  const fallback = buildPdfDownloadFilename(analysis || { id: analysisId });
+  const filename = filenameFromContentDisposition(res, fallback);
   return { blob, filename, silentHandled: silent };
+}
+
+function filenameFromContentDisposition(res, fallback) {
+  const disposition =
+    res.headers.get("Content-Disposition") || res.headers.get("content-disposition") || "";
+  if (!disposition) return fallback;
+
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;\n]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim());
+    } catch {
+      /* fall through */
+    }
+  }
+
+  const quotedMatch = disposition.match(/filename="([^"]+)"/i);
+  if (quotedMatch) return quotedMatch[1];
+
+  const plainMatch = disposition.match(/filename=([^;\n]+)/i);
+  if (plainMatch) return plainMatch[1].trim().replace(/^["']|["']$/g, "");
+
+  return fallback;
+}
+
+function formatPdfFilenameStamp(iso) {
+  try {
+    const dt = new Date(iso || Date.now());
+    if (Number.isNaN(dt.getTime())) return "unknown";
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      })
+        .formatToParts(dt)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value])
+    );
+    return `${parts.year}-${parts.month}-${parts.day}_${parts.hour}${parts.minute}${parts.second}`;
+  } catch {
+    return "unknown";
+  }
+}
+
+function buildPdfDownloadFilename(analysis) {
+  const stamp = formatPdfFilenameStamp(new Date().toISOString());
+  const title = String(analysis?.annotation_title || "").trim();
+  if (title) {
+    const slug = title
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, "")
+      .replace(/[\s_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+    if (slug) {
+      const prefix = analysis?.analysis_type === "query" ? "custom-task" : "assessment";
+      return `beatit-${prefix}-${slug}-${stamp}.pdf`;
+    }
+  }
+  if (analysis?.analysis_type === "query") {
+    return `beatit-custom-task-${stamp}.pdf`;
+  }
+  return `beatit-assessment-${stamp}.pdf`;
 }
 
 function triggerPdfDownload(blob, filename) {
@@ -899,7 +1066,9 @@ async function exportCustomTaskPdf(options = {}) {
   const btn = $("#btn-export-custom-task-pdf");
   if (btn) btn.disabled = true;
   try {
-    const result = await downloadAnalysisPdf(id, options);
+    const draft = getSelectedCustomTaskDraft();
+    if (!draft) return toast("Select a custom task first", "error");
+    const result = await downloadAnalysisPdf(id, { ...options, analysis: draft });
     if (!result) return;
     triggerPdfDownload(result.blob, result.filename);
     if (!options.silent) toast("PDF downloaded");
@@ -921,7 +1090,7 @@ async function nativeShareCustomTask() {
   if (btn) btn.disabled = true;
   try {
     const { subject, body } = buildCustomTaskShareContent(draft);
-    const result = await downloadAnalysisPdf(draft.id, { silent: true });
+    const result = await downloadAnalysisPdf(draft.id, { silent: true, analysis: draft });
     if (!result) return;
 
     const file = new File([result.blob], result.filename, { type: "application/pdf" });
@@ -2480,7 +2649,10 @@ async function exportAssessmentPdf() {
   if (btn) btn.disabled = true;
 
   try {
-    const result = await downloadAnalysisPdf(state.latestAnalysis.id, { silent: true });
+    const result = await downloadAnalysisPdf(state.latestAnalysis.id, {
+      silent: true,
+      analysis: state.latestAnalysis,
+    });
     if (!result) return;
     triggerPdfDownload(result.blob, result.filename);
     toast("PDF downloaded");
@@ -3136,6 +3308,9 @@ safeOn("#btn-promote-custom-task", "click", () =>
 );
 safeOn("#btn-discard-custom-task", "click", () =>
   discardCustomTask().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-refine-custom-task", "click", () =>
+  refineCustomTask().catch((e) => toast(e.message, "error"))
 );
 safeOn("#btn-run-custom-task", "click", () => {
   const query = $("#custom-task-query")?.value.trim();

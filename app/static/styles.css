@@ -2229,6 +2229,36 @@ textarea { resize: vertical; min-height: 100px; }
   margin-top: 0;
 }
 
+.custom-task-refine {
+  margin: 0 0 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.85rem;
+  background: var(--surface-2);
+}
+
+.custom-task-refine-summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.custom-task-refine-summary::-webkit-details-marker {
+  display: none;
+}
+
+.custom-task-refine-body label {
+  margin-top: 0.75rem;
+}
+
+.custom-task-refine-body .btn {
+  margin-top: 0;
+}
+
+.custom-task-item.refining {
+  border-color: var(--accent);
+}
+
 .custom-task-extras {
   margin-top: 1rem;
   border: 1px dashed var(--border);

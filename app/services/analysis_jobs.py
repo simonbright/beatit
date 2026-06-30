@@ -45,6 +45,14 @@ async def _run_job(job_id: str) -> None:
 
         if job["job_type"] == "summarize":
             result = await synthesis.summarize_documents(document_ids)
+        elif job.get("refine_analysis_id"):
+            result = await synthesis.refine_custom_task(
+                analysis_id=job["refine_analysis_id"],
+                query=job["query"],
+                refinement=job.get("refinement_notes") or "",
+                document_ids=document_ids,
+                created_by=job.get("requested_by"),
+            )
         else:
             result = await synthesis.analyze(
                 query=job["query"],
@@ -76,6 +84,8 @@ async def _run_job(job_id: str) -> None:
                 "document_count": len(result.get("document_ids") or []),
                 "open_items_count": len(result.get("open_items") or []),
                 "query_preview": preview_text(job.get("query")),
+                "refinement": bool(job.get("refine_analysis_id")),
+                "refine_analysis_id": job.get("refine_analysis_id"),
             },
         )
     except Exception as exc:
@@ -127,6 +137,31 @@ async def enqueue_analysis_job(
         document_ids=document_ids,
         include_baseline_assessment=include_baseline_assessment,
         requested_by=requested_by,
+    )
+    _spawn_job(job["id"])
+    return job
+
+
+async def enqueue_refinement_job(
+    *,
+    analysis_id: str,
+    query: str,
+    refinement: str = "",
+    document_ids: list[str] | None = None,
+    requested_by: str | None = None,
+) -> dict[str, Any]:
+    db = Database()
+    active = await db.get_active_analysis_job()
+    if active:
+        raise ActiveAnalysisJobError(active)
+
+    job = await db.create_analysis_job(
+        job_type="query",
+        query=query,
+        document_ids=document_ids,
+        requested_by=requested_by,
+        refine_analysis_id=analysis_id,
+        refinement_notes=refinement,
     )
     _spawn_job(job["id"])
     return job

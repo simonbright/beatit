@@ -85,7 +85,7 @@ def _format_filename_stamp(iso: str | None) -> str:
     dt = _parse_iso_datetime(iso)
     if not dt:
         return "unknown"
-    return _to_eastern(dt).strftime("%Y-%m-%d_%H%M")
+    return _to_eastern(dt).strftime("%Y-%m-%d_%H%M%S")
 
 
 def _analysis_type_label(analysis_type: str | None) -> str | None:
@@ -490,8 +490,14 @@ def build_assessment_pdf(
     return buffer.getvalue()
 
 
-def assessment_pdf_filename(analysis: dict[str, Any]) -> str:
-    stamp = _format_filename_stamp(analysis.get("created_at"))
+def assessment_pdf_filename(
+    analysis: dict[str, Any],
+    *,
+    exported_at: datetime | None = None,
+) -> str:
+    stamp = _format_filename_stamp(
+        (exported_at or datetime.now(timezone.utc)).isoformat()
+    )
 
     title = (analysis.get("annotation_title") or "").strip()
     if title:
