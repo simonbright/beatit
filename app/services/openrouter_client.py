@@ -98,7 +98,22 @@ class OpenRouterClient:
                     "temperature": temperature,
                 },
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                message = None
+                try:
+                    payload = response.json()
+                    message = (payload.get("error") or {}).get("message")
+                except Exception:
+                    pass
+                if message:
+                    hint = ""
+                    if "No endpoints found" in message or "not a valid model" in message:
+                        hint = (
+                            f" Model '{self.model}' is unavailable on OpenRouter. "
+                            "Open Settings and choose a different model."
+                        )
+                    raise RuntimeError(f"OpenRouter: {message}.{hint}")
+                response.raise_for_status()
             data = response.json()
 
         choices = data.get("choices") or []

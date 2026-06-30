@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 
 from app.ingest.text import ingest_text
@@ -11,7 +12,10 @@ from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL, MODEL_IDS, OPENROUTER_MODELS
+from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
 from app.services.synthesis import SynthesisService
+from app.services.investigation import InvestigationService
+from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
 from app.services.auth_session import (
     COOKIE_NAME,
     SESSION_DAYS,
@@ -51,7 +55,8 @@ class AnalyzeRequest(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    openrouter_model: str = Field(min_length=3, max_length=200)
+    openrouter_model: str | None = None
+    patient_context: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -75,13 +80,19 @@ def _set_session_cookie(response: Response, username: str) -> None:
     )
 
 
+class OpenItemUpdateRequest(BaseModel):
+    status: str | None = Field(default=None, max_length=50)
+    comment: str | None = Field(default=None, max_length=5000)
+
+
 async def _get_services():
     db = Database()
     model = await db.get_setting("openrouter_model") or settings.openrouter_model or DEFAULT_OPENROUTER_MODEL
     llm = LLMClient(openrouter=OpenRouterClient(model=model))
     store = DocumentStore(db)
     synthesis = SynthesisService(store, db, llm)
-    return db, store, llm, synthesis
+    investigation = InvestigationService(store, db, llm)
+    return db, store, llm, synthesis, investigation
 
 
 @router.post("/login")
@@ -115,51 +126,67 @@ async def auth_me(request: Request):
 
 @router.get("/health")
 async def health():
-    _, _, llm, _ = await _get_services()
+    _, _, llm, _, _ = await _get_services()
     llm_status = await llm.health()
     return {"status": "ok", "llm": llm_status}
 
 
 @router.get("/settings")
 async def get_app_settings():
-    db, _, llm, _ = await _get_services()
+    db, _, llm, _, _ = await _get_services()
     model = await db.get_setting("openrouter_model") or settings.openrouter_model or DEFAULT_OPENROUTER_MODEL
+    patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
     return {
         "settings": {
             "llm_provider": settings.llm_provider,
             "openrouter_model": model,
+            "patient_context": patient_context,
         },
         "models": OPENROUTER_MODELS,
         "default_model": DEFAULT_OPENROUTER_MODEL,
+        "default_patient_context": DEFAULT_PATIENT_CONTEXT,
     }
 
 
 @router.put("/settings")
 async def update_app_settings(body: SettingsUpdateRequest):
-    model_id = body.openrouter_model.strip()
-    if model_id not in MODEL_IDS:
-        raise HTTPException(
-            status_code=400,
-            detail="Choose a model from the list or pick a supported preset",
-        )
-    db, _, _, _ = await _get_services()
-    await db.set_setting("openrouter_model", model_id)
-    return {
-        "settings": {
-            "openrouter_model": model_id,
-        }
-    }
+    if body.openrouter_model is None and body.patient_context is None:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    db, _, _, _, _ = await _get_services()
+    updated: dict[str, str] = {}
+
+    if body.openrouter_model is not None:
+        model_id = body.openrouter_model.strip()
+        if model_id not in MODEL_IDS:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose a model from the list or pick a supported preset",
+            )
+        await db.set_setting("openrouter_model", model_id)
+        updated["openrouter_model"] = model_id
+
+    if body.patient_context is not None:
+        context = body.patient_context.strip()
+        if not context:
+            raise HTTPException(status_code=400, detail="Patient context cannot be empty")
+        if len(context) > 5000:
+            raise HTTPException(status_code=400, detail="Patient context is too long (max 5000 characters)")
+        await db.set_setting("patient_context", context)
+        updated["patient_context"] = context
+
+    return {"settings": updated}
 
 
 @router.get("/documents")
 async def list_documents():
-    db, _, _, _ = await _get_services()
+    db, _, _, _, _ = await _get_services()
     return {"documents": await db.list_documents()}
 
 
 @router.get("/documents/{doc_id}")
 async def get_document(doc_id: str):
-    db, store, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -169,7 +196,7 @@ async def get_document(doc_id: str):
 
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str):
-    _, store, _, _ = await _get_services()
+    _, store, _, _, _ = await _get_services()
     deleted = await store.delete_document(doc_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -178,7 +205,7 @@ async def delete_document(doc_id: str):
 
 @router.post("/ingest/text")
 async def ingest_text_route(body: TextIngestRequest):
-    _, store, _, _ = await _get_services()
+    _, store, _, _, _ = await _get_services()
     doc = await ingest_text(
         store,
         title=body.title,
@@ -190,7 +217,7 @@ async def ingest_text_route(body: TextIngestRequest):
 
 @router.post("/ingest/url")
 async def ingest_url_route(body: UrlIngestRequest):
-    _, store, _, _ = await _get_services()
+    _, store, _, _, _ = await _get_services()
     try:
         doc = await ingest_url(
             store,
@@ -205,7 +232,7 @@ async def ingest_url_route(body: UrlIngestRequest):
 
 @router.post("/ingest/youtube")
 async def ingest_youtube_route(body: YoutubeIngestRequest):
-    _, store, _, _ = await _get_services()
+    _, store, _, _, _ = await _get_services()
     try:
         doc = await ingest_youtube(
             store,
@@ -223,7 +250,7 @@ async def ingest_pdf_route(
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
 ):
-    _, store, _, _ = await _get_services()
+    _, store, _, _, _ = await _get_services()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -243,7 +270,7 @@ async def ingest_video_route(
     title: str | None = Form(default=None),
     notes: str | None = Form(default=None),
 ):
-    _, store, _, _ = await _get_services()
+    _, store, _, _, _ = await _get_services()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -260,7 +287,7 @@ async def ingest_video_route(
 
 @router.post("/analyze")
 async def analyze(body: AnalyzeRequest):
-    _, _, _, synthesis = await _get_services()
+    _, _, _, synthesis, _ = await _get_services()
     if not body.query.strip() and not body.include_baseline_assessment:
         raise HTTPException(
             status_code=400,
@@ -282,7 +309,7 @@ async def analyze(body: AnalyzeRequest):
 
 @router.post("/analyze/summarize")
 async def summarize(document_ids: list[str] | None = None):
-    _, _, _, synthesis = await _get_services()
+    _, _, _, synthesis, _ = await _get_services()
     try:
         result = await synthesis.summarize_documents(document_ids)
     except Exception as exc:
@@ -295,15 +322,86 @@ async def summarize(document_ids: list[str] | None = None):
 
 @router.get("/analyses")
 async def list_analyses(limit: int = 50):
-    db, _, _, _ = await _get_services()
+    db, _, _, _, _ = await _get_services()
     return {"analyses": await db.list_analyses(limit=limit)}
+
+
+@router.get("/analyses/latest")
+async def latest_analysis():
+    db, _, _, _, _ = await _get_services()
+    return {"analysis": await db.get_latest_analysis()}
+
+
+@router.get("/analyses/latest/export.pdf")
+async def export_latest_assessment_pdf():
+    db, _, _, _, _ = await _get_services()
+    analysis = await db.get_latest_analysis()
+    if not analysis or not (analysis.get("response") or analysis.get("executive_summary")):
+        raise HTTPException(status_code=404, detail="No assessment available to export")
+
+    patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+    pdf_bytes = build_assessment_pdf(analysis, patient_context=patient_context)
+    filename = assessment_pdf_filename(analysis)
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/analyses/{analysis_id}")
 async def get_analysis(analysis_id: str):
-    db, _, _, _ = await _get_services()
-    analyses = await db.list_analyses(limit=500)
-    match = next((a for a in analyses if a["id"] == analysis_id), None)
-    if not match:
+    db, _, _, _, _ = await _get_services()
+    analysis = await db.get_analysis_by_id(analysis_id)
+    if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
-    return {"analysis": match}
+    return {"analysis": analysis}
+
+
+@router.get("/open-items/{open_item_id}")
+async def get_open_item(open_item_id: str):
+    db, _, _, _, _ = await _get_services()
+    item = await db.get_open_item(open_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Open item not found")
+    return {"open_item": item}
+
+
+@router.post("/open-items/{open_item_id}/investigate")
+async def investigate_open_item(open_item_id: str):
+    _, _, _, _, investigation = await _get_services()
+    try:
+        item = await investigation.investigate_open_item(open_item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Investigation failed: {exc}",
+        ) from exc
+    return {"open_item": item}
+
+
+@router.patch("/open-items/{open_item_id}")
+async def update_open_item(open_item_id: str, body: OpenItemUpdateRequest):
+    db, _, _, _, _ = await _get_services()
+    allowed = {"open", "investigating", "investigated", "resolved", "closed"}
+    status = body.status.strip().lower() if body.status else None
+    comment = body.comment.strip() if body.comment else None
+
+    if status is None and not comment:
+        raise HTTPException(status_code=400, detail="Provide status and/or comment")
+
+    if status is not None and status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Status must be one of: {', '.join(sorted(allowed))}",
+        )
+
+    if comment and len(comment) > 5000:
+        raise HTTPException(status_code=400, detail="Comment is too long (max 5000 characters)")
+
+    item = await db.update_open_item(open_item_id, status=status, comment=comment)
+    if not item:
+        raise HTTPException(status_code=404, detail="Open item not found")
+    return {"open_item": item}

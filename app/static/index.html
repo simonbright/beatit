@@ -47,13 +47,6 @@
   </header>
 
   <main class="container">
-    <section class="card patient-banner">
-      <div class="banner-duck" aria-hidden="true">🦆</div>
-      <h2>Patient context</h2>
-      <p>Woman in her 70s · Recently diagnosed pancreatic cancer · Possible liver metastasis</p>
-      <p class="muted">Gather evidence, find clarity, and explore options together — one step at a time.</p>
-    </section>
-
     <div id="upload-result" class="card upload-result hidden" aria-live="polite">
       <h3>Last upload</h3>
       <p id="upload-result-title" class="upload-result-title"></p>
@@ -61,15 +54,131 @@
     </div>
 
     <div class="tabs" role="tablist">
-      <button class="tab active" data-tab="ingest" role="tab">Add data</button>
+      <button class="tab active" data-tab="analyze" role="tab">Analyze</button>
+      <button class="tab" data-tab="ingest" role="tab">Add data</button>
       <button class="tab" data-tab="library" role="tab">Library</button>
-      <button class="tab" data-tab="analyze" role="tab">Analyze</button>
       <button class="tab" data-tab="history" role="tab">History</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </div>
 
+    <!-- ANALYZE -->
+    <section id="panel-analyze" class="panel active">
+      <div class="card executive-summary-card" id="executive-summary-card">
+        <div class="row-between wrap">
+          <h3>Executive summary</h3>
+          <div class="assessment-header-actions">
+            <button type="button" class="btn secondary hidden" id="btn-export-pdf" title="Download executive summary and latest assessment as PDF">
+              Export PDF
+            </button>
+            <time class="assessment-timestamp muted small" id="executive-summary-time"></time>
+          </div>
+        </div>
+
+        <div class="source-legend" id="source-legend">
+          <p class="source-legend-title">Source tags — every claim must be labeled</p>
+          <ul class="source-legend-list">
+            <li><span class="source-tag source-document">Document</span> Hard data from stored records</li>
+            <li><span class="source-tag source-context">Patient context</span> From settings only — not verified record</li>
+            <li><span class="source-tag source-inference">AI inference</span> Interpretation — not verified</li>
+            <li><span class="source-tag source-unknown">Unknown</span> Not in documents — do not treat as fact</li>
+          </ul>
+          <p class="source-legend-note"><strong>Staging</strong> requires a <span class="source-tag source-document">Document</span> tag with cited evidence. Never infer stage without hard data.</p>
+        </div>
+
+        <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
+
+        <div id="executive-summary-text" class="executive-summary-text">
+          <p class="muted empty-assessment">Run an assessment to see a summary and open items here.</p>
+        </div>
+
+        <h4 class="open-items-heading">Next steps &amp; open items</h4>
+        <p class="muted small open-items-hint">Use <strong>Explore</strong> to open an item. Type and status are labels only — add comments or resolve in the detail panel.</p>
+        <div class="table-wrap">
+          <table class="open-items-table" id="open-items-table">
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">Item</th>
+                <th scope="col">Type</th>
+                <th scope="col">Status</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody id="open-items-body">
+              <tr class="empty-row">
+                <td colspan="5" class="muted">No open items yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card open-item-panel hidden" id="open-item-panel">
+          <div class="row-between wrap">
+            <h4 id="open-item-panel-title">Open item investigation</h4>
+            <button type="button" class="btn ghost" id="btn-close-open-item">Close</button>
+          </div>
+          <div class="open-item-meta" id="open-item-meta"></div>
+
+          <div class="open-item-comments-section">
+            <h5>Comments</h5>
+            <div id="open-item-comments-list" class="open-item-comments-list">
+              <p class="muted small">No comments yet.</p>
+            </div>
+            <label class="open-item-comment-form">Add a note
+              <textarea id="open-item-comment-input" rows="3" placeholder="Progress, decisions, follow-up notes…"></textarea>
+            </label>
+            <button type="button" class="btn secondary" id="btn-add-comment">Add comment</button>
+          </div>
+
+          <div class="open-item-actions row-between wrap">
+            <button type="button" class="btn primary" id="btn-investigate-item">Run investigation</button>
+            <button type="button" class="btn secondary" id="btn-resolve-item">Resolve</button>
+            <button type="button" class="btn ghost hidden" id="btn-reopen-item">Reopen</button>
+          </div>
+          <div id="open-item-loading" class="loading hidden">Running focused investigation…</div>
+          <article id="open-item-investigation" class="result investigation-body">
+            <p class="muted">Select an open item and run a focused investigation. Results appear here with source tags — separate from the full assessment.</p>
+          </article>
+        </div>
+      </div>
+
+      <div class="card latest-assessment-card" id="latest-assessment-card">
+        <div class="row-between wrap">
+          <h3>Latest assessment</h3>
+          <time class="assessment-timestamp muted small" id="latest-assessment-time"></time>
+        </div>
+        <div id="assessment-source-notice" class="source-attribution-notice hidden" role="status"></div>
+        <p class="source-attribution-banner muted small">All clinical statements below must carry a <code>[SOURCE: …]</code> tag. Staging and metastasis status require document evidence — not inference alone.</p>
+        <div class="assessment-meta doc-meta" id="latest-assessment-meta"></div>
+        <article id="latest-assessment-body" class="result assessment-body">
+          <p class="muted empty-assessment">No assessment yet. Run an analysis below — your most recent result will always stay here.</p>
+        </article>
+      </div>
+
+      <div class="card">
+        <h3>Run new analysis</h3>
+        <p class="muted">Uses OpenRouter by default until Ollama is configured. Analysis uses all stored documents unless you select specific ones in the library.</p>
+
+        <div class="analyze-actions">
+          <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
+          <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
+        </div>
+
+        <label>Your question
+          <textarea id="analyze-query" rows="4" placeholder="e.g. What staging workup is still needed? What are resectability considerations with possible liver mets?"></textarea>
+        </label>
+
+        <div class="row-between wrap">
+          <span class="muted small" id="selected-count">Using all documents</span>
+          <button class="btn primary" id="btn-analyze">Run analysis</button>
+        </div>
+
+        <div id="analyze-loading" class="loading hidden">Running analysis… this may take a minute.</div>
+      </div>
+    </section>
+
     <!-- INGEST -->
-    <section id="panel-ingest" class="panel active">
+    <section id="panel-ingest" class="panel">
       <div class="ingest-grid">
         <article class="card">
           <h3>Clinical notes / text</h3>
@@ -135,44 +244,35 @@
       </div>
     </section>
 
-    <!-- ANALYZE -->
-    <section id="panel-analyze" class="panel">
-      <div class="card">
-        <h3>Medical synthesis</h3>
-        <p class="muted">Uses OpenRouter by default until Ollama is configured. Analysis uses all stored documents unless you select specific ones in the library.</p>
-
-        <div class="analyze-actions">
-          <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
-          <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
-        </div>
-
-        <label>Your question
-          <textarea id="analyze-query" rows="4" placeholder="e.g. What staging workup is still needed? What are resectability considerations with possible liver mets?"></textarea>
-        </label>
-
-        <div class="row-between wrap">
-          <span class="muted small" id="selected-count">Using all documents</span>
-          <button class="btn primary" id="btn-analyze">Run analysis</button>
-        </div>
-
-        <div id="analyze-loading" class="loading hidden">Running analysis… this may take a minute.</div>
-        <article id="analyze-result" class="result hidden"></article>
-      </div>
-    </section>
-
     <!-- HISTORY -->
     <section id="panel-history" class="panel">
       <div class="card">
         <div class="row-between">
-          <h3>Analysis history</h3>
+          <h3>Assessment history</h3>
           <button class="btn secondary" id="btn-refresh-history">Refresh</button>
         </div>
+        <p class="muted small">All past assessments, newest first. Each entry is timestamped.</p>
         <div id="history-list" class="history-list"></div>
       </div>
     </section>
 
     <!-- SETTINGS -->
     <section id="panel-settings" class="panel">
+      <div class="card settings-card patient-banner">
+        <div class="banner-duck" aria-hidden="true">🦆</div>
+        <h3>Patient context</h3>
+        <p class="muted">Baseline case details used in every medical analysis. Update as you learn more.</p>
+
+        <label for="settings-patient-context">Case summary
+          <textarea id="settings-patient-context" rows="6" placeholder="Age, diagnosis, staging notes…"></textarea>
+        </label>
+
+        <div class="row-between wrap settings-actions">
+          <span class="muted small">Used by the oncology synthesis prompt</span>
+          <button class="btn primary" id="btn-save-patient">Save patient context</button>
+        </div>
+      </div>
+
       <div class="card settings-card">
         <h3>LLM settings</h3>
         <p class="muted">OpenRouter model used for medical synthesis. Budget models cost less; premium models may give deeper analysis.</p>

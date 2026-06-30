@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     llm_provider: str = "openrouter"
 
     openrouter_api_key: str = ""
-    openrouter_model: str = "google/gemini-2.0-flash-lite-001"
+    openrouter_model: str = "google/gemini-3.1-flash-lite"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_http_referer: str = "http://localhost:8080"
     openrouter_app_title: str = "BeatIt"

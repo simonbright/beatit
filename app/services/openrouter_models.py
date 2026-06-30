@@ -1,11 +1,17 @@
 """Curated OpenRouter models for the settings UI."""
 
-DEFAULT_OPENROUTER_MODEL = "google/gemini-2.0-flash-lite-001"
+DEFAULT_OPENROUTER_MODEL = "google/gemini-3.1-flash-lite"
+
+# Retired on OpenRouter — auto-migrated to DEFAULT_OPENROUTER_MODEL on startup
+DEPRECATED_OPENROUTER_MODELS = {
+    "google/gemini-2.0-flash-lite-001",
+    "google/gemini-2.0-flash-001",
+}
 
 OPENROUTER_MODELS = [
     {
-        "id": "google/gemini-2.0-flash-lite-001",
-        "label": "Gemini 2.0 Flash Lite",
+        "id": "google/gemini-3.1-flash-lite",
+        "label": "Gemini 3.1 Flash Lite",
         "tier": "budget",
         "description": "Lowest cost — good for summaries and quick queries",
     },
@@ -22,8 +28,8 @@ OPENROUTER_MODELS = [
         "description": "Balanced cost and quality",
     },
     {
-        "id": "google/gemini-2.0-flash-001",
-        "label": "Gemini 2.0 Flash",
+        "id": "google/gemini-3.5-flash",
+        "label": "Gemini 3.5 Flash",
         "tier": "standard",
         "description": "Fast, capable general model",
     },
