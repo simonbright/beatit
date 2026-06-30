@@ -66,27 +66,93 @@ async function api(path, options = {}) {
   return data;
 }
 
+function formatVersionUpdated(isoDate) {
+  if (!isoDate) return "";
+  try {
+    return new Date(`${isoDate}T12:00:00`).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return isoDate;
+  }
+}
+
+function renderAppVersion(data) {
+  const el = $("#app-version");
+  if (!el || !data?.version) return;
+  const updated = formatVersionUpdated(data.updated);
+  const name = data.name || "BeatIt";
+  el.textContent = `${name} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
+}
+
+async function loadAppVersion() {
+  try {
+    const res = await fetch("/api/version");
+    if (!res.ok) return;
+    renderAppVersion(await res.json());
+  } catch {
+    /* keep placeholder */
+  }
+}
+
 async function checkHealth() {
   const pill = $("#llm-status");
+  const settingsConn = $("#settings-llm-connection");
+
   try {
     const data = await api("/api/health");
-    const llm = data.llm || {};
-    const active = llm.active || {};
-
-    if (active.ready) {
-      pill.textContent = `${active.provider} · ${active.model}`;
-      pill.className = "status-pill ok";
-    } else if (llm.configured_provider === "openrouter") {
-      const err = llm.openrouter?.error || active.error || "Set OPENROUTER_API_KEY in .env";
-      pill.textContent = `OpenRouter · ${err}`;
-      pill.className = "status-pill bad";
-    } else {
-      pill.textContent = active.error || "No LLM available";
-      pill.className = "status-pill bad";
-    }
+    updateLlmStatusDisplay(data, pill, settingsConn);
   } catch {
-    pill.textContent = "API unreachable";
+    if (pill) {
+      pill.textContent = "Offline";
+      pill.className = "status-pill bad";
+      pill.classList.remove("hidden");
+    }
+    if (settingsConn) {
+      settingsConn.textContent = "Could not reach the API.";
+      settingsConn.className = "settings-llm-connection bad";
+    }
+  }
+}
+
+function updateLlmStatusDisplay(data, pill, settingsConn) {
+  const llm = data?.llm || {};
+  const active = llm.active || {};
+  const model =
+    state.settings.openrouter_model ||
+    llm.openrouter?.model ||
+    active.model ||
+    "Unknown model";
+
+  if (active.ready) {
+    if (pill) pill.classList.add("hidden");
+    if (settingsConn) {
+      settingsConn.textContent = `Connected · ${active.provider} · ${active.model || model}`;
+      settingsConn.className = "settings-llm-connection ok";
+    }
+    return;
+  }
+
+  let headerText = "LLM unavailable";
+  let settingsText = "LLM is not available.";
+  if (llm.configured_provider === "openrouter") {
+    const err = llm.openrouter?.error || active.error || "Set OPENROUTER_API_KEY";
+    headerText = "LLM error";
+    settingsText = `OpenRouter error: ${err}`;
+  } else if (active.error) {
+    settingsText = active.error;
+  }
+
+  if (pill) {
+    pill.textContent = headerText;
     pill.className = "status-pill bad";
+    pill.classList.remove("hidden");
+  }
+  if (settingsConn) {
+    settingsConn.textContent = settingsText;
+    settingsConn.className = "settings-llm-connection bad";
   }
 }
 
@@ -190,7 +256,15 @@ async function loadSettings() {
 
   const current = $("#settings-current");
   if (current) {
-    current.textContent = `Active: ${state.settings.openrouter_model || data.default_model}`;
+    const modelId = state.settings.openrouter_model || data.default_model;
+    current.textContent = `Selected model: ${modelId}`;
+  }
+
+  try {
+    const health = await api("/api/health");
+    updateLlmStatusDisplay(health, $("#llm-status"), $("#settings-llm-connection"));
+  } catch {
+    /* checkHealth handles errors on its own schedule */
   }
 }
 
@@ -204,7 +278,7 @@ async function saveModelSettings() {
   state.settings = { ...state.settings, ...data.settings };
   toast("Model saved");
   const current = $("#settings-current");
-  if (current) current.textContent = `Active: ${data.settings.openrouter_model}`;
+  if (current) current.textContent = `Selected model: ${data.settings.openrouter_model}`;
   checkHealth();
 }
 
@@ -957,6 +1031,7 @@ $("#btn-signout")?.addEventListener("click", async () => {
 });
 
 checkHealth();
+loadAppVersion();
 initAuth();
 initTheme();
 bindFileInput("#pdf-file");

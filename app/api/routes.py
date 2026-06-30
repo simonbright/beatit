@@ -26,6 +26,7 @@ from app.services.auth_session import (
 from app.config import settings
 from app.storage.database import Database
 from app.storage.documents import DocumentStore
+from app.version import version_info
 
 router = APIRouter(prefix="/api")
 
@@ -128,7 +129,12 @@ async def auth_me(request: Request):
 async def health():
     _, _, llm, _, _ = await _get_services()
     llm_status = await llm.health()
-    return {"status": "ok", "llm": llm_status}
+    return {"status": "ok", "llm": llm_status, **version_info()}
+
+
+@router.get("/version")
+async def app_version():
+    return version_info()
 
 
 @router.get("/settings")

@@ -36,12 +36,18 @@
         </div>
       </div>
       <div class="header-actions">
-        <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch to day theme" title="Toggle day/night theme">
+        <div class="status-pill hidden" id="llm-status" aria-live="polite"></div>
+        <button type="button" class="header-icon-btn theme-toggle" id="theme-toggle" aria-label="Switch to day theme" title="Toggle day/night theme">
           <span class="theme-icon theme-icon-sun" aria-hidden="true">☀</span>
           <span class="theme-icon theme-icon-moon" aria-hidden="true">☾</span>
         </button>
-        <div class="status-pill" id="llm-status">Checking LLM…</div>
-        <button type="button" class="btn ghost btn-signout hidden" id="btn-signout" title="Sign out">Sign out</button>
+        <button type="button" class="header-icon-btn btn-signout hidden" id="btn-signout" aria-label="Sign out" title="Sign out">
+          <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="16 17 21 12 16 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
       </div>
     </div>
   </header>
@@ -281,6 +287,7 @@
           <select id="settings-model"></select>
         </label>
         <p id="settings-model-desc" class="muted small settings-model-desc"></p>
+        <p id="settings-llm-connection" class="muted small settings-llm-connection">Checking LLM connection…</p>
 
         <div class="row-between wrap settings-actions">
           <span class="muted small" id="settings-current">Loading…</span>
@@ -289,6 +296,10 @@
       </div>
     </section>
   </main>
+
+  <footer class="app-footer" aria-label="App version">
+    <p class="app-footer-text" id="app-version">BeatIt</p>
+  </footer>
 
   <div id="toast" class="toast hidden"></div>
 

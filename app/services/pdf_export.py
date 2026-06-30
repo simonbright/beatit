@@ -5,6 +5,8 @@ from typing import Any
 
 from fpdf import FPDF
 
+from app.version import APP_NAME, APP_UPDATED, APP_VERSION
+
 
 def _safe_text(text: str) -> str:
     if not text:
@@ -172,7 +174,9 @@ def build_assessment_pdf(
     pdf.multi_cell(
         0,
         4,
-        _safe_text(f"Exported from BeatIt on {exported}."),
+        _safe_text(
+            f"Exported from {APP_NAME} v{APP_VERSION} ({APP_UPDATED}) on {exported}."
+        ),
     )
 
     buffer = BytesIO()

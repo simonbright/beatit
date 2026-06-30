@@ -9,6 +9,7 @@ from app.api.routes import router
 from app.config import settings
 from app.middleware.auth import SessionAuthMiddleware
 from app.storage.database import Database
+from app.version import APP_VERSION
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -23,7 +24,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="BeatIt — Oncology Case Analysis",
     description="Store clinical research material and synthesize oncology insights",
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 

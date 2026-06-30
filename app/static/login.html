@@ -183,6 +183,10 @@
     </article>
   </div>
 
+  <footer class="app-footer" aria-label="App version">
+    <p class="app-footer-text" id="app-version">BeatIt</p>
+  </footer>
+
   <script>
     const REMEMBER_KEY = "beatit-login-remember";
     const USERNAME_KEY = "beatit-login-username";
@@ -231,6 +235,24 @@
         passwordInput.select();
       }
     });
+  </script>
+  <script>
+    fetch("/api/version")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data?.version) return;
+        const el = document.getElementById("app-version");
+        if (!el) return;
+        const updated = data.updated
+          ? new Date(`${data.updated}T12:00:00`).toLocaleDateString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            })
+          : "";
+        el.textContent = `${data.name || "BeatIt"} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>

@@ -5,7 +5,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from app.config import settings
 from app.services.auth_session import COOKIE_NAME, verify_session_token
 
-PUBLIC_PATHS = {"/api/health", "/login", "/api/login"}
+PUBLIC_PATHS = {"/api/health", "/api/version", "/login", "/api/login"}
 PUBLIC_PREFIXES = ("/static/",)
 
 
