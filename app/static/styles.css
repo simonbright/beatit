@@ -708,6 +708,17 @@ textarea { resize: vertical; min-height: 100px; }
   background: linear-gradient(135deg, rgba(209, 250, 229, 0.5), rgba(255, 255, 255, 0.9));
 }
 
+.upload-result-header {
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.upload-result-dismiss {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.82rem;
+}
+
 [data-theme="night"] .upload-result {
   background: linear-gradient(135deg, rgba(6, 78, 59, 0.3), rgba(15, 35, 58, 0.9));
 }
@@ -760,12 +771,44 @@ textarea { resize: vertical; min-height: 100px; }
   margin-bottom: 1rem;
   border-color: var(--accent);
   background: linear-gradient(135deg, rgba(224, 242, 254, 0.55), var(--surface));
+  padding: 0.75rem 1rem;
 }
 
-.case-status-title {
+.case-status-row {
+  align-items: center;
+  gap: 0.65rem 1rem;
+}
+
+.case-status-summary {
   margin: 0;
-  font-size: 1.2rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.case-status-heading {
+  font-weight: 700;
   color: var(--accent);
+}
+
+.case-status-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.case-status-link:hover {
+  color: var(--accent-warm);
+}
+
+.case-status-sep {
+  color: var(--muted);
 }
 
 .case-status-header-actions {
@@ -773,43 +816,11 @@ textarea { resize: vertical; min-height: 100px; }
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
-}
-
-.case-status-lead {
-  margin: 0.65rem 0 0.5rem;
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.case-status-details {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.35rem;
-}
-
-.case-status-details li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.75rem;
-  padding: 0.35rem 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.case-status-details li:last-child {
-  border-bottom: none;
-}
-
-.case-status-label {
-  min-width: 8.5rem;
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .case-status-cta {
-  margin-top: 0.85rem;
+  margin-top: 0.65rem;
 }
 
 .assessment-as-of {

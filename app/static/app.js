@@ -211,16 +211,45 @@ function renderPathLines(lines) {
     .join("");
 }
 
+const UPLOAD_BANNER_KEY = "beatit-upload-banner";
+
+function dismissUploadResult() {
+  const panel = $("#upload-result");
+  if (!panel) return;
+  panel.classList.add("hidden");
+  try {
+    sessionStorage.setItem(UPLOAD_BANNER_KEY, "dismissed");
+  } catch {
+    /* ignore */
+  }
+}
+
 function showUploadResult(doc) {
   const panel = $("#upload-result");
   const title = $("#upload-result-title");
   const paths = $("#upload-result-paths");
   if (!panel || !doc) return;
 
+  try {
+    sessionStorage.removeItem(UPLOAD_BANNER_KEY);
+  } catch {
+    /* ignore */
+  }
+
   title.textContent = doc.title;
   paths.innerHTML = renderPathLines(docPathLines(doc));
   panel.classList.remove("hidden");
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function initUploadResultBanner() {
+  try {
+    if (sessionStorage.getItem(UPLOAD_BANNER_KEY) === "dismissed") {
+      $("#upload-result")?.classList.add("hidden");
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 function bindFileInput(inputId, labelSelector) {
@@ -351,6 +380,26 @@ function scrollToAssessmentResults() {
   target.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function scrollToOpenGaps() {
+  if (!$("#panel-analyze")?.classList.contains("active")) {
+    switchTab("analyze");
+  }
+  requestAnimationFrame(() => {
+    $("#open-items-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+function initCaseStatusNavigation() {
+  $("#case-status-summary")?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-case-nav]");
+    if (!link) return;
+    event.preventDefault();
+    const target = link.dataset.caseNav;
+    if (target === "library") switchTab("library");
+    else if (target === "open-gaps") scrollToOpenGaps();
+  });
+}
+
 function initScrollTop() {
   const btn = $("#btn-scroll-top");
   if (!btn) return;
@@ -381,8 +430,7 @@ function setAnalyzeActionsExpanded(expanded) {
 }
 
 function renderCaseStatus() {
-  const lead = $("#case-status-lead");
-  const details = $("#case-status-details");
+  const summary = $("#case-status-summary");
   const cta = $("#case-status-cta");
   const runBtn = $("#btn-case-run-baseline");
   const docCount = state.documents.length;
@@ -391,35 +439,30 @@ function renderCaseStatus() {
 
   $("#btn-export-pdf")?.classList.toggle("hidden", !analysis);
 
-  if (lead) {
-    if (!analysis) {
-      lead.textContent =
-        docCount === 0
-          ? "No documents on file yet."
-          : `${docCount} document${docCount === 1 ? "" : "s"} on file. No assessment has been run.`;
-    } else {
-      lead.textContent = `${analysisTypeLabel(analysis.analysis_type)} · ${openCount} open gap${openCount === 1 ? "" : "s"}`;
-    }
-  }
+  if (summary) {
+    const parts = [`<span class="case-status-heading">Case status</span>`];
+    const docLabel = `${docCount} document${docCount === 1 ? "" : "s"}`;
+    parts.push(
+      `<a href="#" class="case-status-link" data-case-nav="library">${docLabel}</a>`
+    );
 
-  if (details) {
-    const rows = [
-      `<li><span class="case-status-label">Documents</span><span>${docCount} stored</span></li>`,
-    ];
     if (analysis) {
-      rows.push(
-        `<li><span class="case-status-label">Assessment date</span><span>${escapeHtml(formatEasternTimestamp(analysis.created_at))}</span></li>`,
-        `<li><span class="case-status-label">Open gaps</span><span>${openCount}</span></li>`
+      parts.push(
+        `<span class="case-status-sep">·</span>`,
+        `<span>${escapeHtml(analysisTypeLabel(analysis.analysis_type))}</span>`,
+        `<span class="case-status-sep">·</span>`,
+        `<span>${escapeHtml(formatEasternTimestamp(analysis.created_at))}</span>`,
+        `<span class="case-status-sep">·</span>`,
+        `<a href="#" class="case-status-link" data-case-nav="open-gaps">${openCount} open gap${openCount === 1 ? "" : "s"}</a>`
       );
-      if (analysis.model) {
-        rows.push(
-          `<li><span class="case-status-label">Model</span><span>${escapeHtml(analysis.model)}</span></li>`
-        );
-      }
     } else {
-      rows.push(`<li><span class="case-status-label">Assessment</span><span>Not run</span></li>`);
+      parts.push(
+        `<span class="case-status-sep">·</span>`,
+        `<span>${docCount === 0 ? "No documents yet" : "No assessment"}</span>`
+      );
     }
-    details.innerHTML = rows.join("");
+
+    summary.innerHTML = parts.join(" ");
   }
 
   if (cta && runBtn) {
@@ -1595,6 +1638,8 @@ function bootstrapUi() {
   initTheme();
   initScrollTop();
   initInvestigationGuidancePresets();
+  initUploadResultBanner();
+  initCaseStatusNavigation();
   updateReportDateTime();
   renderCaseStatus();
 }
@@ -1615,6 +1660,7 @@ $$(".tab").forEach((tab) =>
   tab.addEventListener("click", () => switchTab(tab.dataset.tab))
 );
 
+safeOn("#btn-dismiss-upload", "click", dismissUploadResult);
 safeOn("#btn-close-detail", "click", () => closeDocumentDetail());
 safeOn("#btn-refresh-docs", "click", () => loadDocuments().catch((e) => toast(e.message, "error")));
 safeOn("#btn-refresh-history", "click", () => loadHistory().catch((e) => toast(e.message, "error")));

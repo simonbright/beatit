@@ -59,7 +59,10 @@
 
   <main class="container">
     <div id="upload-result" class="card upload-result hidden" aria-live="polite">
-      <h3>Last upload</h3>
+      <div class="upload-result-header row-between wrap">
+        <h3>Last upload</h3>
+        <button type="button" class="btn ghost upload-result-dismiss" id="btn-dismiss-upload">Dismiss</button>
+      </div>
       <p id="upload-result-title" class="upload-result-title"></p>
       <div id="upload-result-paths" class="doc-paths"></div>
     </div>
@@ -75,8 +78,8 @@
     <!-- HOME / ANALYZE -->
     <section id="panel-analyze" class="panel active">
       <div class="card case-status-card" id="case-status-card">
-        <div class="row-between wrap case-status-header">
-          <h2 class="case-status-title">Case status</h2>
+        <div class="case-status-row row-between wrap">
+          <p id="case-status-summary" class="case-status-summary">Loading…</p>
           <div class="case-status-header-actions">
             <button type="button" class="btn secondary hidden" id="btn-export-pdf" title="Download assessment as PDF">
               Export PDF
@@ -84,8 +87,6 @@
             <button type="button" class="btn ghost" id="btn-case-add-data">Add data</button>
           </div>
         </div>
-        <p id="case-status-lead" class="case-status-lead">Loading…</p>
-        <ul id="case-status-details" class="case-status-details"></ul>
         <div id="case-status-cta" class="case-status-cta hidden">
           <button type="button" class="btn primary" id="btn-case-run-baseline">Run baseline assessment</button>
         </div>
@@ -121,7 +122,7 @@
           <div id="full-assessment-refs" class="section-references hidden"></div>
         </div>
 
-        <div class="card open-items-card">
+        <div class="card open-items-card" id="open-items-card">
           <h3>Open gaps</h3>
           <p class="muted small open-items-hint">Prioritized items still to resolve. Click Explore on a row to investigate.</p>
           <div class="table-wrap">
