@@ -26,14 +26,19 @@
     <div class="page-bg-water"></div>
   </div>
 
-  <header class="header">
+  <header class="header report-header">
     <div class="header-inner">
       <div class="brand">
-        <img src="/static/favicon.svg" alt="" class="brand-duck" width="44" height="44">
+        <a href="/" class="brand-duck-link" aria-label="BeatIt home">
+          <img src="/static/favicon.svg" alt="" class="brand-duck" width="52" height="52">
+        </a>
         <div>
           <h1>BeatIt</h1>
-          <p class="subtitle">Your calm companion for the journey ahead</p>
+          <p class="subtitle">Oncology case analysis</p>
         </div>
+      </div>
+      <div class="report-meta" aria-label="Date and time">
+        <time id="report-datetime" datetime=""></time>
       </div>
       <div class="header-actions">
         <div class="status-pill hidden" id="llm-status" aria-live="polite"></div>
@@ -60,70 +65,123 @@
     </div>
 
     <div class="tabs" role="tablist">
-      <button class="tab active" data-tab="analyze" role="tab">Analyze</button>
+      <button class="tab active" data-tab="analyze" role="tab">Home</button>
       <button class="tab" data-tab="ingest" role="tab">Add data</button>
       <button class="tab" data-tab="library" role="tab">Library</button>
       <button class="tab" data-tab="history" role="tab">History</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </div>
 
-    <!-- ANALYZE -->
+    <!-- HOME / ANALYZE -->
     <section id="panel-analyze" class="panel active">
-      <div class="card executive-summary-card" id="executive-summary-card">
-        <div class="row-between wrap">
-          <h3>Executive summary</h3>
-          <div class="assessment-header-actions">
-            <button type="button" class="btn secondary hidden" id="btn-export-pdf" title="Download executive summary and latest assessment as PDF">
+      <div class="card case-status-card" id="case-status-card">
+        <div class="row-between wrap case-status-header">
+          <h2 class="case-status-title">Case status</h2>
+          <div class="case-status-header-actions">
+            <button type="button" class="btn secondary hidden" id="btn-export-pdf" title="Download assessment as PDF">
               Export PDF
             </button>
-            <time class="assessment-timestamp muted small" id="executive-summary-time"></time>
+            <button type="button" class="btn ghost" id="btn-case-add-data">Add data</button>
           </div>
         </div>
+        <p id="case-status-lead" class="case-status-lead">Loading…</p>
+        <ul id="case-status-details" class="case-status-details"></ul>
+        <div id="case-status-cta" class="case-status-cta hidden">
+          <button type="button" class="btn primary" id="btn-case-run-baseline">Run baseline assessment</button>
+        </div>
+      </div>
 
-        <div class="source-legend" id="source-legend">
-          <p class="source-legend-title">Source tags — every claim must be labeled</p>
-          <ul class="source-legend-list">
-            <li><span class="source-tag source-document">Document</span> Hard data from stored records</li>
-            <li><span class="source-tag source-context">Patient context</span> From settings only — not verified record</li>
-            <li><span class="source-tag source-inference">AI inference</span> Interpretation — not verified</li>
-            <li><span class="source-tag source-unknown">Unknown</span> Not in documents — do not treat as fact</li>
-          </ul>
-          <p class="source-legend-note"><strong>Staging</strong> requires a <span class="source-tag source-document">Document</span> tag with cited evidence. Never infer stage without hard data.</p>
+      <div id="analyze-results-section" class="analyze-results-section hidden">
+        <div class="card executive-summary-card" id="executive-summary-card">
+          <h3>Executive summary</h3>
+          <p class="assessment-as-of muted small">As of <time id="executive-summary-time"></time></p>
+
+          <details class="source-legend-wrap" id="source-legend-wrap">
+            <summary class="source-legend-summary">How source citations work</summary>
+            <div class="source-legend" id="source-legend">
+              <ul class="source-legend-list">
+                <li><span class="source-tag source-document">Document</span> Hard data from stored records</li>
+                <li><span class="source-tag source-context">Patient context</span> From settings — not verified record</li>
+                <li><span class="source-tag source-inference">AI inference</span> Interpretation — not verified</li>
+                <li><span class="source-tag source-unknown">Unknown</span> Not in documents — do not treat as fact</li>
+              </ul>
+              <p class="source-legend-note">Numbered citations like <sup class="ref-cite">[1]</sup> link to reference lists in the appendix.</p>
+            </div>
+          </details>
+
+          <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
+
+          <div id="executive-summary-text" class="executive-summary-text"></div>
+          <div id="executive-summary-refs" class="section-references hidden"></div>
         </div>
 
-        <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
-
-        <div id="executive-summary-text" class="executive-summary-text">
-          <p class="muted empty-assessment">Run an assessment to see a summary and open items here.</p>
+        <div class="card full-assessment-card hidden" id="full-assessment-card">
+          <h3>Full assessment</h3>
+          <div id="full-assessment-body" class="sourced-text assessment-body-text numbered-text"></div>
+          <div id="full-assessment-refs" class="section-references hidden"></div>
         </div>
 
-        <h4 class="open-items-heading">Next steps &amp; open items</h4>
-        <p class="muted small open-items-hint">Use <strong>Explore</strong> to open an item. Type and status are labels only — add comments or resolve in the detail panel.</p>
-        <div class="table-wrap">
-          <table class="open-items-table" id="open-items-table">
-            <thead>
-              <tr>
-                <th scope="col">#</th>
-                <th scope="col">Item</th>
-                <th scope="col">Type</th>
-                <th scope="col">Status</th>
-                <th scope="col">Action</th>
-              </tr>
-            </thead>
-            <tbody id="open-items-body">
-              <tr class="empty-row">
-                <td colspan="5" class="muted">No open items yet.</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="card open-items-card">
+          <h3>Open gaps</h3>
+          <p class="muted small open-items-hint">Prioritized items still to resolve. Click Explore on a row to investigate.</p>
+          <div class="table-wrap">
+            <table class="open-items-table" id="open-items-table">
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">Item</th>
+                  <th scope="col" class="col-type">Type</th>
+                  <th scope="col" class="col-status">Status</th>
+                  <th scope="col" class="col-action">Action</th>
+                </tr>
+              </thead>
+              <tbody id="open-items-body">
+                <tr class="empty-row">
+                  <td colspan="5" class="muted">No open items yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
+      </div>
 
-        <div class="card open-item-panel hidden" id="open-item-panel">
+      <div class="card open-item-panel hidden" id="open-item-panel">
           <div class="row-between wrap">
             <h4 id="open-item-panel-title">Open item investigation</h4>
             <button type="button" class="btn ghost" id="btn-close-open-item">Close</button>
           </div>
           <div class="open-item-meta" id="open-item-meta"></div>
+
+          <div class="open-item-investigation-section">
+            <h5>Investigation guidance</h5>
+            <p class="muted small">Add instructions for this run, or pick a suggestion. Results stay as a draft until you accept or discard them.</p>
+            <div class="investigation-guidance-presets" id="investigation-guidance-presets"></div>
+            <label class="open-item-guidance-form">Your guidance
+              <textarea id="open-item-guidance" rows="4" placeholder="e.g. Focus on CT and pathology only. What staging data is still missing?"></textarea>
+            </label>
+            <button type="button" class="btn primary" id="btn-investigate-item">Run investigation</button>
+            <div id="open-item-loading" class="loading hidden">Running focused investigation…</div>
+          </div>
+
+          <div id="open-item-draft-review" class="open-item-draft-review hidden">
+            <h5>Raw investigation results — review before integrating</h5>
+            <p class="muted small" id="open-item-draft-meta"></p>
+            <article id="open-item-draft-raw" class="result investigation-draft-raw sourced-text"></article>
+            <label class="open-item-draft-edit-form">Edit before accepting (optional)
+              <textarea id="open-item-draft-edit" rows="8" placeholder="Adjust wording or trim sections before accepting…"></textarea>
+            </label>
+            <div class="investigation-review-actions">
+              <button type="button" class="btn primary" id="btn-accept-investigation">Accept findings</button>
+              <button type="button" class="btn secondary" id="btn-comment-investigation">Save as comment only</button>
+              <button type="button" class="btn ghost" id="btn-discard-investigation">Discard draft</button>
+            </div>
+          </div>
+
+          <div id="open-item-accepted-review" class="open-item-accepted-review hidden">
+            <h5>Accepted investigation</h5>
+            <p class="muted small" id="open-item-accepted-meta"></p>
+            <article id="open-item-investigation" class="result investigation-body sourced-text"></article>
+          </div>
 
           <div class="open-item-comments-section">
             <h5>Comments</h5>
@@ -137,49 +195,43 @@
           </div>
 
           <div class="open-item-actions row-between wrap">
-            <button type="button" class="btn primary" id="btn-investigate-item">Run investigation</button>
             <button type="button" class="btn secondary" id="btn-resolve-item">Resolve</button>
             <button type="button" class="btn ghost hidden" id="btn-reopen-item">Reopen</button>
           </div>
-          <div id="open-item-loading" class="loading hidden">Running focused investigation…</div>
-          <article id="open-item-investigation" class="result investigation-body">
-            <p class="muted">Select an open item and run a focused investigation. Results appear here with source tags — separate from the full assessment.</p>
-          </article>
-        </div>
       </div>
 
-      <div class="card latest-assessment-card" id="latest-assessment-card">
-        <div class="row-between wrap">
-          <h3>Latest assessment</h3>
-          <time class="assessment-timestamp muted small" id="latest-assessment-time"></time>
+      <details class="card analyze-actions-card" id="analyze-actions-card" open>
+        <summary class="analyze-actions-summary">
+          <span class="analyze-actions-summary-title">Run further analysis</span>
+          <span class="muted small analyze-actions-summary-hint">Baseline, summarize, or custom question</span>
+        </summary>
+        <div class="analyze-actions-body">
+          <p class="muted small">Uses all stored documents unless you select specific ones in the library.</p>
+
+          <div class="analyze-actions">
+            <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
+            <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
+          </div>
+
+          <label>Your question (optional)
+            <textarea id="analyze-query" rows="3" placeholder="Ask a specific question…"></textarea>
+          </label>
+
+          <div class="row-between wrap">
+            <span class="muted small" id="selected-count">Using all documents</span>
+            <button class="btn primary" id="btn-analyze">Run custom analysis</button>
+          </div>
+
+          <div id="analyze-running-banner" class="analysis-running-banner hidden" role="status" aria-live="polite">
+            Analysis in progress — results will update above when finished.
+          </div>
+          <div id="analyze-loading" class="loading hidden">Running analysis in the background… this may take several minutes.</div>
         </div>
-        <div id="assessment-source-notice" class="source-attribution-notice hidden" role="status"></div>
-        <p class="source-attribution-banner muted small">All clinical statements below must carry a <code>[SOURCE: …]</code> tag. Staging and metastasis status require document evidence — not inference alone.</p>
-        <div class="assessment-meta doc-meta" id="latest-assessment-meta"></div>
-        <article id="latest-assessment-body" class="result assessment-body">
-          <p class="muted empty-assessment">No assessment yet. Run an analysis below — your most recent result will always stay here.</p>
-        </article>
-      </div>
+      </details>
 
-      <div class="card">
-        <h3>Run new analysis</h3>
-        <p class="muted">Uses OpenRouter by default until Ollama is configured. Analysis uses all stored documents unless you select specific ones in the library.</p>
-
-        <div class="analyze-actions">
-          <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
-          <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
-        </div>
-
-        <label>Your question
-          <textarea id="analyze-query" rows="4" placeholder="e.g. What staging workup is still needed? What are resectability considerations with possible liver mets?"></textarea>
-        </label>
-
-        <div class="row-between wrap">
-          <span class="muted small" id="selected-count">Using all documents</span>
-          <button class="btn primary" id="btn-analyze">Run analysis</button>
-        </div>
-
-        <div id="analyze-loading" class="loading hidden">Running analysis… this may take a minute.</div>
+      <div id="references-appendix" class="card references-appendix hidden">
+        <h4 class="references-appendix-heading">Appendix: References</h4>
+        <ol id="references-appendix-list" class="references-appendix-list"></ol>
       </div>
     </section>
 
@@ -210,11 +262,11 @@
 
         <article class="card">
           <h3>PDF document</h3>
-          <label>Title (optional)<input type="text" id="pdf-title"></label>
           <label class="file-label">
             <input type="file" id="pdf-file" accept=".pdf,application/pdf">
             <span>Choose PDF file</span>
           </label>
+          <label>Title<input type="text" id="pdf-title" placeholder="Defaults to the PDF filename"></label>
           <button class="btn primary" id="btn-ingest-pdf">Upload PDF</button>
         </article>
 
@@ -228,25 +280,52 @@
           </label>
           <button class="btn primary" id="btn-ingest-video">Upload video</button>
         </article>
+
+        <article class="card ingest-card-wide">
+          <h3>Medical imaging</h3>
+          <p class="muted small">CT, MRI, X-ray, and DICOM files. Choose multiple files or upload an entire study folder — large batches upload one file at a time.</p>
+          <label>Title prefix (optional)<input type="text" id="imaging-title-prefix" placeholder="e.g. CT abdomen — June 2026"></label>
+          <label>Clinical notes (optional)<textarea id="imaging-notes" rows="3" placeholder="Study context, comparison notes, or findings summary for analysis"></textarea></label>
+          <div class="imaging-picker-actions">
+            <label class="btn secondary file-picker-btn">
+              <input type="file" id="imaging-files" multiple accept=".dcm,.dicom,.jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.webp,.nii,.mha,.mhd,.zip,application/dicom,application/zip,image/*" hidden>
+              Choose files
+            </label>
+            <label class="btn secondary file-picker-btn">
+              <input type="file" id="imaging-folder" webkitdirectory multiple hidden>
+              Choose folder
+            </label>
+            <button type="button" class="btn ghost" id="btn-clear-imaging">Clear selection</button>
+          </div>
+          <div id="imaging-selection" class="imaging-selection hidden" aria-live="polite"></div>
+          <div id="imaging-upload-progress" class="loading hidden" role="status"></div>
+          <button class="btn primary" id="btn-ingest-imaging" disabled>Upload imaging</button>
+        </article>
       </div>
     </section>
 
     <!-- LIBRARY -->
     <section id="panel-library" class="panel">
+      <div class="card hidden doc-detail-card" id="doc-detail">
+        <div class="row-between wrap">
+          <h3 id="doc-detail-title">Document</h3>
+          <button class="btn ghost" id="btn-close-detail">Close</button>
+        </div>
+        <div id="doc-detail-meta" class="doc-meta"></div>
+        <div id="doc-detail-actions" class="doc-detail-actions"></div>
+        <div id="doc-detail-source" class="doc-detail-source hidden"></div>
+        <div id="doc-detail-text-wrap" class="doc-detail-text-wrap">
+          <h4 class="doc-detail-section-title">Extracted text &amp; notes</h4>
+          <pre id="doc-detail-text" class="doc-text"></pre>
+        </div>
+      </div>
+
       <div class="card">
         <div class="row-between">
           <h3>Stored documents</h3>
           <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
         </div>
         <div id="documents-list" class="documents-list"></div>
-      </div>
-      <div class="card hidden" id="doc-detail">
-        <div class="row-between">
-          <h3 id="doc-detail-title">Document</h3>
-          <button class="btn ghost" id="btn-close-detail">Close</button>
-        </div>
-        <div id="doc-detail-paths" class="doc-paths"></div>
-        <pre id="doc-detail-text" class="doc-text"></pre>
       </div>
     </section>
 
@@ -300,6 +379,10 @@
   <footer class="app-footer" aria-label="App version">
     <p class="app-footer-text" id="app-version">BeatIt</p>
   </footer>
+
+  <button type="button" class="scroll-top-btn" id="btn-scroll-top" aria-label="Scroll to top" title="Back to top" hidden>
+    <span aria-hidden="true">↑</span>
+  </button>
 
   <div id="toast" class="toast hidden"></div>
 

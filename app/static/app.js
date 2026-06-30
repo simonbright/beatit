@@ -7,6 +7,8 @@ const state = {
   settings: {},
   selectedOpenItemId: null,
   selectedOpenItem: null,
+  analysisRunning: false,
+  analysisJobId: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -61,9 +63,22 @@ async function api(path, options = {}) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || data.message || `Request failed (${res.status})`);
+    let message = data.detail || data.message || `Request failed (${res.status})`;
+    if (res.status === 502 && path.includes("/analyze")) {
+      message =
+        typeof data.detail === "string" && data.detail.startsWith("Analysis failed:")
+          ? data.detail
+          : "Analysis failed — the model may have timed out or returned an error. Wait a moment and try again.";
+    }
+    const error = new Error(message);
+    error.status = res.status;
+    throw error;
   }
   return data;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatVersionUpdated(isoDate) {
@@ -160,6 +175,11 @@ function docPathLines(doc) {
   const lines = [];
   const meta = doc.metadata || {};
   if (meta.original_filename) lines.push({ label: "Original file", value: meta.original_filename });
+  if (meta.modality) lines.push({ label: "Modality", value: meta.modality });
+  if (meta.file_size_label) lines.push({ label: "File size", value: meta.file_size_label });
+  if (meta.relative_path && meta.relative_path !== meta.original_filename) {
+    lines.push({ label: "Folder path", value: meta.relative_path });
+  }
   if (doc.file_path) lines.push({ label: "Stored file", value: doc.file_path });
   if (doc.extracted_path) lines.push({ label: "Extracted text", value: doc.extracted_path });
   if (doc.source_uri) lines.push({ label: "Source URL", value: doc.source_uri });
@@ -204,6 +224,223 @@ function bindFileInput(inputId, labelSelector) {
     }
     nameEl.textContent = `Selected: ${file.name}`;
   });
+}
+
+function defaultPdfTitle(file) {
+  return file?.name || "";
+}
+
+function bindPdfFileInput() {
+  const input = $("#pdf-file");
+  const titleInput = $("#pdf-title");
+  if (!input) return;
+
+  titleInput?.addEventListener("input", () => {
+    titleInput.dataset.userEdited = "1";
+  });
+
+  input.addEventListener("change", () => {
+    const label = input.closest(".file-label");
+    const file = input.files[0];
+    if (label) {
+      let nameEl = label.querySelector(".file-name");
+      if (!file) {
+        nameEl?.remove();
+        if (titleInput && titleInput.dataset.userEdited !== "1") titleInput.value = "";
+        return;
+      }
+      if (!nameEl) {
+        nameEl = document.createElement("span");
+        nameEl.className = "file-name";
+        label.appendChild(nameEl);
+      }
+      nameEl.textContent = `Selected: ${file.name}`;
+    }
+    if (file && titleInput && titleInput.dataset.userEdited !== "1") {
+      titleInput.value = defaultPdfTitle(file);
+    }
+  });
+}
+
+function setAnalysisRunning(running, jobId = null) {
+  state.analysisRunning = running;
+  state.analysisJobId = running ? jobId : null;
+  $("#analyze-running-banner")?.classList.toggle("hidden", !running);
+  $("#analyze-loading")?.classList.toggle("hidden", !running);
+  if (running) {
+    $("#analyze-actions-card")?.setAttribute("open", "");
+  }
+  ["#btn-baseline", "#btn-summarize", "#btn-analyze"].forEach((sel) => {
+    const btn = $(sel);
+    if (!btn) return;
+    btn.disabled = running;
+    btn.setAttribute("aria-disabled", running ? "true" : "false");
+  });
+}
+
+async function pollAnalysisJob(jobId) {
+  const deadline = Date.now() + 30 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const data = await api(`/api/analyze/jobs/${jobId}`);
+    const job = data.job;
+    if (job.status === "completed") {
+      if (job.analysis) return job.analysis;
+      const latest = await api("/api/analyses/latest");
+      if (latest.analysis) return latest.analysis;
+      throw new Error("Analysis finished but results could not be loaded. Refresh the page.");
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error || "Analysis failed");
+    }
+    await sleep(2000);
+  }
+  const latest = await api("/api/analyses/latest");
+  if (latest.analysis) return latest.analysis;
+  throw new Error("Analysis is taking longer than expected. Refresh the page to check status.");
+}
+
+async function startAnalysisJob({ query = "", baseline = false, summarize = false } = {}) {
+  const docIds = state.selectedIds.size ? [...state.selectedIds] : null;
+
+  if (summarize) {
+    const qs = docIds ? "?" + docIds.map((id) => `document_ids=${encodeURIComponent(id)}`).join("&") : "";
+    const data = await api(`/api/analyze/summarize${qs}`, { method: "POST" });
+    return data.job.id;
+  }
+
+  const data = await api("/api/analyze", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      document_ids: docIds,
+      include_baseline_assessment: baseline,
+    }),
+  });
+  return data.job.id;
+}
+
+function finishAnalysisRun(analysis) {
+  switchTab("analyze");
+  renderLatestAssessment(analysis);
+  state.analyses = [analysis, ...state.analyses.filter((a) => a.id !== analysis.id)];
+  toast(`Assessment saved · ${formatTimestamp(analysis.created_at)}`);
+  scrollToAssessmentResults();
+}
+
+function scrollToAssessmentResults() {
+  const target = $("#executive-summary-card") || $("#analyze-results-section");
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function initScrollTop() {
+  const btn = $("#btn-scroll-top");
+  if (!btn) return;
+
+  const threshold = 320;
+  const update = () => {
+    const show = window.scrollY > threshold;
+    btn.classList.toggle("is-visible", show);
+    btn.hidden = !show;
+  };
+
+  btn.addEventListener("click", () => {
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth";
+    window.scrollTo({ top: 0, behavior });
+  });
+
+  window.addEventListener("scroll", update, { passive: true });
+  update();
+}
+
+function setAnalyzeActionsExpanded(expanded) {
+  const card = $("#analyze-actions-card");
+  if (!card) return;
+  if (expanded) card.setAttribute("open", "");
+  else card.removeAttribute("open");
+}
+
+function renderCaseStatus() {
+  const lead = $("#case-status-lead");
+  const details = $("#case-status-details");
+  const cta = $("#case-status-cta");
+  const runBtn = $("#btn-case-run-baseline");
+  const docCount = state.documents.length;
+  const analysis = state.latestAnalysis;
+  const openCount = analysis?.open_items?.length || 0;
+
+  $("#btn-export-pdf")?.classList.toggle("hidden", !analysis);
+
+  if (lead) {
+    if (!analysis) {
+      lead.textContent =
+        docCount === 0
+          ? "No documents on file yet."
+          : `${docCount} document${docCount === 1 ? "" : "s"} on file. No assessment has been run.`;
+    } else {
+      lead.textContent = `${analysisTypeLabel(analysis.analysis_type)} · ${openCount} open gap${openCount === 1 ? "" : "s"}`;
+    }
+  }
+
+  if (details) {
+    const rows = [
+      `<li><span class="case-status-label">Documents</span><span>${docCount} stored</span></li>`,
+    ];
+    if (analysis) {
+      rows.push(
+        `<li><span class="case-status-label">Assessment date</span><span>${escapeHtml(formatEasternTimestamp(analysis.created_at))}</span></li>`,
+        `<li><span class="case-status-label">Open gaps</span><span>${openCount}</span></li>`
+      );
+      if (analysis.model) {
+        rows.push(
+          `<li><span class="case-status-label">Model</span><span>${escapeHtml(analysis.model)}</span></li>`
+        );
+      }
+    } else {
+      rows.push(`<li><span class="case-status-label">Assessment</span><span>Not run</span></li>`);
+    }
+    details.innerHTML = rows.join("");
+  }
+
+  if (cta && runBtn) {
+    if (analysis) {
+      cta.classList.add("hidden");
+    } else {
+      cta.classList.remove("hidden");
+      runBtn.textContent = docCount === 0 ? "Add data" : "Run baseline assessment";
+    }
+  }
+}
+
+function updateHomeWorkflow() {
+  renderCaseStatus();
+}
+
+function renderHomeState(hasAssessment) {
+  $("#analyze-results-section")?.classList.toggle("hidden", !hasAssessment);
+  $("#analyze-actions-card")?.classList.toggle("analyze-actions-secondary", hasAssessment);
+  if (hasAssessment && !state.analysisRunning) {
+    setAnalyzeActionsExpanded(false);
+  } else if (!hasAssessment) {
+    setAnalyzeActionsExpanded(true);
+  }
+  renderCaseStatus();
+}
+
+async function resumeActiveAnalysisJob() {
+  try {
+    const data = await api("/api/analyze/jobs/active");
+    if (!data.job) return;
+    setAnalysisRunning(true, data.job.id);
+    const analysis = await pollAnalysisJob(data.job.id);
+    finishAnalysisRun(analysis);
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    setAnalysisRunning(false);
+  }
 }
 
 function switchTab(name) {
@@ -307,7 +544,7 @@ function updateSelectedLabel() {
 function renderDocuments() {
   const list = $("#documents-list");
   if (!state.documents.length) {
-    list.innerHTML = `<p class="muted">No documents yet. Add clinical notes, URLs, PDFs, or YouTube transcripts.</p>`;
+    list.innerHTML = `<p class="muted">No documents yet. Add clinical notes, URLs, PDFs, imaging, or YouTube transcripts.</p>`;
     return;
   }
 
@@ -315,7 +552,13 @@ function renderDocuments() {
     .map((doc) => {
       const selected = state.selectedIds.has(doc.id);
       const meta = doc.metadata || {};
-      const excerpt = meta.page_count ? `${meta.page_count} pages` : "";
+      const excerpt = meta.page_count
+        ? `${meta.page_count} pages`
+        : meta.modality
+          ? meta.modality
+          : meta.file_size_label
+            ? meta.file_size_label
+            : "";
       const paths = renderPathLines(docPathLines(doc));
       return `
         <article class="doc-item ${selected ? "selected" : ""}" data-id="${doc.id}">
@@ -366,6 +609,62 @@ function formatTimestamp(iso) {
   }
 }
 
+function formatEasternTimestamp(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatReportDateTime(date) {
+  const compact = window.matchMedia("(max-width: 600px)").matches;
+  if (compact) {
+    return date.toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  }
+  return date.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
+function updateReportDateTime(iso) {
+  const el = $("#report-datetime");
+  if (!el) return;
+  const date = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    el.textContent = iso || "";
+    el.removeAttribute("datetime");
+    return;
+  }
+  el.textContent = formatReportDateTime(date);
+  el.dateTime = iso || date.toISOString();
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -383,6 +682,10 @@ function sourceTagClass(tagText) {
   return "source-inference";
 }
 
+function formatMarkdownEmphasis(escaped) {
+  return escaped.replace(/\*\*([^*\n]+)\*\*/g, '<span class="text-emphasis">$1</span>');
+}
+
 function formatWithSources(text) {
   if (!text) return "";
   const escaped = escapeHtml(text);
@@ -393,16 +696,105 @@ function formatWithSources(text) {
       return `<span class="source-tag-inline ${cls}" title="Source attribution">[SOURCE: ${inner}]</span>`;
     }
   );
-  return withTags.replace(/\n/g, "<br>");
+  return formatMarkdownEmphasis(withTags).replace(/\n/g, "<br>");
+}
+
+function formatNumberedReferences(text) {
+  if (!text) return "";
+  const escaped = escapeHtml(text);
+  return formatMarkdownEmphasis(escaped)
+    .replace(/\[(\d+)\]/g, '<sup class="ref-cite" title="Reference $1">[$1]</sup>')
+    .replace(/\n/g, "<br>");
+}
+
+function renderReferenceList(refs, heading = "References") {
+  if (!refs || !refs.length) return "";
+  const items = refs
+    .map((ref) => `<li><span class="ref-num">[${escapeHtml(String(ref.num))}]</span> ${escapeHtml(ref.label || "")}</li>`)
+    .join("");
+  return `
+    <div class="section-references-inner">
+      <h5>${escapeHtml(heading)}</h5>
+      <ol class="reference-list">${items}</ol>
+    </div>`;
+}
+
+function renderReferencesBlock(element, refs, heading = "References") {
+  if (!element) return;
+  if (!refs || !refs.length) {
+    element.classList.add("hidden");
+    element.innerHTML = "";
+    return;
+  }
+  element.classList.remove("hidden");
+  element.innerHTML = renderReferenceList(refs, heading);
+}
+
+function renderReferencesAppendix(analysis) {
+  const wrap = $("#references-appendix");
+  const list = $("#references-appendix-list");
+  const appendix = analysis?.references || [];
+  if (!wrap || !list) return;
+  if (!appendix.length) {
+    wrap.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  list.innerHTML = appendix
+    .map((ref) => `<li><span class="ref-num">[${escapeHtml(String(ref.num))}]</span> ${escapeHtml(ref.label || "")}</li>`)
+    .join("");
 }
 
 function openItemStatusLabel(status) {
   const s = String(status || "open").toLowerCase();
   if (s === "investigating") return "Investigating";
+  if (s === "pending_review") return "Ready to review";
   if (s === "investigated") return "Investigated";
   if (s === "resolved") return "Resolved";
   if (s === "closed") return "Closed";
   return "Open";
+}
+
+const INVESTIGATION_GUIDANCE_PRESETS = [
+  "Focus on documented evidence only — cite every claim with [SOURCE: …]",
+  "What additional tests or records would resolve this gap?",
+  "Summarize staging implications only if supported by imaging or pathology reports",
+  "Compare conflicting information across stored documents",
+  "Outline surgical vs systemic options relevant to this item",
+  "Keep the response concise — bullet points preferred",
+];
+
+function initInvestigationGuidancePresets() {
+  const container = $("#investigation-guidance-presets");
+  if (!container) return;
+  container.innerHTML = INVESTIGATION_GUIDANCE_PRESETS.map(
+    (text, index) =>
+      `<button type="button" class="btn ghost guidance-preset" data-index="${index}">${escapeHtml(text)}</button>`
+  ).join("");
+  container.querySelectorAll(".guidance-preset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const text = INVESTIGATION_GUIDANCE_PRESETS[Number(btn.dataset.index)];
+      appendInvestigationGuidance(text);
+    });
+  });
+}
+
+function appendInvestigationGuidance(text) {
+  const el = $("#open-item-guidance");
+  if (!el || !text) return;
+  const current = el.value.trim();
+  el.value = current ? `${current}\n\n${text}` : text;
+  el.focus();
+}
+
+function getInvestigationGuidanceInput() {
+  return $("#open-item-guidance")?.value.trim() || "";
+}
+
+function setInvestigationGuidanceInput(text) {
+  const el = $("#open-item-guidance");
+  if (el) el.value = text || "";
 }
 
 function isOpenItemClosed(item) {
@@ -411,7 +803,7 @@ function isOpenItemClosed(item) {
 }
 
 function itemChipStatusClass(status) {
-  const s = String(status || "open").toLowerCase();
+  const s = String(status || "open").toLowerCase().replace(/_/g, "-");
   return `item-chip item-chip-status status-${s.replace(/[^a-z0-9-]/g, "")}`;
 }
 
@@ -437,10 +829,17 @@ function renderOpenItemComments(item) {
 function renderOpenItemPanel(item) {
   const panel = $("#open-item-panel");
   const meta = $("#open-item-meta");
-  const body = $("#open-item-investigation");
+  const acceptedBody = $("#open-item-investigation");
+  const acceptedWrap = $("#open-item-accepted-review");
+  const acceptedMeta = $("#open-item-accepted-meta");
+  const draftWrap = $("#open-item-draft-review");
+  const draftRaw = $("#open-item-draft-raw");
+  const draftMeta = $("#open-item-draft-meta");
+  const draftEdit = $("#open-item-draft-edit");
   const title = $("#open-item-panel-title");
   const resolveBtn = $("#btn-resolve-item");
   const reopenBtn = $("#btn-reopen-item");
+  const investigateBtn = $("#btn-investigate-item");
   if (!panel || !item) return;
 
   panel.classList.remove("hidden");
@@ -449,8 +848,45 @@ function renderOpenItemPanel(item) {
     meta.innerHTML = `
       <span class="item-chip item-chip-type">${escapeHtml(item.type || item.item_type || "Item")}</span>
       <span class="${itemChipStatusClass(item.status)}">${escapeHtml(openItemStatusLabel(item.status))}</span>
-      ${item.investigation_at ? `<span class="muted small">Investigation: ${escapeHtml(formatTimestamp(item.investigation_at))}</span>` : ""}
+      ${item.investigation_at ? `<span class="muted small">Accepted: ${escapeHtml(formatTimestamp(item.investigation_at))}</span>` : ""}
       ${item.investigation_model ? `<span class="badge">${escapeHtml(item.investigation_model)}</span>` : ""}`;
+  }
+
+  setInvestigationGuidanceInput(item.investigation_guidance || "");
+
+  const hasDraft = Boolean(item.investigation_draft_response);
+  const hasAccepted = Boolean(item.investigation_response);
+
+  draftWrap?.classList.toggle("hidden", !hasDraft);
+  acceptedWrap?.classList.toggle("hidden", !hasAccepted);
+
+  if (hasDraft && draftRaw) {
+    draftRaw.innerHTML = `<div class="sourced-text">${formatWithSources(item.investigation_draft_response)}</div>`;
+    if (draftMeta) {
+      draftMeta.textContent = [
+        item.investigation_draft_at
+          ? `Draft generated ${formatTimestamp(item.investigation_draft_at)}`
+          : "Draft ready for review",
+        item.investigation_draft_model ? `· ${item.investigation_draft_model}` : "",
+        item.investigation_guidance ? `· Guidance applied` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
+    if (draftEdit) draftEdit.value = item.investigation_draft_response;
+  } else if (draftEdit) {
+    draftEdit.value = "";
+  }
+
+  if (hasAccepted && acceptedBody) {
+    acceptedBody.innerHTML = formatWithSources(item.investigation_response);
+    if (acceptedMeta) {
+      acceptedMeta.textContent = item.investigation_at
+        ? `Accepted ${formatTimestamp(item.investigation_at)}`
+        : "";
+    }
+  } else if (acceptedBody) {
+    acceptedBody.innerHTML = "";
   }
 
   renderOpenItemComments(item);
@@ -458,17 +894,16 @@ function renderOpenItemPanel(item) {
   const closed = isOpenItemClosed(item);
   resolveBtn?.classList.toggle("hidden", closed);
   reopenBtn?.classList.toggle("hidden", !closed);
-
-  if (body) {
-    if (item.investigation_response) {
-      body.innerHTML = formatWithSources(item.investigation_response);
-    } else if (item.status === "investigating") {
-      body.innerHTML = '<p class="muted">Investigation in progress…</p>';
-    } else {
-      body.innerHTML =
-        '<p class="muted">No investigation yet. Use <strong>Run investigation</strong> for a focused analysis with source tags.</p>';
-    }
+  if (investigateBtn) {
+    investigateBtn.disabled = item.status === "investigating";
+    investigateBtn.textContent =
+      item.status === "investigating"
+        ? "Investigation running…"
+        : hasDraft
+          ? "Run investigation again"
+          : "Run investigation";
   }
+
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -500,6 +935,12 @@ async function investigateSelectedOpenItem() {
   const id = state.selectedOpenItemId;
   if (!id) return toast("Select an open item first", "error");
 
+  const item = state.selectedOpenItem;
+  if (item?.investigation_draft_response) {
+    const ok = confirm("Replace the current draft investigation with a new run?");
+    if (!ok) return;
+  }
+
   const loading = $("#open-item-loading");
   const btn = $("#btn-investigate-item");
   loading?.classList.remove("hidden");
@@ -507,18 +948,21 @@ async function investigateSelectedOpenItem() {
 
   try {
     selectOpenItem({ ...state.selectedOpenItem, status: "investigating" });
-    const data = await api(`/api/open-items/${id}/investigate`, { method: "POST" });
-    const item = data.open_item;
-    selectOpenItem(item);
-    updateOpenItemInState(item);
-    toast("Investigation complete");
+    const guidance = getInvestigationGuidanceInput();
+    const data = await api(`/api/open-items/${id}/investigate`, {
+      method: "POST",
+      body: JSON.stringify({ guidance }),
+    });
+    selectOpenItem(data.open_item);
+    updateOpenItemInState(data.open_item);
+    toast("Draft investigation ready — review before accepting");
   } catch (err) {
     toast(err.message, "error");
     if (state.selectedOpenItemId) {
       try {
-        const item = await loadOpenItem(state.selectedOpenItemId);
-        selectOpenItem(item);
-        updateOpenItemInState(item);
+        const refreshed = await loadOpenItem(state.selectedOpenItemId);
+        selectOpenItem(refreshed);
+        updateOpenItemInState(refreshed);
       } catch {
         /* ignore */
       }
@@ -526,6 +970,51 @@ async function investigateSelectedOpenItem() {
   } finally {
     loading?.classList.add("hidden");
     if (btn) btn.disabled = false;
+  }
+}
+
+async function acceptInvestigationDraft() {
+  const id = state.selectedOpenItemId;
+  if (!id) return toast("Select an open item first", "error");
+  const edited = $("#open-item-draft-edit")?.value.trim();
+  const body = edited ? { edited_response: edited } : {};
+  try {
+    const data = await api(`/api/open-items/${id}/investigate/accept`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    selectOpenItem(data.open_item);
+    updateOpenItemInState(data.open_item);
+    toast("Investigation accepted");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+async function discardInvestigationDraft() {
+  const id = state.selectedOpenItemId;
+  if (!id) return toast("Select an open item first", "error");
+  if (!confirm("Discard this draft investigation?")) return;
+  try {
+    const data = await api(`/api/open-items/${id}/investigate/discard`, { method: "POST" });
+    selectOpenItem(data.open_item);
+    updateOpenItemInState(data.open_item);
+    toast("Draft discarded");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+async function commentInvestigationDraft() {
+  const id = state.selectedOpenItemId;
+  if (!id) return toast("Select an open item first", "error");
+  try {
+    const data = await api(`/api/open-items/${id}/investigate/comment`, { method: "POST" });
+    selectOpenItem(data.open_item);
+    updateOpenItemInState(data.open_item);
+    toast("Draft saved as comment");
+  } catch (err) {
+    toast(err.message, "error");
   }
 }
 
@@ -631,98 +1120,111 @@ function renderOpenItemsTable(items) {
 }
 
 function renderSourceAttributionNotice(analysis) {
-  const notices = ["#source-attribution-notice", "#assessment-source-notice"];
+  const el = $("#source-attribution-notice");
+  if (!el) return;
+
   if (!analysis) {
-    notices.forEach((sel) => $(sel)?.classList.add("hidden"));
+    el.classList.add("hidden");
     return;
   }
 
   const level = analysis.source_attribution || "missing";
-  let html = "";
   if (level === "full") {
-    notices.forEach((sel) => $(sel)?.classList.add("hidden"));
+    el.classList.add("hidden");
     return;
   }
+
+  let html = "";
   if (level === "normalized") {
     html =
-      "<strong>Partial source attribution</strong>" +
-      "Informal citations like <code>(CT Report)</code> were converted to " +
-      "<code>[SOURCE: Document \"…\"]</code> tags. Staging lines without document evidence are flagged as " +
-      "<span class=\"source-tag-inline source-inference\">AI inference</span>. " +
-      "Re-run <strong>baseline assessment</strong> for fully LLM-generated tags.";
+      '<span class="notice-title">Partial source attribution.</span> ' +
+      "Informal citations were converted to [SOURCE: …] tags. " +
+      "Re-run baseline assessment for fully LLM-generated tags.";
   } else {
     html =
-      "<strong>Source tags missing</strong>" +
-      "This assessment has no <code>[SOURCE: …]</code> tags. " +
-      "Click <strong>Run baseline assessment</strong> below to regenerate with mandatory source attribution.";
+      '<span class="notice-title">Source tags missing.</span> ' +
+      "Expand Run further analysis and run baseline assessment to regenerate with source attribution.";
   }
 
-  notices.forEach((sel) => {
-    const el = $(sel);
-    if (!el) return;
-    el.classList.remove("hidden");
-    el.className = `source-attribution-notice ${level === "normalized" ? "warn" : "error"}`;
-    el.innerHTML = html;
-  });
+  el.classList.remove("hidden");
+  el.className = `source-attribution-notice ${level === "normalized" ? "warn" : "error"}`;
+  el.innerHTML = html;
 }
 
 function renderLatestAssessment(analysis) {
   state.latestAnalysis = analysis || null;
-  const timeEl = $("#latest-assessment-time");
   const execTimeEl = $("#executive-summary-time");
-  const metaEl = $("#latest-assessment-meta");
-  const bodyEl = $("#latest-assessment-body");
   const execTextEl = $("#executive-summary-text");
+  const legendWrap = $("#source-legend-wrap");
+  const fullCard = $("#full-assessment-card");
+  const fullBody = $("#full-assessment-body");
+  const fullRefs = $("#full-assessment-refs");
+  const summaryRefs = $("#executive-summary-refs");
 
-  if (!bodyEl) return;
+  if (!execTextEl) return;
 
   if (!analysis) {
-    if (timeEl) timeEl.textContent = "";
-    if (execTimeEl) execTimeEl.textContent = "";
-    $("#btn-export-pdf")?.classList.add("hidden");
-    if (metaEl) metaEl.innerHTML = "";
-    if (execTextEl) {
-      execTextEl.innerHTML =
-        '<p class="muted empty-assessment">Run an assessment to see a summary and open items here.</p>';
+    updateReportDateTime();
+    if (execTimeEl) {
+      execTimeEl.textContent = "";
+      execTimeEl.removeAttribute("datetime");
     }
+    legendWrap?.removeAttribute("open");
+    fullCard?.classList.add("hidden");
+    renderReferencesBlock(summaryRefs, []);
+    renderReferencesBlock(fullRefs, []);
+    renderReferencesAppendix(null);
+    execTextEl.innerHTML = "";
+    if (fullBody) fullBody.innerHTML = "";
     renderOpenItemsTable([]);
     selectOpenItem(null);
     renderSourceAttributionNotice(null);
-    bodyEl.innerHTML =
-      '<p class="muted empty-assessment">No assessment yet. Run an analysis below — your most recent result will always stay here.</p>';
+    renderHomeState(false);
     return;
   }
 
-  const ts = formatTimestamp(analysis.created_at);
-  if (timeEl) timeEl.textContent = ts;
-  if (execTimeEl) execTimeEl.textContent = ts;
-  $("#btn-export-pdf")?.classList.remove("hidden");
-  if (metaEl) {
-    metaEl.innerHTML = `
-      <span class="badge">${escapeHtml(analysisTypeLabel(analysis.analysis_type))}</span>
-      <span class="badge">${escapeHtml(analysis.model || "model")}</span>
-      <span>${escapeHtml(truncate(analysis.query, 100))}</span>`;
+  updateReportDateTime(analysis.created_at);
+  if (execTimeEl) {
+    execTimeEl.textContent = formatEasternTimestamp(analysis.created_at);
+    execTimeEl.dateTime = analysis.created_at;
+  }
+  legendWrap?.removeAttribute("open");
+
+  const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
+  const responseDisplay = analysis.response_display || analysis.response || "";
+
+  if (summaryDisplay) {
+    execTextEl.innerHTML = `<div class="numbered-text">${formatNumberedReferences(summaryDisplay)}</div>`;
+  } else {
+    execTextEl.innerHTML = '<p class="muted">No assessment text was returned.</p>';
+  }
+  renderReferencesBlock(summaryRefs, analysis.executive_summary_refs || []);
+
+  if (fullCard && fullBody) {
+    if (responseDisplay) {
+      fullCard.classList.remove("hidden");
+      fullBody.innerHTML = formatNumberedReferences(responseDisplay);
+      renderReferencesBlock(fullRefs, analysis.response_refs || []);
+    } else {
+      fullCard.classList.add("hidden");
+      fullBody.innerHTML = "";
+      renderReferencesBlock(fullRefs, []);
+    }
   }
 
-  const summary = analysis.executive_summary || "";
-  if (execTextEl) {
-    execTextEl.innerHTML = summary
-      ? `<div class="sourced-text">${formatWithSources(summary)}</div>`
-      : '<p class="muted">No executive summary extracted for this assessment.</p>';
-  }
+  renderReferencesAppendix(analysis);
 
   renderOpenItemsTable(analysis.open_items || []);
   renderSourceAttributionNotice(analysis);
-  if (bodyEl) {
-    bodyEl.innerHTML = analysis.response
-      ? `<div class="sourced-text assessment-body-text">${formatWithSources(analysis.response)}</div>`
-      : '<p class="muted empty-assessment">No assessment yet.</p>';
-  }
+  renderHomeState(true);
 }
 
 async function loadLatestAssessment() {
   const data = await api("/api/analyses/latest");
   renderLatestAssessment(data.analysis);
+  if (data.analysis) {
+    state.analyses = [data.analysis, ...state.analyses.filter((a) => a.id !== data.analysis.id)];
+  }
 }
 
 async function exportAssessmentPdf() {
@@ -787,7 +1289,7 @@ function renderHistory() {
           <span class="badge">${escapeHtml(analysisTypeLabel(a.analysis_type))}</span>
           ${isLatest ? '<span class="badge">Latest</span>' : ""}
         </summary>
-        <pre class="doc-text">${escapeHtml(a.response)}</pre>
+        <pre class="doc-text">${escapeHtml(a.response_display || a.response)}</pre>
       </details>`;
     })
     .join("");
@@ -807,17 +1309,92 @@ async function loadDocuments() {
   state.documents = data.documents || [];
   renderDocuments();
   updateSelectedLabel();
+  updateHomeWorkflow();
 }
 
 async function viewDocument(id) {
+  switchTab("library");
   const data = await api(`/api/documents/${id}`);
-  $("#doc-detail").classList.remove("hidden");
-  $("#doc-detail-title").textContent = data.document.title;
-  const pathsEl = $("#doc-detail-paths");
-  if (pathsEl) {
-    pathsEl.innerHTML = renderPathLines(docPathLines(data.document));
+  const panel = $("#doc-detail");
+  const doc = data.document;
+  if (!panel || !doc) return;
+
+  panel.classList.remove("hidden");
+  $("#doc-detail-title").textContent = doc.title;
+
+  const metaEl = $("#doc-detail-meta");
+  if (metaEl) {
+    const meta = doc.metadata || {};
+    metaEl.innerHTML = `
+      <span class="badge">${escapeHtml(doc.source_type || "document")}</span>
+      <span class="muted small">${escapeHtml(formatTimestamp(doc.created_at))}</span>
+      ${meta.modality ? `<span class="badge">${escapeHtml(meta.modality)}</span>` : ""}
+      ${meta.file_size_label ? `<span class="muted small">${escapeHtml(meta.file_size_label)}</span>` : ""}`;
   }
-  $("#doc-detail-text").textContent = data.extracted_text || "[No extracted text]";
+
+  const actionsEl = $("#doc-detail-actions");
+  const sourceEl = $("#doc-detail-source");
+  const textEl = $("#doc-detail-text");
+  const textWrap = $("#doc-detail-text-wrap");
+
+  if (actionsEl) {
+    const links = [];
+    if (data.file_url) {
+      links.push(
+        `<a class="btn secondary" href="${escapeHtml(data.file_url)}" target="_blank" rel="noopener">Open original file</a>`
+      );
+      links.push(
+        `<a class="btn ghost" href="${escapeHtml(data.file_url)}" download>Download</a>`
+      );
+    }
+    if (data.source_url) {
+      links.push(
+        `<a class="btn ghost" href="${escapeHtml(data.source_url)}" target="_blank" rel="noopener">Open source URL</a>`
+      );
+    }
+    actionsEl.innerHTML = links.join("") || '<span class="muted small">No original file stored for this item.</span>';
+  }
+
+  if (sourceEl) {
+    sourceEl.innerHTML = "";
+    sourceEl.classList.add("hidden");
+    if (data.file_url) {
+      if (data.view_kind === "pdf") {
+        sourceEl.innerHTML = `<iframe class="doc-file-frame" src="${escapeHtml(data.file_url)}" title="${escapeHtml(doc.title)}"></iframe>`;
+        sourceEl.classList.remove("hidden");
+      } else if (data.view_kind === "image") {
+        sourceEl.innerHTML = `<img class="doc-file-image" src="${escapeHtml(data.file_url)}" alt="${escapeHtml(doc.title)}">`;
+        sourceEl.classList.remove("hidden");
+      } else if (data.view_kind === "video") {
+        sourceEl.innerHTML = `<video class="doc-file-video" controls src="${escapeHtml(data.file_url)}"></video>`;
+        sourceEl.classList.remove("hidden");
+      } else if (data.view_kind === "download") {
+        sourceEl.innerHTML = `<p class="muted">Preview is not available in the browser for this file type. Use <strong>Open original file</strong> or <strong>Download</strong> above.</p>`;
+        sourceEl.classList.remove("hidden");
+      }
+    } else if (data.view_kind === "url" && data.source_url) {
+      sourceEl.innerHTML = `<p class="muted">This item was ingested from a web source. Use <strong>Open source URL</strong> above to view it.</p>`;
+      sourceEl.classList.remove("hidden");
+    }
+  }
+
+  if (textEl) {
+    textEl.textContent = data.extracted_text || "[No extracted text available]";
+  }
+  if (textWrap) {
+    textWrap.classList.remove("hidden");
+  }
+
+  $$(".doc-item").forEach((row) => {
+    row.classList.toggle("viewing", row.dataset.id === id);
+  });
+
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function closeDocumentDetail() {
+  $("#doc-detail")?.classList.add("hidden");
+  $$(".doc-item").forEach((row) => row.classList.remove("viewing"));
 }
 
 function toggleSelect(id) {
@@ -831,39 +1408,33 @@ async function deleteDocument(id) {
   if (!confirm("Delete this document and its stored files?")) return;
   await api(`/api/documents/${id}`, { method: "DELETE" });
   state.selectedIds.delete(id);
+  if ($("#doc-detail") && !$("#doc-detail").classList.contains("hidden")) {
+    closeDocumentDetail();
+  }
   toast("Document deleted");
   await loadDocuments();
 }
 
 async function runAnalysis({ query = "", baseline = false, summarize = false } = {}) {
-  const loading = $("#analyze-loading");
-  loading.classList.remove("hidden");
+  if (state.analysisRunning) {
+    toast("An analysis is already running. Please wait for it to finish.", "error");
+    return;
+  }
 
   try {
-    let data;
-    const docIds = state.selectedIds.size ? [...state.selectedIds] : null;
-
-    if (summarize) {
-      const qs = docIds ? "?" + docIds.map((id) => `document_ids=${encodeURIComponent(id)}`).join("&") : "";
-      data = await api(`/api/analyze/summarize${qs}`, { method: "POST" });
-    } else {
-      data = await api("/api/analyze", {
-        method: "POST",
-        body: JSON.stringify({
-          query,
-          document_ids: docIds,
-          include_baseline_assessment: baseline,
-        }),
-      });
-    }
-
-    renderLatestAssessment(data.analysis);
-    state.analyses = [data.analysis, ...state.analyses.filter((a) => a.id !== data.analysis.id)];
-    toast(`Assessment saved · ${formatTimestamp(data.analysis.created_at)}`);
+    const jobId = await startAnalysisJob({ query, baseline, summarize });
+    setAnalysisRunning(true, jobId);
+    const analysis = await pollAnalysisJob(jobId);
+    finishAnalysisRun(analysis);
   } catch (err) {
+    if (err.status === 409) {
+      toast("An analysis is already running — resuming progress.", "error");
+      await resumeActiveAnalysisJob();
+      return;
+    }
     toast(err.message, "error");
   } finally {
-    loading.classList.add("hidden");
+    setAnalysisRunning(false);
   }
 }
 
@@ -885,7 +1456,7 @@ $$(".tab").forEach((tab) =>
   tab.addEventListener("click", () => switchTab(tab.dataset.tab))
 );
 
-$("#btn-close-detail").addEventListener("click", () => $("#doc-detail").classList.add("hidden"));
+$("#btn-close-detail").addEventListener("click", () => closeDocumentDetail());
 $("#btn-refresh-docs").addEventListener("click", () => loadDocuments().catch((e) => toast(e.message, "error")));
 $("#btn-refresh-history").addEventListener("click", () => loadHistory().catch((e) => toast(e.message, "error")));
 
@@ -953,12 +1524,177 @@ $("#btn-ingest-pdf").addEventListener("click", async () => {
     showUploadResult(data.document);
     $("#pdf-file").value = "";
     $("#pdf-file").closest(".file-label")?.querySelector(".file-name")?.remove();
+    const pdfTitle = $("#pdf-title");
+    if (pdfTitle) {
+      pdfTitle.value = "";
+      delete pdfTitle.dataset.userEdited;
+    }
     toast(`PDF uploaded · ${file.name}`);
     switchTab("library");
   } catch (e) {
     toast(e.message, "error");
   }
 });
+
+const IMAGING_EXTENSIONS = new Set([
+  ".dcm",
+  ".dicom",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".bmp",
+  ".tif",
+  ".tiff",
+  ".webp",
+  ".nii",
+  ".nii.gz",
+  ".mha",
+  ".mhd",
+  ".zip",
+]);
+
+let imagingSelection = [];
+
+function imagingExtension(name) {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".nii.gz")) return ".nii.gz";
+  const dot = lower.lastIndexOf(".");
+  return dot >= 0 ? lower.slice(dot) : "";
+}
+
+function isImagingFile(file) {
+  return IMAGING_EXTENSIONS.has(imagingExtension(file?.name));
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function renderImagingSelection() {
+  const panel = $("#imaging-selection");
+  const btn = $("#btn-ingest-imaging");
+  if (!panel || !btn) return;
+
+  if (!imagingSelection.length) {
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
+    btn.disabled = true;
+    return;
+  }
+
+  const totalBytes = imagingSelection.reduce((sum, file) => sum + file.size, 0);
+  const preview = imagingSelection
+    .slice(0, 10)
+    .map(
+      (file) =>
+        `<li>${escapeHtml(file.webkitRelativePath || file.name)} <span class="muted">(${formatFileSize(file.size)})</span></li>`
+    )
+    .join("");
+  const remainder =
+    imagingSelection.length > 10
+      ? `<li class="muted">…and ${imagingSelection.length - 10} more</li>`
+      : "";
+
+  panel.classList.remove("hidden");
+  btn.disabled = false;
+  panel.innerHTML = `
+    <p class="imaging-selection-summary">${imagingSelection.length} file(s) selected · ${formatFileSize(totalBytes)} total</p>
+    <ul class="imaging-selection-list">${preview}${remainder}</ul>`;
+}
+
+function setImagingSelection(files) {
+  imagingSelection = Array.from(files || []).filter(isImagingFile);
+  renderImagingSelection();
+}
+
+function clearImagingSelection() {
+  imagingSelection = [];
+  $("#imaging-files").value = "";
+  $("#imaging-folder").value = "";
+  renderImagingSelection();
+}
+
+function setImagingUploadProgress(message, visible) {
+  const el = $("#imaging-upload-progress");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("hidden", !visible);
+}
+
+async function uploadImagingSelection() {
+  if (!imagingSelection.length) return toast("Choose imaging files or a folder first", "error");
+
+  const btn = $("#btn-ingest-imaging");
+  const titlePrefix = $("#imaging-title-prefix")?.value.trim() || "";
+  const notes = $("#imaging-notes")?.value.trim() || "";
+  const total = imagingSelection.length;
+  let uploaded = 0;
+  let failed = 0;
+  let lastDoc = null;
+
+  btn.disabled = true;
+  setImagingUploadProgress(`Uploading 0/${total}…`, true);
+
+  try {
+    for (const file of imagingSelection) {
+      uploaded += 1;
+      setImagingUploadProgress(`Uploading ${uploaded}/${total}: ${file.name}`, true);
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      if (titlePrefix) fd.append("title_prefix", titlePrefix);
+      if (notes) fd.append("notes", notes);
+      const relativePath = file.webkitRelativePath || file.name;
+      if (relativePath) fd.append("relative_path", relativePath);
+      try {
+        const data = await api("/api/ingest/imaging", { method: "POST", body: fd });
+        lastDoc = data.document;
+      } catch (err) {
+        failed += 1;
+        console.error(err);
+      }
+    }
+
+    if (lastDoc) showUploadResult(lastDoc);
+    if (failed === 0) {
+      toast(`Uploaded ${total} imaging file${total === 1 ? "" : "s"}`);
+    } else {
+      toast(`Uploaded ${total - failed}/${total} imaging files (${failed} failed)`, "error");
+    }
+    clearImagingSelection();
+    switchTab("library");
+    await loadDocuments();
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    setImagingUploadProgress("", false);
+    renderImagingSelection();
+  }
+}
+
+$("#imaging-files")?.addEventListener("change", (event) => {
+  $("#imaging-folder").value = "";
+  setImagingSelection(event.target.files);
+});
+
+$("#imaging-folder")?.addEventListener("change", (event) => {
+  $("#imaging-files").value = "";
+  const allFiles = Array.from(event.target.files || []);
+  setImagingSelection(allFiles);
+  const skipped = allFiles.length - imagingSelection.length;
+  if (skipped > 0) {
+    toast(`Skipped ${skipped} non-imaging file${skipped === 1 ? "" : "s"} in folder`, "error");
+  }
+});
+
+$("#btn-clear-imaging")?.addEventListener("click", () => clearImagingSelection());
+$("#btn-ingest-imaging")?.addEventListener("click", () =>
+  uploadImagingSelection().catch((e) => toast(e.message, "error"))
+);
 
 $("#btn-ingest-video").addEventListener("click", async () => {
   try {
@@ -983,9 +1719,18 @@ $("#btn-ingest-video").addEventListener("click", async () => {
 
 $("#btn-baseline").addEventListener("click", () => runAnalysis({ baseline: true }));
 $("#btn-summarize").addEventListener("click", () => runAnalysis({ summarize: true }));
+$("#btn-case-add-data")?.addEventListener("click", () => switchTab("ingest"));
+$("#btn-case-run-baseline")?.addEventListener("click", () => {
+  if (state.documents.length === 0) {
+    switchTab("ingest");
+    return;
+  }
+  runAnalysis({ baseline: true });
+});
+
 $("#btn-analyze").addEventListener("click", () => {
   const query = $("#analyze-query").value.trim();
-  if (!query) return toast("Enter a question or use Baseline assessment", "error");
+  if (!query) return toast("Enter a question, or use Run baseline assessment", "error");
   runAnalysis({ query });
 });
 
@@ -1002,6 +1747,15 @@ $("#btn-export-pdf")?.addEventListener("click", () =>
 );
 $("#btn-investigate-item")?.addEventListener("click", () =>
   investigateSelectedOpenItem()
+);
+$("#btn-accept-investigation")?.addEventListener("click", () =>
+  acceptInvestigationDraft()
+);
+$("#btn-discard-investigation")?.addEventListener("click", () =>
+  discardInvestigationDraft()
+);
+$("#btn-comment-investigation")?.addEventListener("click", () =>
+  commentInvestigationDraft()
 );
 $("#btn-resolve-item")?.addEventListener("click", () =>
   resolveSelectedOpenItem()
@@ -1034,7 +1788,15 @@ checkHealth();
 loadAppVersion();
 initAuth();
 initTheme();
-bindFileInput("#pdf-file");
+initScrollTop();
+initInvestigationGuidancePresets();
+updateReportDateTime();
+renderCaseStatus();
+window.matchMedia("(max-width: 600px)").addEventListener("change", () => {
+  updateReportDateTime(state.latestAnalysis?.created_at);
+});
+bindPdfFileInput();
 bindFileInput("#video-file");
 loadLatestAssessment().catch(() => {});
+resumeActiveAnalysisJob().catch(() => {});
 loadDocuments().catch(() => {});

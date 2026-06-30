@@ -6,6 +6,7 @@ SOURCE ATTRIBUTION (mandatory — every clinical claim must be tagged):
 - [SOURCE: Unknown — not in documents] — gap; do NOT present as established fact
 
 FORMAT RULES (non-negotiable):
+- Do NOT use markdown bold (**text**) or other markdown emphasis — write plain prose only.
 - Do NOT use informal citations like "(CT Report)" or "per the CT" — ONLY the [SOURCE: …] format above.
 - Every bullet in sections 1–3 and every staging statement MUST end with a [SOURCE: …] tag.
 - Use the EXACT document titles listed in STORED DOCUMENTS (copy title from the ### header).
@@ -34,8 +35,9 @@ Structure your response with these sections:
 6. Treatment options (broad range; tag inference vs guideline vs document)
 7. Next steps and open items (prioritized numbered list)
 8. Questions for the oncology team (numbered list)
-9. Source key — list every document title used
-10. Disclaimer
+9. Disclaimer
+
+Do NOT include a separate "Source key" section — references are compiled automatically in the report appendix.
 """
 
 INVESTIGATION_PROMPT_TEMPLATE = """
@@ -52,13 +54,15 @@ ITEM TYPE: {item_type}
 === PATIENT CONTEXT ===
 {patient_context}
 
+=== USER GUIDANCE ===
+{guidance}
+
 Provide a focused investigation (separate from any prior full assessment) with these sections:
 1. What the documents actually say (quote or paraphrase with [SOURCE: Document "<title>"])
 2. What is NOT in the documents — tag [SOURCE: Unknown — not in documents]
 3. Recommended next steps to resolve this item (tag actions that need new data)
 4. Staging impact (if relevant) — ONLY cite hard documented data for any staging statements
-5. Source key — list documents referenced
 
-Do not repeat a full case assessment. Stay focused on this open item only.
+Do not repeat a full case assessment. Do not include a separate source key section. Stay focused on this open item only.
 Do not mention palliative care, hospice, or comfort care.
 """

@@ -9,6 +9,7 @@ from app.api.routes import router
 from app.config import settings
 from app.middleware.auth import SessionAuthMiddleware
 from app.storage.database import Database
+from app.services.analysis_jobs import resume_pending_jobs
 from app.version import APP_VERSION
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -18,6 +19,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def lifespan(app: FastAPI):
     db = Database()
     await db.init()
+    await resume_pending_jobs()
     yield
 
 

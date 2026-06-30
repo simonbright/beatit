@@ -11,6 +11,7 @@ from app.services.openrouter_models import (
 )
 from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
 from app.services.assessment_parse import parse_assessment
+from app.services.source_references import build_reference_bundle
 from app.services.source_normalize import enrich_with_sources
 from app.services.content_policy import filter_palliative_content
 
@@ -77,15 +78,16 @@ class Database:
             if not await self.get_setting("patient_context"):
                 await self.set_setting("patient_context", DEFAULT_PATIENT_CONTEXT)
 
-            await self._migrate_stale_openrouter_model()
+            await self._migrate_analyses_columns(db)
+            await self._migrate_open_items_table(db)
+            await self._migrate_analysis_jobs_table(db)
+
+        await self._migrate_stale_openrouter_model()
 
     async def _migrate_stale_openrouter_model(self) -> None:
         current = await self.get_setting("openrouter_model")
         if current and current in DEPRECATED_OPENROUTER_MODELS:
             await self.set_setting("openrouter_model", DEFAULT_OPENROUTER_MODEL)
-
-            await self._migrate_analyses_columns(db)
-            await self._migrate_open_items_table(db)
 
     async def _migrate_open_items_table(self, db: aiosqlite.Connection) -> None:
         await db.execute(
@@ -112,7 +114,24 @@ class Database:
         )
         await db.commit()
         await self._migrate_open_items_comments(db)
+        await self._migrate_open_items_investigation_draft(db)
         await self._backfill_open_items_from_json(db)
+
+    async def _migrate_open_items_investigation_draft(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(open_items)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        additions = {
+            "investigation_guidance": "TEXT",
+            "investigation_draft_response": "TEXT",
+            "investigation_draft_at": "TEXT",
+            "investigation_draft_model": "TEXT",
+        }
+        for column, col_type in additions.items():
+            if column not in columns:
+                await db.execute(
+                    f"ALTER TABLE open_items ADD COLUMN {column} {col_type}"
+                )
+        await db.commit()
 
     async def _migrate_open_items_comments(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(open_items)")
@@ -277,6 +296,122 @@ class Database:
     ) -> dict[str, Any] | None:
         return await self.update_open_item(open_item_id, status=status)
 
+    async def save_open_item_investigation_draft(
+        self,
+        open_item_id: str,
+        *,
+        response: str,
+        model: str | None,
+        guidance: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = _now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE open_items
+                SET status = 'pending_review',
+                    investigation_draft_response = ?,
+                    investigation_draft_at = ?,
+                    investigation_draft_model = ?,
+                    investigation_guidance = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (response, now, model, guidance, now, open_item_id),
+            )
+            await db.commit()
+        return await self.get_open_item(open_item_id)
+
+    async def accept_open_item_investigation(
+        self,
+        open_item_id: str,
+        *,
+        response: str | None = None,
+    ) -> dict[str, Any] | None:
+        item = await self.get_open_item(open_item_id)
+        if not item:
+            return None
+        final = (response or item.get("investigation_draft_response") or "").strip()
+        if not final:
+            return item
+        now = _now_iso()
+        model = item.get("investigation_draft_model") or item.get("investigation_model")
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE open_items
+                SET status = 'investigated',
+                    investigation_response = ?,
+                    investigation_at = ?,
+                    investigation_model = ?,
+                    investigation_draft_response = NULL,
+                    investigation_draft_at = NULL,
+                    investigation_draft_model = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (final, now, model, now, open_item_id),
+            )
+            await db.commit()
+        return await self.get_open_item(open_item_id)
+
+    async def discard_open_item_investigation_draft(
+        self, open_item_id: str
+    ) -> dict[str, Any] | None:
+        item = await self.get_open_item(open_item_id)
+        if not item:
+            return None
+        now = _now_iso()
+        next_status = "investigated" if item.get("investigation_response") else "open"
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE open_items
+                SET status = ?,
+                    investigation_draft_response = NULL,
+                    investigation_draft_at = NULL,
+                    investigation_draft_model = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (next_status, now, open_item_id),
+            )
+            await db.commit()
+        return await self.get_open_item(open_item_id)
+
+    async def add_open_item_investigation_draft_as_comment(
+        self, open_item_id: str
+    ) -> dict[str, Any] | None:
+        item = await self.get_open_item(open_item_id)
+        if not item:
+            return None
+        draft = (item.get("investigation_draft_response") or "").strip()
+        if not draft:
+            return item
+        header = "Investigation draft"
+        if item.get("investigation_guidance"):
+            header = f"Investigation draft — guidance: {item['investigation_guidance'][:120]}"
+        await self.update_open_item(
+            open_item_id,
+            comment=f"{header}\n\n{draft}",
+        )
+        next_status = "investigated" if item.get("investigation_response") else "open"
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE open_items
+                SET status = ?,
+                    investigation_draft_response = NULL,
+                    investigation_draft_at = NULL,
+                    investigation_draft_model = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (next_status, _now_iso(), open_item_id),
+            )
+            await db.commit()
+        return await self.get_open_item(open_item_id)
+
     async def save_open_item_investigation(
         self,
         open_item_id: str,
@@ -306,6 +441,9 @@ class Database:
         investigation = row.get("investigation_response")
         if investigation:
             investigation = filter_palliative_content(investigation) or None
+        draft = row.get("investigation_draft_response")
+        if draft:
+            draft = filter_palliative_content(draft) or None
         return {
             "id": row["id"],
             "analysis_id": row["analysis_id"],
@@ -317,9 +455,167 @@ class Database:
             "investigation_response": investigation,
             "investigation_at": row.get("investigation_at"),
             "investigation_model": row.get("investigation_model"),
+            "investigation_guidance": row.get("investigation_guidance"),
+            "investigation_draft_response": draft,
+            "investigation_draft_at": row.get("investigation_draft_at"),
+            "investigation_draft_model": row.get("investigation_draft_model"),
             "comments": json.loads(row.get("comments_json") or "[]"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+        }
+
+    async def _migrate_analysis_jobs_table(self, db: aiosqlite.Connection) -> None:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                job_type TEXT NOT NULL,
+                query TEXT NOT NULL DEFAULT '',
+                document_ids_json TEXT DEFAULT '[]',
+                include_baseline_assessment INTEGER DEFAULT 0,
+                analysis_id TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                FOREIGN KEY (analysis_id) REFERENCES analyses(id)
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status ON analysis_jobs(status)"
+        )
+        await db.commit()
+
+    async def fail_stale_analysis_jobs(self, reason: str = "Interrupted by server restart") -> None:
+        now = _now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'failed',
+                    error = ?,
+                    completed_at = ?
+                WHERE status IN ('pending', 'running')
+                """,
+                (reason, now),
+            )
+            await db.commit()
+
+    async def create_analysis_job(
+        self,
+        *,
+        job_type: str,
+        query: str = "",
+        document_ids: list[str] | None = None,
+        include_baseline_assessment: bool = False,
+    ) -> dict[str, Any]:
+        job_id = str(uuid4())
+        now = _now_iso()
+        row = {
+            "id": job_id,
+            "status": "pending",
+            "job_type": job_type,
+            "query": query,
+            "document_ids_json": json.dumps(document_ids or []),
+            "include_baseline_assessment": 1 if include_baseline_assessment else 0,
+            "analysis_id": None,
+            "error": None,
+            "created_at": now,
+            "started_at": None,
+            "completed_at": None,
+        }
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO analysis_jobs
+                (id, status, job_type, query, document_ids_json,
+                 include_baseline_assessment, analysis_id, error,
+                 created_at, started_at, completed_at)
+                VALUES (:id, :status, :job_type, :query, :document_ids_json,
+                        :include_baseline_assessment, :analysis_id, :error,
+                        :created_at, :started_at, :completed_at)
+                """,
+                row,
+            )
+            await db.commit()
+        return self._analysis_job_row(row)
+
+    async def get_active_analysis_job(self) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM analysis_jobs
+                WHERE status IN ('pending', 'running')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+            row = await cursor.fetchone()
+        return self._analysis_job_row(dict(row)) if row else None
+
+    async def get_analysis_job(self, job_id: str) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM analysis_jobs WHERE id = ?", (job_id,)
+            )
+            row = await cursor.fetchone()
+        return self._analysis_job_row(dict(row)) if row else None
+
+    async def update_analysis_job(
+        self,
+        job_id: str,
+        *,
+        status: str | None = None,
+        analysis_id: str | None = None,
+        error: str | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        fields: list[str] = []
+        values: list[Any] = []
+        if status is not None:
+            fields.append("status = ?")
+            values.append(status)
+        if analysis_id is not None:
+            fields.append("analysis_id = ?")
+            values.append(analysis_id)
+        if error is not None:
+            fields.append("error = ?")
+            values.append(error)
+        if started_at is not None:
+            fields.append("started_at = ?")
+            values.append(started_at)
+        if completed_at is not None:
+            fields.append("completed_at = ?")
+            values.append(completed_at)
+        if not fields:
+            return
+        values.append(job_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"UPDATE analysis_jobs SET {', '.join(fields)} WHERE id = ?",
+                values,
+            )
+            await db.commit()
+
+    @staticmethod
+    def _analysis_job_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "status": row["status"],
+            "job_type": row["job_type"],
+            "query": row.get("query") or "",
+            "document_ids": json.loads(row.get("document_ids_json") or "[]"),
+            "include_baseline_assessment": bool(row.get("include_baseline_assessment")),
+            "analysis_id": row.get("analysis_id"),
+            "error": row.get("error"),
+            "created_at": row["created_at"],
+            "started_at": row.get("started_at"),
+            "completed_at": row.get("completed_at"),
         }
 
     async def _migrate_analyses_columns(self, db: aiosqlite.Connection) -> None:
@@ -544,6 +840,16 @@ class Database:
         analysis["executive_summary"] = summary
         analysis["source_attribution"] = level
         analysis["document_titles"] = titles
+
+        ref_bundle = build_reference_bundle(
+            executive_summary=summary,
+            response=response,
+        )
+        analysis["references"] = ref_bundle["appendix"]
+        analysis["executive_summary_display"] = ref_bundle["sections"]["executive_summary"]["body"]
+        analysis["executive_summary_refs"] = ref_bundle["sections"]["executive_summary"]["references"]
+        analysis["response_display"] = ref_bundle["sections"]["response"]["body"]
+        analysis["response_refs"] = ref_bundle["sections"]["response"]["references"]
         return analysis
 
     @staticmethod

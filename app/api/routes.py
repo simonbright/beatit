@@ -1,18 +1,27 @@
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 
 from app.ingest.text import ingest_text
 from app.ingest.url import ingest_url
 from app.ingest.pdf import ingest_pdf_file
+from app.ingest.imaging import ingest_imaging_file, is_allowed_imaging_filename
 from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL, MODEL_IDS, OPENROUTER_MODELS
 from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
+from app.services.analysis_jobs import (
+    ActiveAnalysisJobError,
+    enqueue_analysis_job,
+    get_job_payload,
+)
 from app.services.synthesis import SynthesisService
+from app.services.document_view import build_document_view, file_is_available, guess_media_type
 from app.services.investigation import InvestigationService
 from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
 from app.services.auth_session import (
@@ -83,6 +92,14 @@ def _set_session_cookie(response: Response, username: str) -> None:
 class OpenItemUpdateRequest(BaseModel):
     status: str | None = Field(default=None, max_length=50)
     comment: str | None = Field(default=None, max_length=5000)
+
+
+class InvestigateOpenItemRequest(BaseModel):
+    guidance: str = Field(default="", max_length=5000)
+
+
+class AcceptInvestigationRequest(BaseModel):
+    edited_response: str | None = Field(default=None, max_length=50000)
 
 
 async def _get_services():
@@ -196,7 +213,31 @@ async def get_document(doc_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     text = await store.read_extracted_text(doc)
-    return {"document": doc, "extracted_text": text}
+    view = build_document_view(doc)
+    return {"document": doc, "extracted_text": text, **view}
+
+
+@router.get("/documents/{doc_id}/file")
+async def get_document_file(doc_id: str):
+    db, _, _, _, _ = await _get_services()
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not file_is_available(doc):
+        raise HTTPException(status_code=404, detail="Original file not available")
+
+    path = Path(doc["file_path"])
+    filename = path.name.split("_", 1)[-1] if "_" in path.name else path.name
+    meta = doc.get("metadata") or {}
+    if meta.get("original_filename"):
+        filename = meta["original_filename"]
+
+    return FileResponse(
+        path,
+        media_type=guess_media_type(filename, doc.get("source_type")),
+        filename=filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.delete("/documents/{doc_id}")
@@ -292,39 +333,96 @@ async def ingest_video_route(
     return {"document": doc}
 
 
-@router.post("/analyze")
+@router.post("/ingest/imaging")
+async def ingest_imaging_route(
+    file: UploadFile = File(...),
+    title: str | None = Form(default=None),
+    title_prefix: str | None = Form(default=None),
+    relative_path: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+):
+    _, store, _, _, _ = await _get_services()
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    filename = Path(file.filename or "imaging.dcm").name
+    if not is_allowed_imaging_filename(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported imaging file type. Use DICOM, JPEG, PNG, TIFF, NIfTI, or ZIP.",
+        )
+
+    try:
+        doc = await ingest_imaging_file(
+            store,
+            filename=filename,
+            content=content,
+            title=title,
+            relative_path=relative_path or file.filename,
+            title_prefix=title_prefix,
+            notes=notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"document": doc}
+
+
+@router.post("/analyze", status_code=202)
 async def analyze(body: AnalyzeRequest):
-    _, _, _, synthesis, _ = await _get_services()
     if not body.query.strip() and not body.include_baseline_assessment:
         raise HTTPException(
             status_code=400,
             detail="Provide a query or set include_baseline_assessment=true",
         )
+    job_type = "baseline" if body.include_baseline_assessment and not body.query.strip() else "query"
     try:
-        result = await synthesis.analyze(
+        job = await enqueue_analysis_job(
+            job_type=job_type,
             query=body.query,
             document_ids=body.document_ids,
             include_baseline_assessment=body.include_baseline_assessment,
         )
-    except Exception as exc:
+    except ActiveAnalysisJobError as exc:
         raise HTTPException(
-            status_code=502,
-            detail=f"Analysis failed: {exc}",
+            status_code=409,
+            detail="An analysis is already running",
         ) from exc
-    return {"analysis": result}
+    return {"job": job}
 
 
-@router.post("/analyze/summarize")
+@router.post("/analyze/summarize", status_code=202)
 async def summarize(document_ids: list[str] | None = None):
-    _, _, _, synthesis, _ = await _get_services()
     try:
-        result = await synthesis.summarize_documents(document_ids)
-    except Exception as exc:
+        job = await enqueue_analysis_job(
+            job_type="summarize",
+            query="Summarize all stored documents",
+            document_ids=document_ids,
+        )
+    except ActiveAnalysisJobError as exc:
         raise HTTPException(
-            status_code=502,
-            detail=f"Synthesis failed: {exc}",
+            status_code=409,
+            detail="An analysis is already running",
         ) from exc
-    return {"analysis": result}
+    return {"job": job}
+
+
+@router.get("/analyze/jobs/active")
+async def active_analysis_job():
+    db, _, _, _, _ = await _get_services()
+    job = await db.get_active_analysis_job()
+    if not job:
+        return {"job": None}
+    payload = await get_job_payload(job["id"])
+    return {"job": payload}
+
+
+@router.get("/analyze/jobs/{job_id}")
+async def get_analysis_job(job_id: str):
+    payload = await get_job_payload(job_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    return {"job": payload}
 
 
 @router.get("/analyses")
@@ -375,10 +473,11 @@ async def get_open_item(open_item_id: str):
 
 
 @router.post("/open-items/{open_item_id}/investigate")
-async def investigate_open_item(open_item_id: str):
+async def investigate_open_item(open_item_id: str, body: InvestigateOpenItemRequest | None = None):
     _, _, _, _, investigation = await _get_services()
+    guidance = body.guidance if body else ""
     try:
-        item = await investigation.investigate_open_item(open_item_id)
+        item = await investigation.investigate_open_item(open_item_id, guidance=guidance)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -389,10 +488,50 @@ async def investigate_open_item(open_item_id: str):
     return {"open_item": item}
 
 
+@router.post("/open-items/{open_item_id}/investigate/accept")
+async def accept_open_item_investigation(
+    open_item_id: str, body: AcceptInvestigationRequest | None = None
+):
+    db, _, _, _, _ = await _get_services()
+    item = await db.get_open_item(open_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Open item not found")
+    if not item.get("investigation_draft_response") and not (
+        body and body.edited_response
+    ):
+        raise HTTPException(status_code=400, detail="No investigation draft to accept")
+
+    edited = body.edited_response.strip() if body and body.edited_response else None
+    updated = await db.accept_open_item_investigation(open_item_id, response=edited)
+    return {"open_item": updated}
+
+
+@router.post("/open-items/{open_item_id}/investigate/discard")
+async def discard_open_item_investigation(open_item_id: str):
+    db, _, _, _, _ = await _get_services()
+    updated = await db.discard_open_item_investigation_draft(open_item_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Open item not found")
+    return {"open_item": updated}
+
+
+@router.post("/open-items/{open_item_id}/investigate/comment")
+async def comment_open_item_investigation(open_item_id: str):
+    db, _, _, _, _ = await _get_services()
+    item = await db.get_open_item(open_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Open item not found")
+    if not item.get("investigation_draft_response"):
+        raise HTTPException(status_code=400, detail="No investigation draft to save")
+
+    updated = await db.add_open_item_investigation_draft_as_comment(open_item_id)
+    return {"open_item": updated}
+
+
 @router.patch("/open-items/{open_item_id}")
 async def update_open_item(open_item_id: str, body: OpenItemUpdateRequest):
     db, _, _, _, _ = await _get_services()
-    allowed = {"open", "investigating", "investigated", "resolved", "closed"}
+    allowed = {"open", "investigating", "pending_review", "investigated", "resolved", "closed"}
     status = body.status.strip().lower() if body.status else None
     comment = body.comment.strip() if body.comment else None
 

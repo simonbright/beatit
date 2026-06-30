@@ -3,6 +3,7 @@ from typing import Any
 from app.services.content_policy import filter_palliative_content
 from app.services.llm import LLMClient
 from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
+from app.services.investigation_guidance import normalize_investigation_guidance
 from app.services.source_policy import INVESTIGATION_PROMPT_TEMPLATE, SOURCE_ATTRIBUTION_RULES
 from app.services.synthesis import build_medical_system_prompt, _format_corpus
 from app.storage.database import Database
@@ -20,7 +21,12 @@ class InvestigationService:
         self.db = db
         self.llm = llm or LLMClient()
 
-    async def investigate_open_item(self, open_item_id: str) -> dict[str, Any]:
+    async def investigate_open_item(
+        self,
+        open_item_id: str,
+        *,
+        guidance: str | None = None,
+    ) -> dict[str, Any]:
         item = await self.db.get_open_item(open_item_id)
         if not item:
             raise ValueError("Open item not found")
@@ -32,6 +38,7 @@ class InvestigationService:
         patient_context = (
             await self.db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
         )
+        guidance_text = normalize_investigation_guidance(guidance)
 
         await self.db.update_open_item_status(open_item_id, "investigating")
 
@@ -40,6 +47,7 @@ class InvestigationService:
             item_type=item["item_type"],
             corpus_text=corpus_text,
             patient_context=patient_context.strip(),
+            guidance=guidance_text,
         )
 
         system = await build_medical_system_prompt(self.db)
@@ -53,12 +61,20 @@ class InvestigationService:
             )
             response = filter_palliative_content(response)
             provider_label = f"{self.llm.active_provider}:{self.llm.model_name}"
-            updated = await self.db.save_open_item_investigation(
+            updated = await self.db.save_open_item_investigation_draft(
                 open_item_id,
                 response=response,
                 model=provider_label,
+                guidance=guidance_text if (guidance or "").strip() else None,
             )
             return updated
         except Exception:
-            await self.db.update_open_item_status(open_item_id, "open")
+            previous_status = (
+                "pending_review"
+                if item.get("investigation_draft_response")
+                else "investigated"
+                if item.get("investigation_response")
+                else "open"
+            )
+            await self.db.update_open_item_status(open_item_id, previous_status)
             raise
