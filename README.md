@@ -101,7 +101,7 @@ data/           # Created at runtime (gitignored)
 | Scanned PDFs | Placeholder if no text | OCR pipeline |
 | Web fetch | Basic HTML extraction | Readability / headless browser |
 | Vector search | Full corpus sent to Ollama | Embeddings + RAG |
-| Auth | HTTP Basic Auth when `AUTH_USERNAME` + `AUTH_PASSWORD` set | OAuth / invite-only |
+| Auth | Cookie login when `AUTH_USERNAME` + `AUTH_PASSWORD` set | OAuth / invite-only |
 
 ## Medical disclaimer
 
@@ -138,7 +138,7 @@ gh repo create beatit --private --source=. --remote=origin --push
 1. Open [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint**
 2. Connect the `beatit` GitHub repo — Render reads `render.yaml`
 3. Set secret environment variables in the Render dashboard:
-   - `AUTH_USERNAME` — login username for family access
+   - `AUTH_USERNAME` — one or more usernames, comma-separated (e.g. `simon,jane`)
    - `AUTH_PASSWORD` — strong password
    - `OPENROUTER_API_KEY` — your OpenRouter key
 
@@ -150,7 +150,7 @@ Or deploy manually: **New Web Service** → connect repo → use:
 
 ### 3. Secured access
 
-When both `AUTH_USERNAME` and `AUTH_PASSWORD` are set, the entire app (UI + API) requires **HTTP Basic Auth**. Browsers prompt once and reuse credentials. `/api/health` stays public for Render health checks.
+When `AUTH_USERNAME` and `AUTH_PASSWORD` are set, visitors see a **sign-in page** (no repeated browser password prompts). Multiple usernames share one password — set `AUTH_USERNAME=simon.brightman@gmail.com,dov@bright-man.com` on Render. Session lasts 7 days. `/api/health` stays public for Render health checks.
 
 Leave auth vars empty for local development without a login prompt.
 
@@ -162,7 +162,7 @@ Leave auth vars empty for local development without a login prompt.
 
 | Variable | Required on Render | Description |
 |----------|-------------------|-------------|
-| `AUTH_USERNAME` | Yes | Basic auth username |
+| `AUTH_USERNAME` | Yes | Comma-separated usernames (shared password) |
 | `AUTH_PASSWORD` | Yes | Basic auth password |
 | `OPENROUTER_API_KEY` | Yes | OpenRouter API key |
 | `DATA_DIR` | Auto (`/var/data`) | Storage path |

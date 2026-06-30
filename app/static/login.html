@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — BeatIt</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
+  <script>
+    document.documentElement.setAttribute("data-theme", localStorage.getItem("beatit-theme") || "day");
+  </script>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    .login-duck {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 1rem;
+      border-radius: 50%;
+      box-shadow: 0 8px 24px rgba(14, 165, 233, 0.3);
+    }
+    .login-card h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.6rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent-warm));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .login-error {
+      margin-top: 0.75rem;
+      color: var(--danger);
+      font-size: 0.9rem;
+      min-height: 1.25rem;
+    }
+    .login-card .btn { width: 100%; margin-top: 1.25rem; }
+  </style>
+</head>
+<body>
+  <div class="page-bg" aria-hidden="true">
+    <div class="page-bg-sky"></div>
+    <div class="page-bg-hills"></div>
+    <div class="page-bg-water"></div>
+  </div>
+
+  <div class="login-wrap">
+    <article class="card login-card">
+      <img src="/static/favicon.svg" alt="" class="login-duck">
+      <h1>BeatIt</h1>
+      <p class="muted">Sign in to continue</p>
+
+      <form id="login-form">
+        <label>Email / username
+          <input type="text" id="login-username" autocomplete="username" required>
+        </label>
+        <label>Password
+          <input type="password" id="login-password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="btn primary">Sign in</button>
+      </form>
+      <p id="login-error" class="login-error" role="alert"></p>
+    </article>
+  </div>
+
+  <script>
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("login-error");
+      err.textContent = "";
+      const username = document.getElementById("login-username").value.trim();
+      const password = document.getElementById("login-password").value;
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Sign in failed");
+        window.location.href = "/";
+      } catch (ex) {
+        err.textContent = ex.message || "Sign in failed";
+      }
+    });
+  </script>
+</body>
+</html>

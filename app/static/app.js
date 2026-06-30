@@ -48,10 +48,14 @@ function toast(message, type = "success") {
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
-    credentials: "same-origin",
+    credentials: "include",
     headers: options.body instanceof FormData ? undefined : { "Content-Type": "application/json" },
     ...options,
   });
+  if (res.status === 401 && !path.includes("/login")) {
+    window.location.href = "/login";
+    throw new Error("Please sign in");
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.detail || data.message || `Request failed (${res.status})`);
@@ -476,7 +480,24 @@ $("#btn-save-settings")?.addEventListener("click", () =>
 );
 $("#settings-model")?.addEventListener("change", updateModelDescription);
 
+async function initAuth() {
+  try {
+    const me = await api("/api/auth/me");
+    if (me.authenticated && me.username) {
+      $("#btn-signout")?.classList.remove("hidden");
+    }
+  } catch {
+    /* redirect handled in api() */
+  }
+}
+
+$("#btn-signout")?.addEventListener("click", async () => {
+  await api("/api/logout", { method: "POST" });
+  window.location.href = "/login";
+});
+
 checkHealth();
+initAuth();
 initTheme();
 bindFileInput("#pdf-file");
 bindFileInput("#video-file");

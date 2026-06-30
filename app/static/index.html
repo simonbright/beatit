@@ -4,23 +4,36 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BeatIt — Oncology Case Analysis</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
   <script>
     (function () {
       var t = localStorage.getItem("beatit-theme");
       if (t === "day" || t === "night") document.documentElement.setAttribute("data-theme", t);
-      else if (window.matchMedia("(prefers-color-scheme: light)").matches)
-        document.documentElement.setAttribute("data-theme", "day");
-      else document.documentElement.setAttribute("data-theme", "night");
+      else document.documentElement.setAttribute("data-theme", "day");
     })();
   </script>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <div class="page-bg" aria-hidden="true">
+    <div class="page-bg-sky"></div>
+    <div class="page-bg-hills"></div>
+    <div class="page-bg-water"></div>
+  </div>
+
   <header class="header">
     <div class="header-inner">
       <div class="brand">
-        <h1>BeatIt</h1>
-        <p class="subtitle">Pancreatic cancer case workspace</p>
+        <img src="/static/favicon.svg" alt="" class="brand-duck" width="44" height="44">
+        <div>
+          <h1>BeatIt</h1>
+          <p class="subtitle">Your calm companion for the journey ahead</p>
+        </div>
       </div>
       <div class="header-actions">
         <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch to day theme" title="Toggle day/night theme">
@@ -28,15 +41,17 @@
           <span class="theme-icon theme-icon-moon" aria-hidden="true">☾</span>
         </button>
         <div class="status-pill" id="llm-status">Checking LLM…</div>
+        <button type="button" class="btn ghost btn-signout hidden" id="btn-signout" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
 
   <main class="container">
     <section class="card patient-banner">
+      <div class="banner-duck" aria-hidden="true">🦆</div>
       <h2>Patient context</h2>
       <p>Woman in her 70s · Recently diagnosed pancreatic cancer · Possible liver metastasis</p>
-      <p class="muted">Store evidence, identify gaps, and synthesize treatment options. Not a substitute for in-person oncology care.</p>
+      <p class="muted">Gather evidence, find clarity, and explore options together — one step at a time.</p>
     </section>
 
     <div id="upload-result" class="card upload-result hidden" aria-live="polite">

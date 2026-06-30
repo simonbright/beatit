@@ -19,17 +19,24 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
 
-    # Secured access (required on Render — set both username and password)
+    # Secured access (required on Render — comma-separated usernames, one shared password)
     auth_username: str = ""
     auth_password: str = ""
+    auth_secret: str = ""
+    render: bool = False
+    public_url: str = ""
 
     data_dir: Path = Path("./data")
     host: str = "0.0.0.0"
     port: int = 8080
 
     @property
+    def auth_usernames(self) -> list[str]:
+        return [u.strip() for u in self.auth_username.split(",") if u.strip()]
+
+    @property
     def auth_enabled(self) -> bool:
-        return bool(self.auth_username and self.auth_password)
+        return bool(self.auth_usernames and self.auth_password)
 
     @property
     def documents_dir(self) -> Path:
@@ -54,4 +61,8 @@ if _env_port:
 # Prefer explicit public URL, then Render's auto-set external URL.
 _public_url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
 if _public_url:
-    settings.openrouter_http_referer = _public_url.rstrip("/")
+    settings.public_url = _public_url.rstrip("/")
+    settings.openrouter_http_referer = settings.public_url
+
+if os.getenv("RENDER"):
+    settings.render = True
