@@ -81,6 +81,7 @@ class Database:
             await self._migrate_analyses_columns(db)
             await self._migrate_open_items_table(db)
             await self._migrate_analysis_jobs_table(db)
+            await self._migrate_audit_events_table(db)
 
         await self._migrate_stale_openrouter_model()
 
@@ -488,6 +489,31 @@ class Database:
         )
         await db.commit()
 
+    async def _migrate_audit_events_table(self, db: aiosqlite.Connection) -> None:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                actor TEXT,
+                resource_type TEXT,
+                resource_id TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_type ON audit_events(event_type)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id)"
+        )
+        await db.commit()
+
     async def fail_stale_analysis_jobs(self, reason: str = "Interrupted by server restart") -> None:
         now = _now_iso()
         async with aiosqlite.connect(self.db_path) as db:
@@ -888,5 +914,86 @@ class Database:
             "analysis_type": row.get("analysis_type") or "query",
             "executive_summary": executive_summary,
             "open_items": open_items,
+            "created_at": row["created_at"],
+        }
+
+    async def insert_audit_event(
+        self,
+        *,
+        event_type: str,
+        actor: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event_id = str(uuid4())
+        now = _now_iso()
+        row = {
+            "id": event_id,
+            "event_type": event_type,
+            "actor": actor,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "metadata_json": json.dumps(metadata or {}),
+            "created_at": now,
+        }
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO audit_events
+                (id, event_type, actor, resource_type, resource_id, metadata_json, created_at)
+                VALUES (:id, :event_type, :actor, :resource_type, :resource_id, :metadata_json, :created_at)
+                """,
+                row,
+            )
+            await db.commit()
+        return self._audit_event_row(row)
+
+    async def list_audit_events(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        event_types: list[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        where = ""
+        params: list[Any] = []
+        if event_types:
+            placeholders = ", ".join("?" for _ in event_types)
+            where = f"WHERE event_type IN ({placeholders})"
+            params.extend(event_types)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            count_cursor = await db.execute(
+                f"SELECT COUNT(*) FROM audit_events {where}",
+                params,
+            )
+            total = (await count_cursor.fetchone())[0]
+
+            cursor = await db.execute(
+                f"""
+                SELECT * FROM audit_events
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, limit, offset],
+            )
+            rows = await cursor.fetchall()
+        return [self._audit_event_row(dict(row)) for row in rows], total
+
+    @staticmethod
+    def _audit_event_row(row: dict[str, Any]) -> dict[str, Any]:
+        metadata = json.loads(row.get("metadata_json") or "{}")
+        return {
+            "id": row["id"],
+            "event_type": row["event_type"],
+            "actor": row.get("actor"),
+            "resource_type": row.get("resource_type"),
+            "resource_id": row.get("resource_id"),
+            "metadata": metadata,
             "created_at": row["created_at"],
         }

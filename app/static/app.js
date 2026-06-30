@@ -9,6 +9,9 @@ const state = {
   selectedOpenItem: null,
   analysisRunning: false,
   analysisJobId: null,
+  auditEvents: [],
+  auditOffset: 0,
+  auditTotal: 0,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -52,29 +55,44 @@ function toast(message, type = "success") {
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    credentials: "include",
-    headers: options.body instanceof FormData ? undefined : { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (res.status === 401 && !path.includes("/login")) {
-    window.location.href = "/login";
-    throw new Error("Please sign in");
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    let message = data.detail || data.message || `Request failed (${res.status})`;
-    if (res.status === 502 && path.includes("/analyze")) {
-      message =
-        typeof data.detail === "string" && data.detail.startsWith("Analysis failed:")
-          ? data.detail
-          : "Analysis failed — the model may have timed out or returned an error. Wait a moment and try again.";
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 120000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+
+  try {
+    const res = await fetch(path, {
+      credentials: "include",
+      headers: fetchOptions.body instanceof FormData ? undefined : { "Content-Type": "application/json" },
+      signal: controller.signal,
+      ...fetchOptions,
+    });
+    if (res.status === 401 && !path.includes("/login")) {
+      window.location.href = "/login";
+      throw new Error("Please sign in");
     }
-    const error = new Error(message);
-    error.status = res.status;
-    throw error;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      let message = data.detail || data.message || `Request failed (${res.status})`;
+      if (res.status === 502 && path.includes("/analyze")) {
+        message =
+          typeof data.detail === "string" && data.detail.startsWith("Analysis failed:")
+            ? data.detail
+            : "Analysis failed — the model may have timed out or returned an error. Wait a moment and try again.";
+      }
+      const error = new Error(message);
+      error.status = res.status;
+      throw error;
+    }
+    return data;
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Request timed out — check your connection and try again.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return data;
 }
 
 function sleep(ms) {
@@ -433,14 +451,35 @@ async function resumeActiveAnalysisJob() {
   try {
     const data = await api("/api/analyze/jobs/active");
     if (!data.job) return;
-    setAnalysisRunning(true, data.job.id);
-    const analysis = await pollAnalysisJob(data.job.id);
+
+    const jobId = data.job.id;
+    const payload = await api(`/api/analyze/jobs/${jobId}`);
+    const job = payload.job;
+
+    if (job.status === "completed" && job.analysis) {
+      finishAnalysisRun(job.analysis);
+      return;
+    }
+    if (job.status === "failed") {
+      toast(job.error || "Analysis failed", "error");
+      return;
+    }
+
+    setAnalysisRunning(true, jobId);
+    const analysis = await pollAnalysisJob(jobId);
     finishAnalysisRun(analysis);
   } catch (err) {
     toast(err.message, "error");
   } finally {
     setAnalysisRunning(false);
   }
+}
+
+function resumeActiveAnalysisJobInBackground() {
+  resumeActiveAnalysisJob().catch((err) => {
+    setAnalysisRunning(false);
+    if (err?.message) toast(err.message, "error");
+  });
 }
 
 function switchTab(name) {
@@ -503,6 +542,89 @@ async function loadSettings() {
   } catch {
     /* checkHealth handles errors on its own schedule */
   }
+
+  await loadAuditTrail(true);
+}
+
+function formatAuditTimestamp(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function renderAuditEvent(event) {
+  const details = (event.details || [])
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join("");
+  return `
+    <article class="audit-event">
+      <div class="audit-event-header">
+        <strong class="audit-event-label">${escapeHtml(event.label || event.event_type || "Event")}</strong>
+        <time class="audit-event-time muted small">${escapeHtml(formatAuditTimestamp(event.created_at))}</time>
+      </div>
+      <p class="audit-event-summary">${escapeHtml(event.summary || "")}</p>
+      ${details ? `<ul class="audit-event-details">${details}</ul>` : ""}
+    </article>`;
+}
+
+async function loadAuditTrail(reset = false) {
+  const list = $("#audit-trail-list");
+  const countEl = $("#audit-trail-count");
+  const loadMoreBtn = $("#btn-audit-load-more");
+  const filterEl = $("#audit-filter");
+  if (!list) return;
+
+  if (reset) {
+    state.auditOffset = 0;
+    state.auditEvents = [];
+  }
+
+  const category = filterEl?.value || "all";
+  const limit = 50;
+  const offset = state.auditOffset || 0;
+
+  try {
+    const data = await api(
+      `/api/audit-events?limit=${limit}&offset=${offset}&category=${encodeURIComponent(category)}`
+    );
+    const events = data.events || [];
+    state.auditEvents = reset ? events : [...(state.auditEvents || []), ...events];
+    state.auditOffset = state.auditEvents.length;
+    state.auditTotal = data.total || 0;
+
+    if (countEl) {
+      countEl.textContent =
+        state.auditTotal === 0
+          ? "No audit events yet."
+          : `Showing ${state.auditEvents.length} of ${state.auditTotal} events`;
+    }
+
+    if (!state.auditEvents.length) {
+      list.innerHTML = `<p class="muted">No audit events recorded yet. Actions like adding documents, running analyses, and adding comments will appear here.</p>`;
+    } else {
+      list.innerHTML = state.auditEvents.map(renderAuditEvent).join("");
+    }
+
+    if (loadMoreBtn) {
+      loadMoreBtn.classList.toggle("hidden", state.auditEvents.length >= state.auditTotal);
+    }
+  } catch (err) {
+    list.innerHTML = `<p class="muted">Could not load audit trail: ${escapeHtml(err.message)}</p>`;
+    if (countEl) countEl.textContent = "";
+    loadMoreBtn?.classList.add("hidden");
+  }
 }
 
 async function saveModelSettings() {
@@ -517,6 +639,7 @@ async function saveModelSettings() {
   const current = $("#settings-current");
   if (current) current.textContent = `Selected model: ${data.settings.openrouter_model}`;
   checkHealth();
+  if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
 
 async function savePatientContext() {
@@ -530,6 +653,7 @@ async function savePatientContext() {
   });
   state.settings = { ...state.settings, ...data.settings };
   toast("Patient context saved");
+  if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
 
 function updateSelectedLabel() {
@@ -1180,6 +1304,7 @@ function renderLatestAssessment(analysis) {
     selectOpenItem(null);
     renderSourceAttributionNotice(null);
     renderHomeState(false);
+    renderCaseStatus();
     return;
   }
 
@@ -1192,6 +1317,10 @@ function renderLatestAssessment(analysis) {
 
   const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
   const responseDisplay = analysis.response_display || analysis.response || "";
+
+  renderHomeState(true);
+  renderSourceAttributionNotice(analysis);
+  renderCaseStatus();
 
   if (summaryDisplay) {
     execTextEl.innerHTML = `<div class="numbered-text">${formatNumberedReferences(summaryDisplay)}</div>`;
@@ -1213,17 +1342,23 @@ function renderLatestAssessment(analysis) {
   }
 
   renderReferencesAppendix(analysis);
-
   renderOpenItemsTable(analysis.open_items || []);
-  renderSourceAttributionNotice(analysis);
-  renderHomeState(true);
 }
 
 async function loadLatestAssessment() {
-  const data = await api("/api/analyses/latest");
-  renderLatestAssessment(data.analysis);
-  if (data.analysis) {
-    state.analyses = [data.analysis, ...state.analyses.filter((a) => a.id !== data.analysis.id)];
+  try {
+    const data = await api("/api/analyses/latest");
+    renderLatestAssessment(data.analysis);
+    if (data.analysis) {
+      state.analyses = [data.analysis, ...state.analyses.filter((a) => a.id !== data.analysis.id)];
+    }
+  } catch (err) {
+    console.error("loadLatestAssessment failed", err);
+    if (!state.latestAnalysis) {
+      renderLatestAssessment(null);
+    }
+  } finally {
+    renderCaseStatus();
   }
 }
 
@@ -1451,16 +1586,40 @@ function formatDate(iso) {
   }
 }
 
+function safeOn(selector, event, handler) {
+  const el = $(selector);
+  if (el) el.addEventListener(event, handler);
+}
+
+function bootstrapUi() {
+  initTheme();
+  initScrollTop();
+  initInvestigationGuidancePresets();
+  updateReportDateTime();
+  renderCaseStatus();
+}
+
+async function loadInitialData() {
+  try {
+    await Promise.allSettled([loadDocuments(), loadLatestAssessment()]);
+  } finally {
+    renderCaseStatus();
+  }
+  resumeActiveAnalysisJobInBackground();
+}
+
+bootstrapUi();
+
 // Tab navigation
 $$(".tab").forEach((tab) =>
   tab.addEventListener("click", () => switchTab(tab.dataset.tab))
 );
 
-$("#btn-close-detail").addEventListener("click", () => closeDocumentDetail());
-$("#btn-refresh-docs").addEventListener("click", () => loadDocuments().catch((e) => toast(e.message, "error")));
-$("#btn-refresh-history").addEventListener("click", () => loadHistory().catch((e) => toast(e.message, "error")));
+safeOn("#btn-close-detail", "click", () => closeDocumentDetail());
+safeOn("#btn-refresh-docs", "click", () => loadDocuments().catch((e) => toast(e.message, "error")));
+safeOn("#btn-refresh-history", "click", () => loadHistory().catch((e) => toast(e.message, "error")));
 
-$("#btn-ingest-text").addEventListener("click", async () => {
+safeOn("#btn-ingest-text", "click", async () => {
   try {
     const title = $("#text-title").value.trim();
     const content = $("#text-content").value.trim();
@@ -1478,7 +1637,7 @@ $("#btn-ingest-text").addEventListener("click", async () => {
   }
 });
 
-$("#btn-ingest-url").addEventListener("click", async () => {
+safeOn("#btn-ingest-url", "click", async () => {
   try {
     const url = $("#url-input").value.trim();
     const title = $("#url-title").value.trim() || null;
@@ -1495,7 +1654,7 @@ $("#btn-ingest-url").addEventListener("click", async () => {
   }
 });
 
-$("#btn-ingest-youtube").addEventListener("click", async () => {
+safeOn("#btn-ingest-youtube", "click", async () => {
   try {
     const url = $("#youtube-input").value.trim();
     const title = $("#youtube-title").value.trim() || null;
@@ -1512,7 +1671,7 @@ $("#btn-ingest-youtube").addEventListener("click", async () => {
   }
 });
 
-$("#btn-ingest-pdf").addEventListener("click", async () => {
+safeOn("#btn-ingest-pdf", "click", async () => {
   try {
     const file = $("#pdf-file").files[0];
     if (!file) return toast("Choose a PDF file", "error");
@@ -1696,7 +1855,7 @@ $("#btn-ingest-imaging")?.addEventListener("click", () =>
   uploadImagingSelection().catch((e) => toast(e.message, "error"))
 );
 
-$("#btn-ingest-video").addEventListener("click", async () => {
+safeOn("#btn-ingest-video", "click", async () => {
   try {
     const file = $("#video-file").files[0];
     if (!file) return toast("Choose a video file", "error");
@@ -1717,10 +1876,10 @@ $("#btn-ingest-video").addEventListener("click", async () => {
   }
 });
 
-$("#btn-baseline").addEventListener("click", () => runAnalysis({ baseline: true }));
-$("#btn-summarize").addEventListener("click", () => runAnalysis({ summarize: true }));
-$("#btn-case-add-data")?.addEventListener("click", () => switchTab("ingest"));
-$("#btn-case-run-baseline")?.addEventListener("click", () => {
+safeOn("#btn-baseline", "click", () => runAnalysis({ baseline: true }));
+safeOn("#btn-summarize", "click", () => runAnalysis({ summarize: true }));
+safeOn("#btn-case-add-data", "click", () => switchTab("ingest"));
+safeOn("#btn-case-run-baseline", "click", () => {
   if (state.documents.length === 0) {
     switchTab("ingest");
     return;
@@ -1728,7 +1887,7 @@ $("#btn-case-run-baseline")?.addEventListener("click", () => {
   runAnalysis({ baseline: true });
 });
 
-$("#btn-analyze").addEventListener("click", () => {
+safeOn("#btn-analyze", "click", () => {
   const query = $("#analyze-query").value.trim();
   if (!query) return toast("Enter a question, or use Run baseline assessment", "error");
   runAnalysis({ query });
@@ -1741,6 +1900,8 @@ $("#btn-save-patient")?.addEventListener("click", () =>
   savePatientContext().catch((e) => toast(e.message, "error"))
 );
 $("#settings-model")?.addEventListener("change", updateModelDescription);
+$("#audit-filter")?.addEventListener("change", () => loadAuditTrail(true));
+$("#btn-audit-load-more")?.addEventListener("click", () => loadAuditTrail(false));
 
 $("#btn-export-pdf")?.addEventListener("click", () =>
   exportAssessmentPdf()
@@ -1787,16 +1948,9 @@ $("#btn-signout")?.addEventListener("click", async () => {
 checkHealth();
 loadAppVersion();
 initAuth();
-initTheme();
-initScrollTop();
-initInvestigationGuidancePresets();
-updateReportDateTime();
-renderCaseStatus();
+bindPdfFileInput();
+bindFileInput("#video-file");
 window.matchMedia("(max-width: 600px)").addEventListener("change", () => {
   updateReportDateTime(state.latestAnalysis?.created_at);
 });
-bindPdfFileInput();
-bindFileInput("#video-file");
-loadLatestAssessment().catch(() => {});
-resumeActiveAnalysisJob().catch(() => {});
-loadDocuments().catch(() => {});
+void loadInitialData();

@@ -373,6 +373,31 @@
           <button class="btn primary" id="btn-save-settings">Save model</button>
         </div>
       </div>
+
+      <div class="card settings-card audit-trail-card">
+        <div class="row-between wrap">
+          <h3>Audit trail</h3>
+          <label class="audit-filter-label">
+            Filter
+            <select id="audit-filter">
+              <option value="all">All activity</option>
+              <option value="documents">Documents</option>
+              <option value="analysis">Analysis</option>
+              <option value="open_items">Open items &amp; comments</option>
+              <option value="settings">Settings</option>
+              <option value="auth">Sign in / out</option>
+            </select>
+          </label>
+        </div>
+        <p class="muted small">Permanent log of documents, analyses, comments, investigations, settings changes, and sign-ins. Stored in the database.</p>
+        <p id="audit-trail-count" class="muted small audit-trail-count">Loading…</p>
+        <div id="audit-trail-list" class="audit-trail-list">
+          <p class="muted">Loading audit events…</p>
+        </div>
+        <div class="audit-trail-actions">
+          <button type="button" class="btn secondary hidden" id="btn-audit-load-more">Load more</button>
+        </div>
+      </div>
     </section>
   </main>
 

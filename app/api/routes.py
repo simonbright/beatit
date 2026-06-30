@@ -24,6 +24,30 @@ from app.services.synthesis import SynthesisService
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
 from app.services.investigation import InvestigationService
 from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
+from app.services.audit import (
+    ANALYSIS_COMPLETED,
+    ANALYSIS_FAILED,
+    ANALYSIS_REQUESTED,
+    AUTH_LOGIN,
+    AUTH_LOGOUT,
+    CATEGORY_PREFIXES,
+    DOCUMENT_CREATED,
+    DOCUMENT_DELETED,
+    OPEN_ITEM_COMMENT_ADDED,
+    OPEN_ITEM_INVESTIGATION_ACCEPTED,
+    OPEN_ITEM_INVESTIGATION_DISCARDED,
+    OPEN_ITEM_INVESTIGATION_DRAFT_COMMENTED,
+    OPEN_ITEM_INVESTIGATION_DRAFT_CREATED,
+    OPEN_ITEM_INVESTIGATION_FAILED,
+    OPEN_ITEM_INVESTIGATION_STARTED,
+    OPEN_ITEM_STATUS_CHANGED,
+    PDF_EXPORTED,
+    SETTINGS_MODEL_UPDATED,
+    SETTINGS_PATIENT_CONTEXT_UPDATED,
+    enrich_audit_event,
+    log_audit,
+    preview_text,
+)
 from app.services.auth_session import (
     COOKIE_NAME,
     SESSION_DAYS,
@@ -112,8 +136,35 @@ async def _get_services():
     return db, store, llm, synthesis, investigation
 
 
+def _actor(request: Request | None) -> str | None:
+    if not request:
+        return None
+    if not settings.auth_enabled:
+        return None
+    return getattr(request.state, "user", None)
+
+
+async def _audit(
+    db: Database,
+    request: Request | None,
+    event_type: str,
+    *,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    await log_audit(
+        db,
+        event_type,
+        actor=_actor(request),
+        resource_type=resource_type,
+        resource_id=resource_id,
+        metadata=metadata,
+    )
+
+
 @router.post("/login")
-async def login(body: LoginRequest, response: Response):
+async def login(body: LoginRequest, response: Response, request: Request):
     if not settings.auth_enabled:
         return {"ok": True, "username": body.username.strip(), "auth": "disabled"}
 
@@ -122,11 +173,21 @@ async def login(body: LoginRequest, response: Response):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     _set_session_cookie(response, username)
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        AUTH_LOGIN,
+        resource_type="session",
+        metadata={"username": username},
+    )
     return {"ok": True, "username": username}
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(response: Response, request: Request):
+    db, _, _, _, _ = await _get_services()
+    await _audit(db, request, AUTH_LOGOUT, resource_type="session")
     response.delete_cookie(key=COOKIE_NAME, path="/")
     return {"ok": True}
 
@@ -171,7 +232,7 @@ async def get_app_settings():
 
 
 @router.put("/settings")
-async def update_app_settings(body: SettingsUpdateRequest):
+async def update_app_settings(body: SettingsUpdateRequest, request: Request):
     if body.openrouter_model is None and body.patient_context is None:
         raise HTTPException(status_code=400, detail="Nothing to update")
 
@@ -185,8 +246,17 @@ async def update_app_settings(body: SettingsUpdateRequest):
                 status_code=400,
                 detail="Choose a model from the list or pick a supported preset",
             )
+        old_model = await db.get_setting("openrouter_model")
         await db.set_setting("openrouter_model", model_id)
         updated["openrouter_model"] = model_id
+        await _audit(
+            db,
+            request,
+            SETTINGS_MODEL_UPDATED,
+            resource_type="setting",
+            resource_id="openrouter_model",
+            metadata={"old_model": old_model, "new_model": model_id},
+        )
 
     if body.patient_context is not None:
         context = body.patient_context.strip()
@@ -194,10 +264,51 @@ async def update_app_settings(body: SettingsUpdateRequest):
             raise HTTPException(status_code=400, detail="Patient context cannot be empty")
         if len(context) > 5000:
             raise HTTPException(status_code=400, detail="Patient context is too long (max 5000 characters)")
+        old_context = await db.get_setting("patient_context") or ""
         await db.set_setting("patient_context", context)
         updated["patient_context"] = context
+        await _audit(
+            db,
+            request,
+            SETTINGS_PATIENT_CONTEXT_UPDATED,
+            resource_type="setting",
+            resource_id="patient_context",
+            metadata={
+                "old_length": len(old_context),
+                "new_length": len(context),
+                "old_preview": preview_text(old_context, 180),
+                "new_preview": preview_text(context, 180),
+            },
+        )
 
     return {"settings": updated}
+
+
+@router.get("/audit-events")
+async def list_audit_events(
+    limit: int = 100,
+    offset: int = 0,
+    category: str = "all",
+):
+    db, _, _, _, _ = await _get_services()
+    event_types = None
+    if category and category != "all":
+        event_types = list(CATEGORY_PREFIXES.get(category, ()))
+        if not event_types:
+            raise HTTPException(status_code=400, detail="Unknown audit category")
+
+    events, total = await db.list_audit_events(
+        limit=limit,
+        offset=offset,
+        event_types=event_types,
+    )
+    return {
+        "events": [enrich_audit_event(event) for event in events],
+        "total": total,
+        "limit": max(1, min(limit, 500)),
+        "offset": max(0, offset),
+        "category": category,
+    }
 
 
 @router.get("/documents")
@@ -241,29 +352,55 @@ async def get_document_file(doc_id: str):
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
-    _, store, _, _, _ = await _get_services()
+async def delete_document(doc_id: str, request: Request):
+    db, store, _, _, _ = await _get_services()
+    doc = await db.get_document(doc_id)
     deleted = await store.delete_document(doc_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc:
+        await _audit(
+            db,
+            request,
+            DOCUMENT_DELETED,
+            resource_type="document",
+            resource_id=doc_id,
+            metadata={
+                "title": doc.get("title"),
+                "source_type": doc.get("source_type"),
+                "source_uri": doc.get("source_uri"),
+            },
+        )
     return {"deleted": True}
 
 
 @router.post("/ingest/text")
-async def ingest_text_route(body: TextIngestRequest):
-    _, store, _, _, _ = await _get_services()
+async def ingest_text_route(body: TextIngestRequest, request: Request):
+    db, store, _, _, _ = await _get_services()
     doc = await ingest_text(
         store,
         title=body.title,
         content=body.content,
         metadata=body.metadata,
     )
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+        },
+    )
     return {"document": doc}
 
 
 @router.post("/ingest/url")
-async def ingest_url_route(body: UrlIngestRequest):
-    _, store, _, _, _ = await _get_services()
+async def ingest_url_route(body: UrlIngestRequest, request: Request):
+    db, store, _, _, _ = await _get_services()
     try:
         doc = await ingest_url(
             store,
@@ -273,14 +410,26 @@ async def ingest_url_route(body: UrlIngestRequest):
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+        },
+    )
     return {"document": doc}
 
 
 @router.post("/ingest/youtube")
-async def ingest_youtube_route(body: YoutubeIngestRequest):
+async def ingest_youtube_route(body: YoutubeIngestRequest, request: Request):
     from app.ingest.youtube import ingest_youtube
 
-    _, store, _, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     try:
         doc = await ingest_youtube(
             store,
@@ -290,15 +439,28 @@ async def ingest_youtube_route(body: YoutubeIngestRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+        },
+    )
     return {"document": doc}
 
 
 @router.post("/ingest/pdf")
 async def ingest_pdf_route(
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
 ):
-    _, store, _, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -309,16 +471,30 @@ async def ingest_pdf_route(
         content=content,
         title=title or filename,
     )
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+            "original_filename": filename,
+        },
+    )
     return {"document": doc}
 
 
 @router.post("/ingest/video")
 async def ingest_video_route(
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     notes: str | None = Form(default=None),
 ):
-    _, store, _, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -330,11 +506,25 @@ async def ingest_video_route(
         title=title or filename,
         notes=notes,
     )
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+            "original_filename": filename,
+        },
+    )
     return {"document": doc}
 
 
 @router.post("/ingest/imaging")
 async def ingest_imaging_route(
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     title_prefix: str | None = Form(default=None),
@@ -365,11 +555,25 @@ async def ingest_imaging_route(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+            "original_filename": filename,
+            "relative_path": relative_path or file.filename,
+        },
+    )
     return {"document": doc}
 
 
 @router.post("/analyze", status_code=202)
-async def analyze(body: AnalyzeRequest):
+async def analyze(body: AnalyzeRequest, request: Request):
     if not body.query.strip() and not body.include_baseline_assessment:
         raise HTTPException(
             status_code=400,
@@ -388,11 +592,24 @@ async def analyze(body: AnalyzeRequest):
             status_code=409,
             detail="An analysis is already running",
         ) from exc
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        ANALYSIS_REQUESTED,
+        resource_type="analysis_job",
+        resource_id=job["id"],
+        metadata={
+            "job_type": job_type,
+            "query_preview": preview_text(body.query or "Baseline assessment"),
+            "document_count": len(body.document_ids or []),
+        },
+    )
     return {"job": job}
 
 
 @router.post("/analyze/summarize", status_code=202)
-async def summarize(document_ids: list[str] | None = None):
+async def summarize(request: Request, document_ids: list[str] | None = None):
     try:
         job = await enqueue_analysis_job(
             job_type="summarize",
@@ -404,6 +621,19 @@ async def summarize(document_ids: list[str] | None = None):
             status_code=409,
             detail="An analysis is already running",
         ) from exc
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        ANALYSIS_REQUESTED,
+        resource_type="analysis_job",
+        resource_id=job["id"],
+        metadata={
+            "job_type": "summarize",
+            "query_preview": "Summarize all stored documents",
+            "document_count": len(document_ids or []),
+        },
+    )
     return {"job": job}
 
 
@@ -438,7 +668,7 @@ async def latest_analysis():
 
 
 @router.get("/analyses/latest/export.pdf")
-async def export_latest_assessment_pdf():
+async def export_latest_assessment_pdf(request: Request):
     db, _, _, _, _ = await _get_services()
     analysis = await db.get_latest_analysis()
     if not analysis or not (analysis.get("response") or analysis.get("executive_summary")):
@@ -447,6 +677,18 @@ async def export_latest_assessment_pdf():
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
     pdf_bytes = build_assessment_pdf(analysis, patient_context=patient_context)
     filename = assessment_pdf_filename(analysis)
+    await _audit(
+        db,
+        request,
+        PDF_EXPORTED,
+        resource_type="analysis",
+        resource_id=analysis.get("id"),
+        metadata={
+            "analysis_id": analysis.get("id"),
+            "filename": filename,
+            "analysis_type": analysis.get("analysis_type"),
+        },
+    )
     return FastAPIResponse(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -473,24 +715,72 @@ async def get_open_item(open_item_id: str):
 
 
 @router.post("/open-items/{open_item_id}/investigate")
-async def investigate_open_item(open_item_id: str, body: InvestigateOpenItemRequest | None = None):
-    _, _, _, _, investigation = await _get_services()
+async def investigate_open_item(
+    open_item_id: str,
+    request: Request,
+    body: InvestigateOpenItemRequest | None = None,
+):
+    db, _, _, _, investigation = await _get_services()
     guidance = body.guidance if body else ""
+    existing = await db.get_open_item(open_item_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Open item not found")
+
+    await _audit(
+        db,
+        request,
+        OPEN_ITEM_INVESTIGATION_STARTED,
+        resource_type="open_item",
+        resource_id=open_item_id,
+        metadata={
+            "item": existing.get("item"),
+            "item_type": existing.get("item_type"),
+            "guidance_preview": preview_text(guidance),
+        },
+    )
+
     try:
         item = await investigation.investigate_open_item(open_item_id, guidance=guidance)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
+        await _audit(
+            db,
+            request,
+            OPEN_ITEM_INVESTIGATION_FAILED,
+            resource_type="open_item",
+            resource_id=open_item_id,
+            metadata={
+                "item": existing.get("item"),
+                "error_preview": preview_text(str(exc), 300),
+            },
+        )
         raise HTTPException(
             status_code=502,
             detail=f"Investigation failed: {exc}",
         ) from exc
+
+    await _audit(
+        db,
+        request,
+        OPEN_ITEM_INVESTIGATION_DRAFT_CREATED,
+        resource_type="open_item",
+        resource_id=open_item_id,
+        metadata={
+            "item": item.get("item"),
+            "item_type": item.get("item_type"),
+            "model": item.get("investigation_draft_model"),
+            "guidance_preview": preview_text(guidance),
+        },
+    )
     return {"open_item": item}
 
 
 @router.post("/open-items/{open_item_id}/investigate/accept")
 async def accept_open_item_investigation(
-    open_item_id: str, body: AcceptInvestigationRequest | None = None
+    open_item_id: str,
+    request: Request,
+    body: AcceptInvestigationRequest | None = None,
 ):
     db, _, _, _, _ = await _get_services()
     item = await db.get_open_item(open_item_id)
@@ -503,20 +793,45 @@ async def accept_open_item_investigation(
 
     edited = body.edited_response.strip() if body and body.edited_response else None
     updated = await db.accept_open_item_investigation(open_item_id, response=edited)
+    await _audit(
+        db,
+        request,
+        OPEN_ITEM_INVESTIGATION_ACCEPTED,
+        resource_type="open_item",
+        resource_id=open_item_id,
+        metadata={
+            "item": item.get("item"),
+            "item_type": item.get("item_type"),
+            "edited": bool(edited),
+            "model": updated.get("investigation_model") if updated else item.get("investigation_draft_model"),
+        },
+    )
     return {"open_item": updated}
 
 
 @router.post("/open-items/{open_item_id}/investigate/discard")
-async def discard_open_item_investigation(open_item_id: str):
+async def discard_open_item_investigation(open_item_id: str, request: Request):
     db, _, _, _, _ = await _get_services()
+    item = await db.get_open_item(open_item_id)
     updated = await db.discard_open_item_investigation_draft(open_item_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Open item not found")
+    await _audit(
+        db,
+        request,
+        OPEN_ITEM_INVESTIGATION_DISCARDED,
+        resource_type="open_item",
+        resource_id=open_item_id,
+        metadata={
+            "item": item.get("item") if item else None,
+            "item_type": item.get("item_type") if item else None,
+        },
+    )
     return {"open_item": updated}
 
 
 @router.post("/open-items/{open_item_id}/investigate/comment")
-async def comment_open_item_investigation(open_item_id: str):
+async def comment_open_item_investigation(open_item_id: str, request: Request):
     db, _, _, _, _ = await _get_services()
     item = await db.get_open_item(open_item_id)
     if not item:
@@ -525,11 +840,22 @@ async def comment_open_item_investigation(open_item_id: str):
         raise HTTPException(status_code=400, detail="No investigation draft to save")
 
     updated = await db.add_open_item_investigation_draft_as_comment(open_item_id)
+    await _audit(
+        db,
+        request,
+        OPEN_ITEM_INVESTIGATION_DRAFT_COMMENTED,
+        resource_type="open_item",
+        resource_id=open_item_id,
+        metadata={
+            "item": item.get("item"),
+            "item_type": item.get("item_type"),
+        },
+    )
     return {"open_item": updated}
 
 
 @router.patch("/open-items/{open_item_id}")
-async def update_open_item(open_item_id: str, body: OpenItemUpdateRequest):
+async def update_open_item(open_item_id: str, body: OpenItemUpdateRequest, request: Request):
     db, _, _, _, _ = await _get_services()
     allowed = {"open", "investigating", "pending_review", "investigated", "resolved", "closed"}
     status = body.status.strip().lower() if body.status else None
@@ -547,7 +873,39 @@ async def update_open_item(open_item_id: str, body: OpenItemUpdateRequest):
     if comment and len(comment) > 5000:
         raise HTTPException(status_code=400, detail="Comment is too long (max 5000 characters)")
 
+    existing = await db.get_open_item(open_item_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Open item not found")
+
     item = await db.update_open_item(open_item_id, status=status, comment=comment)
     if not item:
         raise HTTPException(status_code=404, detail="Open item not found")
+
+    if comment:
+        await _audit(
+            db,
+            request,
+            OPEN_ITEM_COMMENT_ADDED,
+            resource_type="open_item",
+            resource_id=open_item_id,
+            metadata={
+                "item": existing.get("item"),
+                "item_type": existing.get("item_type"),
+                "comment": comment,
+            },
+        )
+    if status is not None and status != existing.get("status"):
+        await _audit(
+            db,
+            request,
+            OPEN_ITEM_STATUS_CHANGED,
+            resource_type="open_item",
+            resource_id=open_item_id,
+            metadata={
+                "item": existing.get("item"),
+                "item_type": existing.get("item_type"),
+                "old_status": existing.get("status"),
+                "new_status": status,
+            },
+        )
     return {"open_item": item}

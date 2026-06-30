@@ -1153,6 +1153,83 @@ textarea { resize: vertical; min-height: 100px; }
 .settings-actions { margin-top: 1rem; }
 .settings-actions .btn { margin-top: 0; }
 
+.audit-trail-card h3 {
+  margin: 0;
+}
+
+.audit-filter-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.audit-filter-label select {
+  min-width: 11rem;
+}
+
+.audit-trail-count {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.audit-trail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 60vh;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.audit-event {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 0.85rem;
+  background: var(--surface-2);
+}
+
+.audit-event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.audit-event-label {
+  color: var(--accent);
+}
+
+.audit-event-time {
+  white-space: nowrap;
+}
+
+.audit-event-summary {
+  margin: 0.35rem 0 0;
+  line-height: 1.45;
+}
+
+.audit-event-details {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.audit-event-details li {
+  margin: 0.15rem 0;
+}
+
+.audit-trail-actions {
+  margin-top: 0.85rem;
+}
+
+.audit-trail-actions .btn {
+  margin-top: 0;
+}
+
 .assessment-header-actions {
   display: flex;
   align-items: center;

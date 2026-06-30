@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.services.audit import ANALYSIS_COMPLETED, ANALYSIS_FAILED, log_audit, preview_text
 from app.services.llm import LLMClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL
@@ -58,6 +59,23 @@ async def _run_job(job_id: str) -> None:
             analysis_id=result["id"],
             completed_at=_now_iso(),
         )
+        await log_audit(
+            db,
+            ANALYSIS_COMPLETED,
+            actor="system",
+            resource_type="analysis",
+            resource_id=result["id"],
+            metadata={
+                "job_id": job_id,
+                "job_type": job["job_type"],
+                "analysis_type": result.get("analysis_type"),
+                "analysis_id": result["id"],
+                "model": result.get("model"),
+                "document_count": len(result.get("document_ids") or []),
+                "open_items_count": len(result.get("open_items") or []),
+                "query_preview": preview_text(job.get("query")),
+            },
+        )
     except Exception as exc:
         logger.exception("Analysis job %s failed", job_id)
         await db.update_analysis_job(
@@ -65,6 +83,19 @@ async def _run_job(job_id: str) -> None:
             status="failed",
             error=str(exc),
             completed_at=_now_iso(),
+        )
+        await log_audit(
+            db,
+            ANALYSIS_FAILED,
+            actor="system",
+            resource_type="analysis_job",
+            resource_id=job_id,
+            metadata={
+                "job_id": job_id,
+                "job_type": job.get("job_type"),
+                "error_preview": preview_text(str(exc), 300),
+                "query_preview": preview_text(job.get("query")),
+            },
         )
     finally:
         _running_tasks.pop(job_id, None)
