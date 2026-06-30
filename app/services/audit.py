@@ -6,9 +6,13 @@ DOCUMENT_CREATED = "document.created"
 DOCUMENT_DELETED = "document.deleted"
 SETTINGS_MODEL_UPDATED = "settings.model_updated"
 SETTINGS_PATIENT_CONTEXT_UPDATED = "settings.patient_context_updated"
+SETTINGS_SOURCE_LABELS_UPDATED = "settings.source_labels_updated"
+DOCUMENT_CITATION_UPDATED = "document.citation_updated"
 ANALYSIS_REQUESTED = "analysis.requested"
 ANALYSIS_COMPLETED = "analysis.completed"
 ANALYSIS_FAILED = "analysis.failed"
+ANALYSIS_PROMOTED = "analysis.promoted"
+ANALYSIS_DRAFT_DISCARDED = "analysis.draft_discarded"
 OPEN_ITEM_COMMENT_ADDED = "open_item.comment_added"
 OPEN_ITEM_STATUS_CHANGED = "open_item.status_changed"
 OPEN_ITEM_INVESTIGATION_STARTED = "open_item.investigation_started"
@@ -26,9 +30,13 @@ EVENT_LABELS: dict[str, str] = {
     DOCUMENT_DELETED: "Document removed",
     SETTINGS_MODEL_UPDATED: "LLM model changed",
     SETTINGS_PATIENT_CONTEXT_UPDATED: "Patient context updated",
+    SETTINGS_SOURCE_LABELS_UPDATED: "Source labels updated",
+    DOCUMENT_CITATION_UPDATED: "Document citation name updated",
     ANALYSIS_REQUESTED: "Analysis requested",
     ANALYSIS_COMPLETED: "Analysis completed",
     ANALYSIS_FAILED: "Analysis failed",
+    ANALYSIS_PROMOTED: "Draft added to medical record",
+    ANALYSIS_DRAFT_DISCARDED: "Draft discarded",
     OPEN_ITEM_COMMENT_ADDED: "Open item comment",
     OPEN_ITEM_STATUS_CHANGED: "Open item status changed",
     OPEN_ITEM_INVESTIGATION_STARTED: "Investigation started",
@@ -43,7 +51,7 @@ EVENT_LABELS: dict[str, str] = {
 }
 
 CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
-    "documents": (DOCUMENT_CREATED, DOCUMENT_DELETED),
+    "documents": (DOCUMENT_CREATED, DOCUMENT_DELETED, DOCUMENT_CITATION_UPDATED),
     "open_items": (
         OPEN_ITEM_COMMENT_ADDED,
         OPEN_ITEM_STATUS_CHANGED,
@@ -54,8 +62,19 @@ CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
         OPEN_ITEM_INVESTIGATION_DISCARDED,
         OPEN_ITEM_INVESTIGATION_DRAFT_COMMENTED,
     ),
-    "analysis": (ANALYSIS_REQUESTED, ANALYSIS_COMPLETED, ANALYSIS_FAILED, PDF_EXPORTED),
-    "settings": (SETTINGS_MODEL_UPDATED, SETTINGS_PATIENT_CONTEXT_UPDATED),
+    "analysis": (
+        ANALYSIS_REQUESTED,
+        ANALYSIS_COMPLETED,
+        ANALYSIS_FAILED,
+        ANALYSIS_PROMOTED,
+        ANALYSIS_DRAFT_DISCARDED,
+        PDF_EXPORTED,
+    ),
+    "settings": (
+        SETTINGS_MODEL_UPDATED,
+        SETTINGS_PATIENT_CONTEXT_UPDATED,
+        SETTINGS_SOURCE_LABELS_UPDATED,
+    ),
     "auth": (AUTH_LOGIN, AUTH_LOGOUT),
 }
 
@@ -87,10 +106,22 @@ async def log_audit(
     )
 
 
+def format_audit_actor(event: dict[str, Any]) -> str | None:
+    actor = event.get("actor")
+    if actor:
+        return str(actor)
+    meta = event.get("metadata") or {}
+    username = meta.get("username")
+    if username:
+        return str(username)
+    return None
+
+
 def enrich_audit_event(event: dict[str, Any]) -> dict[str, Any]:
     metadata = event.get("metadata") or {}
     enriched = dict(event)
     enriched["label"] = EVENT_LABELS.get(event.get("event_type", ""), event.get("event_type", "Event"))
+    enriched["actor_display"] = format_audit_actor(event)
     enriched["summary"] = format_audit_summary(event)
     enriched["details"] = format_audit_details(event)
     return enriched
@@ -104,16 +135,29 @@ def format_audit_summary(event: dict[str, Any]) -> str:
         return f'Added "{meta.get("title", "document")}" ({meta.get("source_type", "unknown")})'
     if event_type == DOCUMENT_DELETED:
         return f'Removed "{meta.get("title", "document")}" ({meta.get("source_type", "unknown")})'
+    if event_type == DOCUMENT_CITATION_UPDATED:
+        old_name = meta.get("old_display_name") or meta.get("old_title") or "—"
+        new_name = meta.get("new_display_name") or meta.get("new_title") or "—"
+        return f'Citation name: {old_name} → {new_name}'
     if event_type == SETTINGS_MODEL_UPDATED:
         return f'Model: {meta.get("old_model") or "—"} → {meta.get("new_model") or "—"}'
     if event_type == SETTINGS_PATIENT_CONTEXT_UPDATED:
         return f'Patient context updated ({meta.get("old_length", 0)} → {meta.get("new_length", 0)} chars)'
+    if event_type == SETTINGS_SOURCE_LABELS_UPDATED:
+        return meta.get("summary") or "Source type labels updated"
     if event_type == ANALYSIS_REQUESTED:
         return f'{meta.get("job_type", "analysis")} job queued'
     if event_type == ANALYSIS_COMPLETED:
+        status = meta.get("record_status", "official")
+        if status == "draft":
+            return f'Custom task draft ready · {preview_text(meta.get("query_preview"), 80) or "custom query"}'
         return f'{meta.get("analysis_type", "analysis")} finished · {meta.get("open_items_count", 0)} open items'
     if event_type == ANALYSIS_FAILED:
         return meta.get("error_preview") or "Analysis job failed"
+    if event_type == ANALYSIS_PROMOTED:
+        return preview_text(meta.get("query_preview"), 100) or "Draft promoted to medical record"
+    if event_type == ANALYSIS_DRAFT_DISCARDED:
+        return preview_text(meta.get("query_preview"), 100) or "Draft discarded"
     if event_type == OPEN_ITEM_COMMENT_ADDED:
         return preview_text(meta.get("comment"), 120) or "Comment added"
     if event_type == OPEN_ITEM_STATUS_CHANGED:
@@ -133,7 +177,8 @@ def format_audit_summary(event: dict[str, Any]) -> str:
     if event_type == AUTH_LOGIN:
         return f'User {meta.get("username") or event.get("actor") or "unknown"} signed in'
     if event_type == AUTH_LOGOUT:
-        return "User signed out"
+        user = meta.get("username") or event.get("actor")
+        return f'User {user} signed out' if user else "User signed out"
     if event_type == PDF_EXPORTED:
         return f'Exported assessment {meta.get("analysis_id", "")[:8]}…'
     return event_type.replace(".", " ").replace("_", " ").title()
@@ -149,11 +194,14 @@ def format_audit_details(event: dict[str, Any]) -> list[str]:
             return
         lines.append(f"{label}: {value}")
 
-    if event_type in {DOCUMENT_CREATED, DOCUMENT_DELETED}:
+    if event_type in {DOCUMENT_CREATED, DOCUMENT_DELETED, DOCUMENT_CITATION_UPDATED}:
         add("Title", meta.get("title"))
         add("Type", meta.get("source_type"))
         add("Source", meta.get("source_uri"))
         add("Document ID", event.get("resource_id"))
+        if event_type == DOCUMENT_CITATION_UPDATED:
+            add("Previous citation name", meta.get("old_display_name"))
+            add("New citation name", meta.get("new_display_name"))
     elif event_type == SETTINGS_MODEL_UPDATED:
         add("Previous model", meta.get("old_model"))
         add("New model", meta.get("new_model"))
@@ -164,12 +212,16 @@ def format_audit_details(event: dict[str, Any]) -> list[str]:
             add("Previous preview", meta.get("old_preview"))
         if meta.get("new_preview"):
             add("New preview", meta.get("new_preview"))
-    elif event_type in {ANALYSIS_REQUESTED, ANALYSIS_COMPLETED, ANALYSIS_FAILED}:
+    elif event_type == SETTINGS_SOURCE_LABELS_UPDATED:
+        if meta.get("changes"):
+            add("Changes", meta.get("changes"))
+    elif event_type in {ANALYSIS_REQUESTED, ANALYSIS_COMPLETED, ANALYSIS_FAILED, ANALYSIS_PROMOTED, ANALYSIS_DRAFT_DISCARDED}:
         add("Job type", meta.get("job_type") or meta.get("analysis_type"))
         add("Query", meta.get("query_preview"))
         add("Documents", meta.get("document_count"))
         add("Model", meta.get("model"))
         add("Analysis ID", meta.get("analysis_id"))
+        add("Record status", meta.get("record_status"))
         add("Open items", meta.get("open_items_count"))
         if meta.get("error_preview"):
             add("Error", meta.get("error_preview"))
@@ -192,9 +244,9 @@ def format_audit_details(event: dict[str, Any]) -> list[str]:
         add("Filename", meta.get("filename"))
     elif event_type == AUTH_LOGIN:
         add("Username", meta.get("username") or event.get("actor"))
+    elif event_type == AUTH_LOGOUT:
+        add("Username", meta.get("username") or event.get("actor"))
 
-    if event.get("actor"):
-        lines.insert(0, f"Actor: {event['actor']}")
     if event.get("resource_id") and event_type not in {DOCUMENT_CREATED, DOCUMENT_DELETED}:
         add("Resource ID", event.get("resource_id"))
 

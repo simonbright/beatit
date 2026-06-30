@@ -4,8 +4,10 @@ from app.services.assessment_parse import open_items_to_json, parse_assessment
 from app.services.llm import LLMClient
 from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_content
 from app.services.source_policy import (
+    CUSTOM_QUERY_RESPONSE_STRUCTURE,
     RESPONSE_STRUCTURE_WITH_SOURCES,
     SOURCE_ATTRIBUTION_RULES,
+    TRIAL_SEARCH_QUERY_INSTRUCTIONS,
 )
 from app.services.source_normalize import enrich_with_sources
 from app.storage.database import Database
@@ -61,6 +63,33 @@ def _format_corpus(corpus: list[dict[str, Any]], max_chars: int = 120_000) -> st
     return "\n---\n".join(sections) if sections else "[No document text available]"
 
 
+def _is_trial_search_query(query: str) -> bool:
+    lower = query.lower()
+    keywords = (
+        "clinical trial",
+        "clinical trials",
+        "trial",
+        "trials",
+        "therapeutic",
+        "therapeutics",
+        "treatment option",
+        "study",
+        "studies",
+        "nct",
+        "investigational",
+    )
+    return any(keyword in lower for keyword in keywords)
+
+
+def _response_structure_for_analysis(*, analysis_type: str, query: str) -> str:
+    if analysis_type == "query":
+        structure = CUSTOM_QUERY_RESPONSE_STRUCTURE
+        if _is_trial_search_query(query):
+            structure = f"{structure}\n\n{TRIAL_SEARCH_QUERY_INSTRUCTIONS}"
+        return structure
+    return RESPONSE_STRUCTURE_WITH_SOURCES
+
+
 class SynthesisService:
     def __init__(
         self,
@@ -103,16 +132,17 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 === STORED DOCUMENTS ===
 {corpus_text}
 
-=== USER QUERY ===
+=== USER QUERY (answer this directly — this is the primary task) ===
 {query}
 
-{RESPONSE_STRUCTURE_WITH_SOURCES}
+{_response_structure_for_analysis(analysis_type=analysis_type, query=query)}
 
 CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."] or another SOURCE tag.
 Do NOT write parenthetical citations like (CT Report). Use [SOURCE: Document "exact title"] only.
 Do NOT mention palliative care, hospice, or comfort care anywhere in the response.
+Do NOT substitute a generic case summary when the user asked for a specific deliverable (e.g. a trial list).
 
-Use clear ### headings for each section and numbered lists for sections 4, 7, and 8."""
+Use clear ### headings for each section."""
 
         system = await build_medical_system_prompt(self.db)
         system = f"{system}\n\n{SOURCE_ATTRIBUTION_RULES}"
@@ -137,6 +167,7 @@ Use clear ### headings for each section and numbered lists for sections 4, 7, an
         )
         doc_ids_used = [d["id"] for d in corpus]
         provider_label = f"{self.llm.active_provider}:{self.llm.model_name}"
+        record_status = "draft" if analysis_type == "query" else "official"
         saved = await self.db.insert_analysis(
             query=query,
             response=response,
@@ -145,6 +176,7 @@ Use clear ### headings for each section and numbered lists for sections 4, 7, an
             analysis_type=analysis_type,
             executive_summary=parsed["executive_summary"],
             open_items_json=open_items_to_json(parsed["open_items"]),
+            record_status=record_status,
         )
         return saved
 

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+import json
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -24,15 +25,23 @@ from app.services.synthesis import SynthesisService
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
 from app.services.investigation import InvestigationService
 from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
+from app.services.source_catalog import (
+    DEFAULT_SOURCE_TYPES,
+    SOURCE_TYPE_KEYS,
+    SourceCatalog,
+)
 from app.services.audit import (
     ANALYSIS_COMPLETED,
     ANALYSIS_FAILED,
+    ANALYSIS_PROMOTED,
+    ANALYSIS_DRAFT_DISCARDED,
     ANALYSIS_REQUESTED,
     AUTH_LOGIN,
     AUTH_LOGOUT,
     CATEGORY_PREFIXES,
     DOCUMENT_CREATED,
     DOCUMENT_DELETED,
+    DOCUMENT_CITATION_UPDATED,
     OPEN_ITEM_COMMENT_ADDED,
     OPEN_ITEM_INVESTIGATION_ACCEPTED,
     OPEN_ITEM_INVESTIGATION_DISCARDED,
@@ -44,6 +53,7 @@ from app.services.audit import (
     PDF_EXPORTED,
     SETTINGS_MODEL_UPDATED,
     SETTINGS_PATIENT_CONTEXT_UPDATED,
+    SETTINGS_SOURCE_LABELS_UPDATED,
     enrich_audit_event,
     log_audit,
     preview_text,
@@ -90,6 +100,11 @@ class AnalyzeRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     openrouter_model: str | None = None
     patient_context: str | None = None
+    source_labels: dict[str, dict[str, str]] | None = None
+
+
+class DocumentCitationUpdateRequest(BaseModel):
+    citation_display_name: str | None = Field(default=None, max_length=200)
 
 
 class LoginRequest(BaseModel):
@@ -126,6 +141,21 @@ class AcceptInvestigationRequest(BaseModel):
     edited_response: str | None = Field(default=None, max_length=50000)
 
 
+async def _source_catalog(db: Database, documents: list[dict[str, Any]] | None = None) -> SourceCatalog:
+    docs = documents if documents is not None else await db.list_documents()
+    return SourceCatalog.from_settings(docs, await db.get_setting("source_labels"))
+
+
+def _source_labels_payload(catalog: SourceCatalog) -> dict[str, dict[str, str]]:
+    return {
+        key: {
+            "display": catalog.type_defs[key]["display"],
+            "shorthand": catalog.type_defs[key]["shorthand"],
+        }
+        for key in SOURCE_TYPE_KEYS
+    }
+
+
 async def _get_services():
     db = Database()
     model = await db.get_setting("openrouter_model") or settings.openrouter_model or DEFAULT_OPENROUTER_MODEL
@@ -139,8 +169,6 @@ async def _get_services():
 def _actor(request: Request | None) -> str | None:
     if not request:
         return None
-    if not settings.auth_enabled:
-        return None
     return getattr(request.state, "user", None)
 
 
@@ -149,6 +177,7 @@ async def _audit(
     request: Request | None,
     event_type: str,
     *,
+    actor: str | None = None,
     resource_type: str | None = None,
     resource_id: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -156,7 +185,7 @@ async def _audit(
     await log_audit(
         db,
         event_type,
-        actor=_actor(request),
+        actor=actor or _actor(request),
         resource_type=resource_type,
         resource_id=resource_id,
         metadata=metadata,
@@ -178,6 +207,7 @@ async def login(body: LoginRequest, response: Response, request: Request):
         db,
         request,
         AUTH_LOGIN,
+        actor=username,
         resource_type="session",
         metadata={"username": username},
     )
@@ -187,7 +217,15 @@ async def login(body: LoginRequest, response: Response, request: Request):
 @router.post("/logout")
 async def logout(response: Response, request: Request):
     db, _, _, _, _ = await _get_services()
-    await _audit(db, request, AUTH_LOGOUT, resource_type="session")
+    username = _actor(request)
+    await _audit(
+        db,
+        request,
+        AUTH_LOGOUT,
+        actor=username,
+        resource_type="session",
+        metadata={"username": username} if username else None,
+    )
     response.delete_cookie(key=COOKIE_NAME, path="/")
     return {"ok": True}
 
@@ -219,21 +257,29 @@ async def get_app_settings():
     db, _, llm, _, _ = await _get_services()
     model = await db.get_setting("openrouter_model") or settings.openrouter_model or DEFAULT_OPENROUTER_MODEL
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+    catalog = await _source_catalog(db, [])
     return {
         "settings": {
             "llm_provider": settings.llm_provider,
             "openrouter_model": model,
             "patient_context": patient_context,
+            "source_labels": _source_labels_payload(catalog),
         },
         "models": OPENROUTER_MODELS,
         "default_model": DEFAULT_OPENROUTER_MODEL,
         "default_patient_context": DEFAULT_PATIENT_CONTEXT,
+        "default_source_labels": _source_labels_payload(SourceCatalog.from_settings([], None)),
+        "source_legend": catalog.legend(),
     }
 
 
 @router.put("/settings")
 async def update_app_settings(body: SettingsUpdateRequest, request: Request):
-    if body.openrouter_model is None and body.patient_context is None:
+    if (
+        body.openrouter_model is None
+        and body.patient_context is None
+        and body.source_labels is None
+    ):
         raise HTTPException(status_code=400, detail="Nothing to update")
 
     db, _, _, _, _ = await _get_services()
@@ -281,6 +327,51 @@ async def update_app_settings(body: SettingsUpdateRequest, request: Request):
             },
         )
 
+    if body.source_labels is not None:
+        old_catalog = await _source_catalog(db, [])
+        validated: dict[str, dict[str, str]] = {}
+        changes: list[str] = []
+        for key in SOURCE_TYPE_KEYS:
+            incoming = body.source_labels.get(key)
+            if not isinstance(incoming, dict):
+                raise HTTPException(status_code=400, detail=f"Missing source label for {key}")
+            display = str(incoming.get("display", "")).strip()[:120]
+            shorthand = str(incoming.get("shorthand", "")).strip()[:12]
+            if not display or not shorthand:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Display name and shorthand are required for {key}",
+                )
+            default = DEFAULT_SOURCE_TYPES[key]
+            entry: dict[str, str] = {}
+            if display != default["display"]:
+                entry["display"] = display
+            if shorthand != default["shorthand"]:
+                entry["shorthand"] = shorthand
+            if entry:
+                validated[key] = entry
+            old = old_catalog.type_defs[key]
+            if display != old["display"] or shorthand != old["shorthand"]:
+                changes.append(
+                    f'{key}: [{old["shorthand"]}] {old["display"]} → [{shorthand}] {display}'
+                )
+        await db.set_setting("source_labels", json.dumps(validated))
+        updated["source_labels"] = _source_labels_payload(
+            SourceCatalog.from_settings([], json.dumps(validated))
+        )
+        if changes:
+            await _audit(
+                db,
+                request,
+                SETTINGS_SOURCE_LABELS_UPDATED,
+                resource_type="setting",
+                resource_id="source_labels",
+                metadata={
+                    "summary": "; ".join(changes),
+                    "changes": "; ".join(changes),
+                },
+            )
+
     return {"settings": updated}
 
 
@@ -314,7 +405,11 @@ async def list_audit_events(
 @router.get("/documents")
 async def list_documents():
     db, _, _, _, _ = await _get_services()
-    return {"documents": await db.list_documents()}
+    documents = await db.list_documents()
+    catalog = await _source_catalog(db, documents)
+    for doc in documents:
+        doc["source_info"] = catalog.describe_document(doc)
+    return {"documents": documents, "source_legend": catalog.legend()}
 
 
 @router.get("/documents/{doc_id}")
@@ -323,6 +418,8 @@ async def get_document(doc_id: str):
     doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    catalog = await _source_catalog(db)
+    doc["source_info"] = catalog.describe_document(doc)
     text = await store.read_extracted_text(doc)
     view = build_document_view(doc)
     return {"document": doc, "extracted_text": text, **view}
@@ -372,6 +469,42 @@ async def delete_document(doc_id: str, request: Request):
             },
         )
     return {"deleted": True}
+
+
+@router.patch("/documents/{doc_id}/citation")
+async def update_document_citation(
+    doc_id: str,
+    body: DocumentCitationUpdateRequest,
+    request: Request,
+):
+    db, _, _, _, _ = await _get_services()
+    existing = await db.get_document(doc_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    old_display = existing.get("citation_display_name") or existing.get("title")
+    doc = await db.update_document_citation_display_name(doc_id, body.citation_display_name)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    new_display = doc.get("citation_display_name") or doc.get("title")
+    if new_display != old_display:
+        await _audit(
+            db,
+            request,
+            DOCUMENT_CITATION_UPDATED,
+            resource_type="document",
+            resource_id=doc_id,
+            metadata={
+                "title": doc.get("title"),
+                "source_type": doc.get("source_type"),
+                "old_display_name": old_display,
+                "new_display_name": new_display,
+            },
+        )
+    catalog = await _source_catalog(db)
+    doc["source_info"] = catalog.describe_document(doc)
+    return {"document": doc}
 
 
 @router.post("/ingest/text")
@@ -586,6 +719,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
             query=body.query,
             document_ids=body.document_ids,
             include_baseline_assessment=body.include_baseline_assessment,
+            requested_by=_actor(request),
         )
     except ActiveAnalysisJobError as exc:
         raise HTTPException(
@@ -603,9 +737,10 @@ async def analyze(body: AnalyzeRequest, request: Request):
             "job_type": job_type,
             "query_preview": preview_text(body.query or "Baseline assessment"),
             "document_count": len(body.document_ids or []),
+            "save_as_draft": job_type == "query",
         },
     )
-    return {"job": job}
+    return {"job": job, "save_as_draft": job_type == "query"}
 
 
 @router.post("/analyze/summarize", status_code=202)
@@ -615,6 +750,7 @@ async def summarize(request: Request, document_ids: list[str] | None = None):
             job_type="summarize",
             query="Summarize all stored documents",
             document_ids=document_ids,
+            requested_by=_actor(request),
         )
     except ActiveAnalysisJobError as exc:
         raise HTTPException(
@@ -655,6 +791,91 @@ async def get_analysis_job(job_id: str):
     return {"job": payload}
 
 
+@router.get("/custom-tasks")
+async def list_custom_tasks():
+    db, _, _, _, _ = await _get_services()
+    active = await db.get_active_analysis_job()
+    active_payload = None
+    if active and active.get("job_type") == "query":
+        active_payload = await get_job_payload(active["id"])
+
+    jobs = await db.list_analysis_jobs(job_type="query", limit=20)
+    job_payloads: list[dict[str, Any]] = []
+    for job in jobs:
+        payload = await get_job_payload(job["id"])
+        if payload:
+            job_payloads.append(payload)
+
+    drafts = await db.list_draft_analyses(limit=50)
+    return {
+        "active_job": active_payload,
+        "jobs": job_payloads,
+        "drafts": drafts,
+    }
+
+
+@router.get("/analyses/drafts")
+async def list_draft_analyses(limit: int = 50):
+    db, _, _, _, _ = await _get_services()
+    return {"drafts": await db.list_draft_analyses(limit=limit)}
+
+
+@router.post("/analyses/{analysis_id}/promote")
+async def promote_draft_analysis(analysis_id: str, request: Request):
+    db, _, _, _, _ = await _get_services()
+    existing = await db.get_analysis_by_id(analysis_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if existing.get("record_status") != "draft":
+        raise HTTPException(status_code=400, detail="Only draft analyses can be promoted")
+
+    analysis = await db.promote_analysis(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    await _audit(
+        db,
+        request,
+        ANALYSIS_PROMOTED,
+        resource_type="analysis",
+        resource_id=analysis_id,
+        metadata={
+            "analysis_id": analysis_id,
+            "analysis_type": analysis.get("analysis_type"),
+            "query_preview": preview_text(analysis.get("query")),
+            "record_status": "official",
+        },
+    )
+    return {"analysis": analysis}
+
+
+@router.post("/analyses/{analysis_id}/discard")
+async def discard_draft_analysis(analysis_id: str, request: Request):
+    db, _, _, _, _ = await _get_services()
+    existing = await db.get_analysis_by_id(analysis_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if existing.get("record_status") != "draft":
+        raise HTTPException(status_code=400, detail="Only draft analyses can be discarded")
+
+    discarded = await db.discard_draft_analysis(analysis_id)
+    if not discarded:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    await _audit(
+        db,
+        request,
+        ANALYSIS_DRAFT_DISCARDED,
+        resource_type="analysis",
+        resource_id=analysis_id,
+        metadata={
+            "analysis_id": analysis_id,
+            "query_preview": preview_text(existing.get("query")),
+        },
+    )
+    return {"discarded": True}
+
+
 @router.get("/analyses")
 async def list_analyses(limit: int = 50):
     db, _, _, _, _ = await _get_services()
@@ -675,7 +896,12 @@ async def export_latest_assessment_pdf(request: Request):
         raise HTTPException(status_code=404, detail="No assessment available to export")
 
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
-    pdf_bytes = build_assessment_pdf(analysis, patient_context=patient_context)
+    catalog = await _source_catalog(db)
+    pdf_bytes = build_assessment_pdf(
+        analysis,
+        patient_context=patient_context,
+        catalog=catalog,
+    )
     filename = assessment_pdf_filename(analysis)
     await _audit(
         db,

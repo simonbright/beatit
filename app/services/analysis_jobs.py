@@ -62,7 +62,7 @@ async def _run_job(job_id: str) -> None:
         await log_audit(
             db,
             ANALYSIS_COMPLETED,
-            actor="system",
+            actor=job.get("requested_by"),
             resource_type="analysis",
             resource_id=result["id"],
             metadata={
@@ -70,6 +70,7 @@ async def _run_job(job_id: str) -> None:
                 "job_type": job["job_type"],
                 "analysis_type": result.get("analysis_type"),
                 "analysis_id": result["id"],
+                "record_status": result.get("record_status", "official"),
                 "model": result.get("model"),
                 "document_count": len(result.get("document_ids") or []),
                 "open_items_count": len(result.get("open_items") or []),
@@ -87,7 +88,7 @@ async def _run_job(job_id: str) -> None:
         await log_audit(
             db,
             ANALYSIS_FAILED,
-            actor="system",
+            actor=job.get("requested_by"),
             resource_type="analysis_job",
             resource_id=job_id,
             metadata={
@@ -112,6 +113,7 @@ async def enqueue_analysis_job(
     query: str = "",
     document_ids: list[str] | None = None,
     include_baseline_assessment: bool = False,
+    requested_by: str | None = None,
 ) -> dict[str, Any]:
     db = Database()
     active = await db.get_active_analysis_job()
@@ -123,6 +125,7 @@ async def enqueue_analysis_job(
         query=query,
         document_ids=document_ids,
         include_baseline_assessment=include_baseline_assessment,
+        requested_by=requested_by,
     )
     _spawn_job(job["id"])
     return job

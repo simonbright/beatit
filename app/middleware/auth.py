@@ -12,6 +12,7 @@ PUBLIC_PREFIXES = ("/static/",)
 class SessionAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not settings.auth_enabled:
+            request.state.user = "local"
             return await call_next(request)
 
         path = request.url.path

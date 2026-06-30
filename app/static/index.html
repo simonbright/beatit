@@ -69,6 +69,7 @@
 
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="analyze" role="tab">Home</button>
+      <button class="tab" data-tab="custom-tasks" role="tab">Custom Tasks</button>
       <button class="tab" data-tab="ingest" role="tab">Add data</button>
       <button class="tab" data-tab="library" role="tab">Library</button>
       <button class="tab" data-tab="history" role="tab">History</button>
@@ -100,13 +101,14 @@
           <details class="source-legend-wrap" id="source-legend-wrap">
             <summary class="source-legend-summary">How source citations work</summary>
             <div class="source-legend" id="source-legend">
-              <ul class="source-legend-list">
-                <li><span class="source-tag source-document">Document</span> Hard data from stored records</li>
-                <li><span class="source-tag source-context">Patient context</span> From settings — not verified record</li>
-                <li><span class="source-tag source-inference">AI inference</span> Interpretation — not verified</li>
-                <li><span class="source-tag source-unknown">Unknown</span> Not in documents — do not treat as fact</li>
+              <ul class="source-legend-list" id="source-legend-list">
+                <li><span class="source-tag source-document">Doc</span> Clinical record — hard data from stored files</li>
+                <li><span class="source-tag source-diagnostic">Diag</span> Diagnostic test — imaging and pathology</li>
+                <li><span class="source-tag source-context">Ctx</span> Patient context — from settings, not verified</li>
+                <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
+                <li><span class="source-tag source-unknown">?</span> Not documented — not in stored records</li>
               </ul>
-              <p class="source-legend-note">Numbered citations like <sup class="ref-cite">[1]</sup> link to reference lists in the appendix.</p>
+              <p class="source-legend-note">Colored shorthand tags like <span class="source-tag source-diagnostic">Diag</span><sup class="ref-cite">[1]</sup> link to the reference lists and appendix. Document sources also link to the Library.</p>
             </div>
           </details>
 
@@ -227,12 +229,70 @@
             Analysis in progress — results will update above when finished.
           </div>
           <div id="analyze-loading" class="loading hidden">Running analysis in the background… this may take several minutes.</div>
+          <p class="muted small custom-analysis-note">Custom questions run as <strong>drafts</strong> in the Custom Tasks tab until you add them to the medical record.</p>
         </div>
       </details>
 
       <div id="references-appendix" class="card references-appendix hidden">
         <h4 class="references-appendix-heading">Appendix: References</h4>
         <ol id="references-appendix-list" class="references-appendix-list"></ol>
+      </div>
+    </section>
+
+    <!-- CUSTOM TASKS -->
+    <section id="panel-custom-tasks" class="panel">
+      <div class="card custom-tasks-card">
+        <div class="row-between wrap">
+          <h3>Custom Tasks</h3>
+          <span id="custom-tasks-badge" class="badge hidden"></span>
+        </div>
+        <p class="muted small">Custom analyses run here as drafts. Review results, then add to the medical record on Home or discard.</p>
+
+        <div class="card custom-task-compose">
+          <h4>New custom task</h4>
+          <p class="muted small">Ask a focused question — e.g. list clinical trials, compare regimens, or investigate a specific gap. Results stay as drafts until you promote them.</p>
+          <label>Your question
+            <textarea id="custom-task-query" rows="4" placeholder="e.g. List clinical trials and investigational therapeutics for metastatic pancreatic cancer relevant to this patient…"></textarea>
+          </label>
+          <div class="row-between wrap">
+            <span class="muted small" id="custom-task-doc-scope">Using all documents</span>
+            <button type="button" class="btn primary" id="btn-run-custom-task">Run custom analysis</button>
+          </div>
+        </div>
+
+        <div id="custom-tasks-running-section" class="custom-tasks-section hidden">
+          <h4>Running</h4>
+          <div id="custom-tasks-running" class="custom-tasks-running"></div>
+        </div>
+
+        <div class="custom-tasks-section">
+          <h4>Draft analyses</h4>
+          <div id="custom-tasks-drafts-list" class="custom-tasks-list">
+            <p class="muted">No custom task drafts yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="custom-task-detail" class="card custom-task-detail hidden">
+        <div class="row-between wrap">
+          <h3 id="custom-task-detail-title">Draft analysis</h3>
+          <button type="button" class="btn ghost" id="btn-close-custom-task">Close</button>
+        </div>
+        <p class="muted small" id="custom-task-detail-meta"></p>
+        <div class="custom-task-actions row-between wrap">
+          <button type="button" class="btn primary" id="btn-promote-custom-task">Add to medical record</button>
+          <button type="button" class="btn danger" id="btn-discard-custom-task">Discard draft</button>
+        </div>
+        <div class="card executive-summary-card custom-task-summary">
+          <h4>Executive summary</h4>
+          <div id="custom-task-summary" class="executive-summary-text numbered-text"></div>
+          <div id="custom-task-summary-refs" class="section-references hidden"></div>
+        </div>
+        <div class="card full-assessment-card">
+          <h4>Full response</h4>
+          <div id="custom-task-body" class="sourced-text assessment-body-text numbered-text"></div>
+          <div id="custom-task-body-refs" class="section-references hidden"></div>
+        </div>
       </div>
     </section>
 
@@ -313,6 +373,13 @@
           <button class="btn ghost" id="btn-close-detail">Close</button>
         </div>
         <div id="doc-detail-meta" class="doc-meta"></div>
+        <div id="doc-detail-citation" class="doc-detail-citation hidden">
+          <label for="doc-citation-display-name">Citation display name
+            <input type="text" id="doc-citation-display-name" maxlength="200" placeholder="Name shown in assessments and references">
+          </label>
+          <p class="muted small">Used in executive summary, assessment, and references. The stored document title stays unchanged for source matching.</p>
+          <button type="button" class="btn secondary" id="btn-save-doc-citation">Save citation name</button>
+        </div>
         <div id="doc-detail-actions" class="doc-detail-actions"></div>
         <div id="doc-detail-source" class="doc-detail-source hidden"></div>
         <div id="doc-detail-text-wrap" class="doc-detail-text-wrap">
@@ -348,6 +415,7 @@
         <div class="banner-duck" aria-hidden="true">🦆</div>
         <h3>Patient context</h3>
         <p class="muted">Baseline case details used in every medical analysis. Update as you learn more.</p>
+        <p class="muted small">For trial searches, include line of therapy, biomarkers (BRCA, KRAS, etc.), ECOG status, and prior treatments — the model uses this to tailor trial lists.</p>
 
         <label for="settings-patient-context">Case summary
           <textarea id="settings-patient-context" rows="6" placeholder="Age, diagnosis, staging notes…"></textarea>
@@ -356,6 +424,16 @@
         <div class="row-between wrap settings-actions">
           <span class="muted small">Used by the oncology synthesis prompt</span>
           <button class="btn primary" id="btn-save-patient">Save patient context</button>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>Source labels</h3>
+        <p class="muted small">Customize shorthand badges and display names used in assessments, references, and the library. Source links and audit trail stay tied to the underlying records.</p>
+        <div id="source-labels-form" class="source-labels-form"></div>
+        <div class="row-between wrap settings-actions">
+          <span class="muted small">Shown as colored tags like <span class="source-tag source-diagnostic">Diag</span> beside citations</span>
+          <button type="button" class="btn primary" id="btn-save-source-labels">Save source labels</button>
         </div>
       </div>
 

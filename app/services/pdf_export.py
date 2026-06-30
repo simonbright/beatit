@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from fpdf import FPDF
 
+from app.services.source_catalog import SourceCatalog
 from app.services.source_references import build_reference_bundle, format_reference_label
 from app.version import APP_NAME, APP_VERSION
 
@@ -185,9 +186,13 @@ def _write_references_block(
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(40, 40, 40)
     for entry in references:
-        label = _safe_text(entry.get("label") or "")
+        shorthand = _safe_text(entry.get("shorthand") or "")
+        label = _safe_text(entry.get("display_label") or entry.get("label") or "")
+        prefix = f"[{entry['num']}]"
+        if shorthand:
+            prefix = f"{prefix} [{shorthand}]"
         pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(0, 4, f"  [{entry['num']}] {label}")
+        pdf.multi_cell(0, 4, f"  {prefix} {label}")
     pdf.ln(2)
 
 
@@ -243,9 +248,15 @@ def _write_appendix_references(pdf: FPDF, appendix: list[dict[str, Any]]) -> Non
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(0, 0, 0)
     for entry in appendix:
-        label = _safe_text(entry.get("label") or format_reference_label(entry.get("raw", "")))
+        shorthand = _safe_text(entry.get("shorthand") or "")
+        label = _safe_text(
+            entry.get("display_label") or entry.get("label") or format_reference_label(entry.get("raw_label", ""))
+        )
+        prefix = f"[{entry['num']}]"
+        if shorthand:
+            prefix = f"{prefix} [{shorthand}]"
         pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(0, 5, f"[{entry['num']}] {label}", align="L")
+        pdf.multi_cell(0, 5, f"{prefix} {label}", align="L")
         pdf.ln(1)
 
 
@@ -253,6 +264,7 @@ def build_assessment_pdf(
     analysis: dict[str, Any],
     *,
     patient_context: str | None = None,
+    catalog: SourceCatalog | None = None,
 ) -> bytes:
     report_timestamp = _format_timestamp(analysis.get("created_at"))
     report_type = _analysis_type_label(analysis.get("analysis_type"))
@@ -261,6 +273,7 @@ def build_assessment_pdf(
         executive_summary=analysis.get("executive_summary") or "",
         response=analysis.get("response") or "",
         patient_context=patient_context or "",
+        catalog=catalog,
     )
 
     pdf = AssessmentPDF(report_timestamp=report_timestamp, report_type=report_type)

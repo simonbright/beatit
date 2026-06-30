@@ -12,6 +12,12 @@ const state = {
   auditEvents: [],
   auditOffset: 0,
   auditTotal: 0,
+  sourceLegend: [],
+  referenceRegistry: {},
+  activeDocumentId: null,
+  customTasks: { jobs: [], drafts: [], activeJob: null },
+  selectedCustomTaskId: null,
+  activeJobType: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -309,11 +315,20 @@ function bindPdfFileInput() {
   });
 }
 
-function setAnalysisRunning(running, jobId = null) {
+function setAnalysisRunning(running, jobId = null, jobType = null) {
   state.analysisRunning = running;
   state.analysisJobId = running ? jobId : null;
-  $("#analyze-running-banner")?.classList.toggle("hidden", !running);
-  $("#analyze-loading")?.classList.toggle("hidden", !running);
+  state.activeJobType = running ? jobType : null;
+  const isCustom = jobType === "query";
+  const banner = $("#analyze-running-banner");
+  const loading = $("#analyze-loading");
+  banner?.classList.toggle("hidden", !running || isCustom);
+  loading?.classList.toggle("hidden", !running || isCustom);
+  if (running && isCustom) {
+    updateCustomTasksRunningBanner(true);
+  } else {
+    updateCustomTasksRunningBanner(false);
+  }
   if (running) {
     $("#analyze-actions-card")?.setAttribute("open", "");
   }
@@ -325,21 +340,33 @@ function setAnalysisRunning(running, jobId = null) {
   });
 }
 
-async function pollAnalysisJob(jobId) {
+async function pollAnalysisJob(jobId, { isCustomQuery = false } = {}) {
   const deadline = Date.now() + 30 * 60 * 1000;
   while (Date.now() < deadline) {
     const data = await api(`/api/analyze/jobs/${jobId}`);
     const job = data.job;
     if (job.status === "completed") {
       if (job.analysis) return job.analysis;
-      const latest = await api("/api/analyses/latest");
-      if (latest.analysis) return latest.analysis;
-      throw new Error("Analysis finished but results could not be loaded. Refresh the page.");
+      if (job.analysis_id) {
+        const byId = await api(`/api/analyses/${job.analysis_id}`);
+        if (byId.analysis) return byId.analysis;
+      }
+      if (!isCustomQuery) {
+        const latest = await api("/api/analyses/latest");
+        if (latest.analysis) return latest.analysis;
+      }
+      throw new Error("Analysis finished but results could not be loaded. Check Custom Tasks.");
     }
     if (job.status === "failed") {
       throw new Error(job.error || "Analysis failed");
     }
+    if (isCustomQuery) {
+      updateCustomTasksRunningBanner(true, job.query);
+    }
     await sleep(2000);
+  }
+  if (isCustomQuery) {
+    throw new Error("Custom task is still running. Check Custom Tasks for status.");
   }
   const latest = await api("/api/analyses/latest");
   if (latest.analysis) return latest.analysis;
@@ -352,7 +379,7 @@ async function startAnalysisJob({ query = "", baseline = false, summarize = fals
   if (summarize) {
     const qs = docIds ? "?" + docIds.map((id) => `document_ids=${encodeURIComponent(id)}`).join("&") : "";
     const data = await api(`/api/analyze/summarize${qs}`, { method: "POST" });
-    return data.job.id;
+    return { jobId: data.job.id, jobType: "summarize" };
   }
 
   const data = await api("/api/analyze", {
@@ -363,7 +390,8 @@ async function startAnalysisJob({ query = "", baseline = false, summarize = fals
       include_baseline_assessment: baseline,
     }),
   });
-  return data.job.id;
+  const jobType = baseline && !query.trim() ? "baseline" : "query";
+  return { jobId: data.job.id, jobType: data.job?.job_type || jobType };
 }
 
 function finishAnalysisRun(analysis) {
@@ -372,6 +400,20 @@ function finishAnalysisRun(analysis) {
   state.analyses = [analysis, ...state.analyses.filter((a) => a.id !== analysis.id)];
   toast(`Assessment saved · ${formatTimestamp(analysis.created_at)}`);
   scrollToAssessmentResults();
+}
+
+function finishCustomTaskRun(analysis, queryText = "") {
+  state.selectedCustomTaskId = analysis?.id || null;
+  switchTab("custom-tasks");
+  loadCustomTasks().then(() => {
+    if (analysis?.id) selectCustomTask(analysis.id);
+  });
+  if (queryText) {
+    if ($("#analyze-query")) $("#analyze-query").value = "";
+    if ($("#custom-task-query")) $("#custom-task-query").value = "";
+  }
+  toast("Custom task complete — review the draft below");
+  updateCustomTasksRunningBanner(false);
 }
 
 function scrollToAssessmentResults() {
@@ -498,19 +540,27 @@ async function resumeActiveAnalysisJob() {
     const jobId = data.job.id;
     const payload = await api(`/api/analyze/jobs/${jobId}`);
     const job = payload.job;
+    const isCustomQuery = job.job_type === "query";
 
     if (job.status === "completed" && job.analysis) {
-      finishAnalysisRun(job.analysis);
+      if (isCustomQuery) finishCustomTaskRun(job.analysis);
+      else finishAnalysisRun(job.analysis);
       return;
     }
     if (job.status === "failed") {
       toast(job.error || "Analysis failed", "error");
+      if (isCustomQuery) loadCustomTasks();
       return;
     }
 
-    setAnalysisRunning(true, jobId);
-    const analysis = await pollAnalysisJob(jobId);
-    finishAnalysisRun(analysis);
+    setAnalysisRunning(true, jobId, job.job_type);
+    if (isCustomQuery) {
+      switchTab("custom-tasks");
+      updateCustomTasksRunningBanner(true, job.query);
+    }
+    const analysis = await pollAnalysisJob(jobId, { isCustomQuery });
+    if (isCustomQuery) finishCustomTaskRun(analysis, job.query);
+    else finishAnalysisRun(analysis);
   } catch (err) {
     toast(err.message, "error");
   } finally {
@@ -531,7 +581,185 @@ function switchTab(name) {
   if (name === "library") loadDocuments();
   if (name === "history") loadHistory();
   if (name === "analyze") loadLatestAssessment();
+  if (name === "custom-tasks") loadCustomTasks();
   if (name === "settings") loadSettings();
+}
+
+function jobStatusLabel(status) {
+  if (status === "pending") return "Queued";
+  if (status === "running") return "Running";
+  if (status === "completed") return "Complete";
+  if (status === "failed") return "Failed";
+  return status || "Unknown";
+}
+
+function updateCustomTasksRunningBanner(running, query = "") {
+  const section = $("#custom-tasks-running-section");
+  const el = $("#custom-tasks-running");
+  if (!section || !el) return;
+  if (!running) {
+    section.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  section.classList.remove("hidden");
+  el.innerHTML = `
+    <div class="custom-task-running-card" role="status" aria-live="polite">
+      <span class="badge status-running">Running</span>
+      <p class="custom-task-running-query">${escapeHtml(truncate(query || "Custom analysis", 200))}</p>
+      <p class="muted small">This may take several minutes. You can leave this tab — the draft will appear below when finished.</p>
+    </div>`;
+}
+
+function updateCustomTasksBadge() {
+  const badge = $("#custom-tasks-badge");
+  if (!badge) return;
+  const drafts = state.customTasks?.drafts?.length || 0;
+  const running =
+    state.analysisRunning && state.activeJobType === "query" ? 1 : state.customTasks?.activeJob ? 1 : 0;
+  const total = drafts + running;
+  if (total === 0) {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+    return;
+  }
+  badge.classList.remove("hidden");
+  badge.textContent = running ? `${running} running · ${drafts} draft${drafts === 1 ? "" : "s"}` : `${drafts} draft${drafts === 1 ? "" : "s"}`;
+}
+
+function renderCustomTasksList() {
+  const list = $("#custom-tasks-drafts-list");
+  if (!list) return;
+  const drafts = state.customTasks?.drafts || [];
+  if (!drafts.length) {
+    list.innerHTML = `<p class="muted">No custom task drafts yet. Run a custom analysis from Home.</p>`;
+    return;
+  }
+  list.innerHTML = drafts
+    .map(
+      (draft) => `
+      <article class="custom-task-item${draft.id === state.selectedCustomTaskId ? " selected" : ""}" data-id="${escapeHtml(draft.id)}">
+        <div class="custom-task-item-main">
+          <span class="badge">Draft</span>
+          <time class="muted small">${escapeHtml(formatTimestamp(draft.created_at))}</time>
+        </div>
+        <p class="custom-task-item-query">${escapeHtml(truncate(draft.query, 180))}</p>
+        <button type="button" class="btn ghost btn-view-custom-task" data-id="${escapeHtml(draft.id)}">Review</button>
+      </article>`
+    )
+    .join("");
+
+  list.querySelectorAll(".btn-view-custom-task").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectCustomTask(btn.dataset.id);
+    });
+  });
+  list.querySelectorAll(".custom-task-item").forEach((item) => {
+    item.addEventListener("click", () => selectCustomTask(item.dataset.id));
+  });
+}
+
+function renderCustomTaskDetail(analysis) {
+  const panel = $("#custom-task-detail");
+  if (!panel || !analysis) return;
+
+  panel.classList.remove("hidden");
+  $("#custom-task-detail-title").textContent = "Draft analysis";
+  const queryLine = analysis.query ? `Question: ${analysis.query}` : "";
+  $("#custom-task-detail-meta").textContent = [queryLine, `${formatTimestamp(analysis.created_at)} · ${analysis.model || "Unknown model"}`]
+    .filter(Boolean)
+    .join(" · ");
+
+  const isTrialQuery = /trial|therapeutic|nct|investigational|study/i.test(analysis.query || "");
+  const summaryHeading = panel.querySelector(".custom-task-summary h4");
+  const bodyHeading = panel.querySelector(".full-assessment-card h4");
+  if (summaryHeading) summaryHeading.textContent = isTrialQuery ? "Summary" : "Executive summary";
+  if (bodyHeading) bodyHeading.textContent = isTrialQuery ? "Trials & therapeutics list" : "Full response";
+
+  state.referenceRegistry = analysis.reference_registry || {};
+  const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
+  const responseDisplay = analysis.response_display || analysis.response || "";
+
+  const summaryEl = $("#custom-task-summary");
+  const bodyEl = $("#custom-task-body");
+  if (summaryEl) {
+    summaryEl.innerHTML = summaryDisplay
+      ? formatNumberedReferences(summaryDisplay)
+      : '<p class="muted">No executive summary returned.</p>';
+  }
+  if (bodyEl) {
+    bodyEl.innerHTML = responseDisplay
+      ? formatNumberedReferences(responseDisplay)
+      : '<p class="muted">No response text returned.</p>';
+  }
+  renderReferencesBlock($("#custom-task-summary-refs"), analysis.executive_summary_refs || []);
+  renderReferencesBlock($("#custom-task-body-refs"), analysis.response_refs || [], "References");
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function selectCustomTask(id) {
+  const draft = (state.customTasks?.drafts || []).find((d) => d.id === id);
+  state.selectedCustomTaskId = id;
+  renderCustomTasksList();
+  if (draft) renderCustomTaskDetail(draft);
+}
+
+function closeCustomTaskDetail() {
+  state.selectedCustomTaskId = null;
+  $("#custom-task-detail")?.classList.add("hidden");
+  renderCustomTasksList();
+}
+
+async function loadCustomTasks() {
+  try {
+    const data = await api("/api/custom-tasks");
+    state.customTasks = {
+      jobs: data.jobs || [],
+      drafts: data.drafts || [],
+      activeJob: data.active_job || null,
+    };
+    if (state.customTasks.activeJob && ["pending", "running"].includes(state.customTasks.activeJob.status)) {
+      updateCustomTasksRunningBanner(true, state.customTasks.activeJob.query);
+    } else if (!state.analysisRunning) {
+      updateCustomTasksRunningBanner(false);
+    }
+    renderCustomTasksList();
+    updateCustomTasksBadge();
+    if (state.selectedCustomTaskId) {
+      const draft = state.customTasks.drafts.find((d) => d.id === state.selectedCustomTaskId);
+      if (draft) renderCustomTaskDetail(draft);
+      else closeCustomTaskDetail();
+    }
+  } catch (err) {
+    $("#custom-tasks-drafts-list").innerHTML = `<p class="muted">Could not load custom tasks: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function promoteCustomTask() {
+  const id = state.selectedCustomTaskId;
+  if (!id) return;
+  const data = await api(`/api/analyses/${id}/promote`, { method: "POST" });
+  toast("Added to medical record — shown on Home");
+  closeCustomTaskDetail();
+  await loadCustomTasks();
+  await loadLatestAssessment();
+  await loadHistory();
+  switchTab("analyze");
+  if (data.analysis) {
+    renderLatestAssessment(data.analysis);
+    scrollToAssessmentResults();
+  }
+}
+
+async function discardCustomTask() {
+  const id = state.selectedCustomTaskId;
+  if (!id) return;
+  if (!confirm("Discard this draft? It will not appear on Home.")) return;
+  await api(`/api/analyses/${id}/discard`, { method: "POST" });
+  toast("Draft discarded");
+  closeCustomTaskDetail();
+  await loadCustomTasks();
 }
 
 function tierLabel(tier) {
@@ -565,7 +793,10 @@ async function loadSettings() {
   const data = await api("/api/settings");
   state.models = data.models || [];
   state.settings = data.settings || {};
+  state.sourceLegend = data.source_legend || [];
   renderModelSelect();
+  renderSourceLabelsForm();
+  renderSourceLegend(state.sourceLegend);
 
   const patientEl = $("#settings-patient-context");
   if (patientEl) {
@@ -608,13 +839,17 @@ function formatAuditTimestamp(iso) {
 }
 
 function renderAuditEvent(event) {
+  const actor = event.actor_display || event.actor;
   const details = (event.details || [])
     .map((line) => `<li>${escapeHtml(line)}</li>`)
     .join("");
   return `
     <article class="audit-event">
       <div class="audit-event-header">
-        <strong class="audit-event-label">${escapeHtml(event.label || event.event_type || "Event")}</strong>
+        <div class="audit-event-heading">
+          <strong class="audit-event-label">${escapeHtml(event.label || event.event_type || "Event")}</strong>
+          ${actor ? `<span class="audit-event-actor muted small">by ${escapeHtml(actor)}</span>` : ""}
+        </div>
         <time class="audit-event-time muted small">${escapeHtml(formatAuditTimestamp(event.created_at))}</time>
       </div>
       <p class="audit-event-summary">${escapeHtml(event.summary || "")}</p>
@@ -701,10 +936,16 @@ async function savePatientContext() {
 
 function updateSelectedLabel() {
   const el = $("#selected-count");
-  if (state.selectedIds.size === 0) {
-    el.textContent = "Using all documents";
-  } else {
-    el.textContent = `Using ${state.selectedIds.size} selected document(s)`;
+  const customScope = $("#custom-task-doc-scope");
+  const label =
+    state.selectedIds.size === 0
+      ? "Using all documents"
+      : `Using ${state.selectedIds.size} selected document(s)`;
+  if (el) {
+    el.textContent = label;
+  }
+  if (customScope) {
+    customScope.textContent = label;
   }
 }
 
@@ -727,9 +968,18 @@ function renderDocuments() {
             ? meta.file_size_label
             : "";
       const paths = renderPathLines(docPathLines(doc));
+      const info = doc.source_info || {};
+      const sourceBadge = info.shorthand
+        ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}" title="${escapeHtml(info.type_display || "")}">${escapeHtml(info.shorthand)}</span>`
+        : "";
+      const displayName = info.display_name || doc.title;
       return `
         <article class="doc-item ${selected ? "selected" : ""}" data-id="${doc.id}">
-          <strong>${escapeHtml(doc.title)}</strong>
+          <div class="doc-item-heading">
+            ${sourceBadge}
+            <strong>${escapeHtml(displayName)}</strong>
+          </div>
+          ${displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
           <div class="doc-meta">
             <span class="badge">${escapeHtml(doc.source_type)}</span>
             <span>${formatDate(doc.created_at)}</span>
@@ -841,7 +1091,7 @@ function escapeHtml(str) {
 }
 
 function sourceTagClass(tagText) {
-  const lower = tagText.toLowerCase();
+  const lower = String(tagText || "").toLowerCase();
   if (lower.includes("document")) return "source-document";
   if (lower.includes("patient context")) return "source-context";
   if (lower.includes("inference") || lower.includes("not verified")) return "source-inference";
@@ -849,36 +1099,133 @@ function sourceTagClass(tagText) {
   return "source-inference";
 }
 
+function refMetaFromRegistry(num, registry = state.referenceRegistry) {
+  return registry?.[num] || registry?.[String(num)] || null;
+}
+
+function renderSourceBadge(ref, { compact = true } = {}) {
+  if (!ref) return "";
+  const cls = ref.css_class || sourceTagClass(ref.raw_label || ref.label || "");
+  const shorthand = ref.shorthand || ref.type_display || "Ref";
+  const title = ref.display_label || ref.label || ref.type_display || "Source";
+  return `<span class="source-tag ${cls}" title="${escapeHtml(title)}">${escapeHtml(compact ? shorthand : ref.type_display || shorthand)}</span>`;
+}
+
+function renderSourceLegend(items) {
+  const list = $("#source-legend-list");
+  if (!list) return;
+  const legend = items || state.sourceLegend || [];
+  if (!legend.length) return;
+  list.innerHTML = legend
+    .map(
+      (item) =>
+        `<li>${renderSourceBadge(item, { compact: true })} ${escapeHtml(item.display || item.type_display || "")} — ${escapeHtml(item.description || "")}</li>`
+    )
+    .join("");
+}
+
 function formatMarkdownEmphasis(escaped) {
   return escaped.replace(/\*\*([^*\n]+)\*\*/g, '<span class="text-emphasis">$1</span>');
+}
+
+function describeSourceTagInner(inner) {
+  const lower = String(inner || "").toLowerCase();
+  const labels = state.settings.source_labels || {};
+  if (lower.startsWith("patient context")) {
+    return {
+      css_class: "source-context",
+      shorthand: labels.patient_context?.shorthand || "Ctx",
+      display_label: labels.patient_context?.display || inner,
+    };
+  }
+  if (lower.includes("inference") && lower.includes("not verified")) {
+    return {
+      css_class: "source-inference",
+      shorthand: labels.inference?.shorthand || "AI",
+      display_label: labels.inference?.display || inner,
+    };
+  }
+  if (lower.startsWith("unknown")) {
+    return {
+      css_class: "source-unknown",
+      shorthand: labels.unknown?.shorthand || "?",
+      display_label: labels.unknown?.display || "Not documented",
+      type_display: labels.unknown?.display || "Not documented",
+    };
+  }
+  if (lower.startsWith("document")) {
+    const titleMatch = inner.match(/^document\s+"([^"]+)"/i);
+    const title = titleMatch?.[1] || inner;
+    const doc = state.documents.find((d) => d.title === title);
+    if (doc?.source_info) return doc.source_info;
+    return {
+      css_class: "source-document",
+      shorthand: labels.document?.shorthand || "Doc",
+      display_label: title,
+    };
+  }
+  return {
+    css_class: "source-inference",
+    shorthand: labels.inference?.shorthand || "AI",
+    display_label: inner,
+  };
+}
+
+function sourceCitationTitle(meta, inner) {
+  if (meta.css_class === "source-unknown") {
+    return "Not supported by stored documents — do not treat as verified fact";
+  }
+  if (meta.type_display) return meta.type_display;
+  return meta.display_label || inner || "Source";
+}
+
+function renderInlineSourceCitation(meta, inner) {
+  const title = sourceCitationTitle(meta, inner);
+  return `<span class="source-cite-inline ${meta.css_class || "source-inference"}" title="${escapeHtml(title)}">${renderSourceBadge(meta)}</span>`;
 }
 
 function formatWithSources(text) {
   if (!text) return "";
   const escaped = escapeHtml(text);
-  const withTags = escaped.replace(
-    /\[SOURCE:\s*([^\]]+)\]/gi,
-    (_, inner) => {
-      const cls = sourceTagClass(inner);
-      return `<span class="source-tag-inline ${cls}" title="Source attribution">[SOURCE: ${inner}]</span>`;
-    }
+  const withTags = escaped.replace(/\[SOURCE:\s*([^\]]+)\]/gi, (_, inner) =>
+    renderInlineSourceCitation(describeSourceTagInner(inner), inner)
   );
   return formatMarkdownEmphasis(withTags).replace(/\n/g, "<br>");
 }
 
-function formatNumberedReferences(text) {
+function formatNumberedReferences(text, registry = state.referenceRegistry) {
   if (!text) return "";
   const escaped = escapeHtml(text);
   return formatMarkdownEmphasis(escaped)
-    .replace(/\[(\d+)\]/g, '<sup class="ref-cite" title="Reference $1">[$1]</sup>')
+    .replace(/\[(\d+)\]/g, (_, num) => {
+      const ref = refMetaFromRegistry(num, registry);
+      if (!ref) {
+        return `<a href="#ref-entry-${num}" class="ref-cite-link"><sup class="ref-cite" title="Reference ${num}">[${num}]</sup></a>`;
+      }
+      const cls = ref.css_class || sourceTagClass(ref.raw_label || ref.label || "");
+      const title = ref.display_label || ref.label || `Reference ${num}`;
+      const docAttr = ref.document_id ? ` data-doc-id="${escapeHtml(ref.document_id)}"` : "";
+      return `<a href="#ref-entry-${num}" class="ref-cite-link ${cls}" title="${escapeHtml(title)}"${docAttr}>${renderSourceBadge(ref)}<sup class="ref-cite">[${num}]</sup></a>`;
+    })
     .replace(/\n/g, "<br>");
+}
+
+function renderReferenceEntry(ref) {
+  const label = ref.display_label || ref.label || "";
+  const docLink = ref.document_id
+    ? `<button type="button" class="btn ghost ref-doc-link" data-doc-id="${escapeHtml(ref.document_id)}">Open in Library</button>`
+    : "";
+  return `<li id="ref-entry-${escapeHtml(String(ref.num))}" class="reference-entry">
+    ${renderSourceBadge(ref)}
+    <span class="ref-num">[${escapeHtml(String(ref.num))}]</span>
+    <span class="ref-label">${escapeHtml(label)}</span>
+    ${docLink}
+  </li>`;
 }
 
 function renderReferenceList(refs, heading = "References") {
   if (!refs || !refs.length) return "";
-  const items = refs
-    .map((ref) => `<li><span class="ref-num">[${escapeHtml(String(ref.num))}]</span> ${escapeHtml(ref.label || "")}</li>`)
-    .join("");
+  const items = refs.map((ref) => renderReferenceEntry(ref)).join("");
   return `
     <div class="section-references-inner">
       <h5>${escapeHtml(heading)}</h5>
@@ -908,9 +1255,111 @@ function renderReferencesAppendix(analysis) {
     return;
   }
   wrap.classList.remove("hidden");
-  list.innerHTML = appendix
-    .map((ref) => `<li><span class="ref-num">[${escapeHtml(String(ref.num))}]</span> ${escapeHtml(ref.label || "")}</li>`)
-    .join("");
+  list.innerHTML = appendix.map((ref) => renderReferenceEntry(ref)).join("");
+}
+
+function initReferenceNavigation() {
+  document.addEventListener("click", (event) => {
+    const docLink = event.target.closest(".ref-doc-link,[data-doc-id].ref-cite-link");
+    if (docLink?.dataset?.docId) {
+      event.preventDefault();
+      viewDocument(docLink.dataset.docId);
+      return;
+    }
+    const citeLink = event.target.closest("a.ref-cite-link");
+    if (citeLink?.hash) {
+      const target = document.querySelector(citeLink.hash);
+      if (target) {
+        event.preventDefault();
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        target.classList.add("ref-highlight");
+        setTimeout(() => target.classList.remove("ref-highlight"), 1600);
+      }
+    }
+  });
+}
+
+const SOURCE_TYPE_ORDER = ["document", "diagnostic", "web", "patient_context", "inference", "unknown"];
+
+const SOURCE_TYPE_CSS = {
+  document: "source-document",
+  diagnostic: "source-diagnostic",
+  web: "source-web",
+  patient_context: "source-context",
+  inference: "source-inference",
+  unknown: "source-unknown",
+};
+
+function renderSourceLabelsForm() {
+  const form = $("#source-labels-form");
+  if (!form) return;
+  const labels = state.settings.source_labels || {};
+  form.innerHTML = SOURCE_TYPE_ORDER.map((key) => {
+    const entry = labels[key] || {};
+    const cls = SOURCE_TYPE_CSS[key] || "source-document";
+    return `
+      <div class="source-label-row">
+        <span class="source-tag ${cls}">${escapeHtml(entry.shorthand || "?")}</span>
+        <label>Display name
+          <input type="text" data-source-field="display" data-source-type="${key}" value="${escapeHtml(entry.display || "")}" maxlength="120">
+        </label>
+        <label>Shorthand
+          <input type="text" data-source-field="shorthand" data-source-type="${key}" value="${escapeHtml(entry.shorthand || "")}" maxlength="12">
+        </label>
+      </div>`;
+  }).join("");
+}
+
+function collectSourceLabelsFromForm() {
+  const payload = {};
+  SOURCE_TYPE_ORDER.forEach((key) => {
+    const display = formValue(`[data-source-field="display"][data-source-type="${key}"]`);
+    const shorthand = formValue(`[data-source-field="shorthand"][data-source-type="${key}"]`);
+    payload[key] = { display, shorthand };
+  });
+  return payload;
+}
+
+function formValue(selector) {
+  return $(selector)?.value.trim() || "";
+}
+
+async function saveSourceLabels() {
+  const source_labels = collectSourceLabelsFromForm();
+  for (const key of SOURCE_TYPE_ORDER) {
+    if (!source_labels[key].display || !source_labels[key].shorthand) {
+      return toast(`Display name and shorthand are required for ${key}`, "error");
+    }
+  }
+  const data = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({ source_labels }),
+  });
+  state.settings = { ...state.settings, ...data.settings };
+  renderSourceLabelsForm();
+  renderSourceLegend(state.sourceLegend);
+  toast("Source labels saved");
+  if ($("#panel-analyze")?.classList.contains("active")) {
+    await loadLatestAssessment();
+  }
+  if ($("#panel-library")?.classList.contains("active")) {
+    await loadDocuments();
+  }
+  if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
+}
+
+async function saveDocumentCitation() {
+  if (!state.activeDocumentId) return;
+  const value = $("#doc-citation-display-name")?.value.trim() || "";
+  await api(`/api/documents/${state.activeDocumentId}/citation`, {
+    method: "PATCH",
+    body: JSON.stringify({ citation_display_name: value || null }),
+  });
+  toast("Citation name saved");
+  await loadDocuments();
+  if (state.latestAnalysis) await loadLatestAssessment();
+  viewDocument(state.activeDocumentId);
+  if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
 
 function openItemStatusLabel(status) {
@@ -1341,6 +1790,7 @@ function renderLatestAssessment(analysis) {
     renderReferencesBlock(summaryRefs, []);
     renderReferencesBlock(fullRefs, []);
     renderReferencesAppendix(null);
+    state.referenceRegistry = {};
     execTextEl.innerHTML = "";
     if (fullBody) fullBody.innerHTML = "";
     renderOpenItemsTable([]);
@@ -1357,6 +1807,10 @@ function renderLatestAssessment(analysis) {
     execTimeEl.dateTime = analysis.created_at;
   }
   legendWrap?.removeAttribute("open");
+
+  state.referenceRegistry = analysis.reference_registry || {};
+  state.sourceLegend = analysis.source_legend || state.sourceLegend;
+  renderSourceLegend(state.sourceLegend);
 
   const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
   const responseDisplay = analysis.response_display || analysis.response || "";
@@ -1485,6 +1939,10 @@ async function loadHistory() {
 async function loadDocuments() {
   const data = await api("/api/documents");
   state.documents = data.documents || [];
+  if (data.source_legend) {
+    state.sourceLegend = data.source_legend;
+    renderSourceLegend(state.sourceLegend);
+  }
   renderDocuments();
   updateSelectedLabel();
   updateHomeWorkflow();
@@ -1497,17 +1955,32 @@ async function viewDocument(id) {
   const doc = data.document;
   if (!panel || !doc) return;
 
+  state.activeDocumentId = id;
   panel.classList.remove("hidden");
-  $("#doc-detail-title").textContent = doc.title;
+  const info = doc.source_info || {};
+  const displayName = info.display_name || doc.title;
+  $("#doc-detail-title").textContent = displayName;
 
   const metaEl = $("#doc-detail-meta");
   if (metaEl) {
     const meta = doc.metadata || {};
+    const sourceBadge = info.shorthand
+      ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}">${escapeHtml(info.shorthand)}</span>`
+      : "";
     metaEl.innerHTML = `
+      ${sourceBadge}
       <span class="badge">${escapeHtml(doc.source_type || "document")}</span>
+      <span class="muted small">${escapeHtml(info.type_display || "")}</span>
       <span class="muted small">${escapeHtml(formatTimestamp(doc.created_at))}</span>
       ${meta.modality ? `<span class="badge">${escapeHtml(meta.modality)}</span>` : ""}
       ${meta.file_size_label ? `<span class="muted small">${escapeHtml(meta.file_size_label)}</span>` : ""}`;
+  }
+
+  const citationPanel = $("#doc-detail-citation");
+  const citationInput = $("#doc-citation-display-name");
+  if (citationPanel && citationInput) {
+    citationPanel.classList.remove("hidden");
+    citationInput.value = doc.citation_display_name || "";
   }
 
   const actionsEl = $("#doc-detail-actions");
@@ -1599,11 +2072,19 @@ async function runAnalysis({ query = "", baseline = false, summarize = false } =
     return;
   }
 
+  const isCustomQuery = !baseline && !summarize && query.trim().length > 0;
+
   try {
-    const jobId = await startAnalysisJob({ query, baseline, summarize });
-    setAnalysisRunning(true, jobId);
-    const analysis = await pollAnalysisJob(jobId);
-    finishAnalysisRun(analysis);
+    const { jobId, jobType } = await startAnalysisJob({ query, baseline, summarize });
+    setAnalysisRunning(true, jobId, jobType);
+    if (isCustomQuery) {
+      switchTab("custom-tasks");
+      updateCustomTasksRunningBanner(true, query);
+      toast("Custom task submitted");
+    }
+    const analysis = await pollAnalysisJob(jobId, { isCustomQuery });
+    if (isCustomQuery) finishCustomTaskRun(analysis, query);
+    else finishAnalysisRun(analysis);
   } catch (err) {
     if (err.status === 409) {
       toast("An analysis is already running — resuming progress.", "error");
@@ -1611,6 +2092,7 @@ async function runAnalysis({ query = "", baseline = false, summarize = false } =
       return;
     }
     toast(err.message, "error");
+    if (isCustomQuery) loadCustomTasks();
   } finally {
     setAnalysisRunning(false);
   }
@@ -1640,13 +2122,14 @@ function bootstrapUi() {
   initInvestigationGuidancePresets();
   initUploadResultBanner();
   initCaseStatusNavigation();
+  initReferenceNavigation();
   updateReportDateTime();
   renderCaseStatus();
 }
 
 async function loadInitialData() {
   try {
-    await Promise.allSettled([loadDocuments(), loadLatestAssessment()]);
+    await Promise.allSettled([loadDocuments(), loadLatestAssessment(), loadCustomTasks()]);
   } finally {
     renderCaseStatus();
   }
@@ -1945,6 +2428,24 @@ $("#btn-save-settings")?.addEventListener("click", () =>
 $("#btn-save-patient")?.addEventListener("click", () =>
   savePatientContext().catch((e) => toast(e.message, "error"))
 );
+$("#btn-save-source-labels")?.addEventListener("click", () =>
+  saveSourceLabels().catch((e) => toast(e.message, "error"))
+);
+$("#btn-save-doc-citation")?.addEventListener("click", () =>
+  saveDocumentCitation().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-close-custom-task", "click", closeCustomTaskDetail);
+safeOn("#btn-promote-custom-task", "click", () =>
+  promoteCustomTask().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-discard-custom-task", "click", () =>
+  discardCustomTask().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-run-custom-task", "click", () => {
+  const query = $("#custom-task-query")?.value.trim();
+  if (!query) return toast("Enter a question for your custom task", "error");
+  runAnalysis({ query });
+});
 $("#settings-model")?.addEventListener("change", updateModelDescription);
 $("#audit-filter")?.addEventListener("change", () => loadAuditTrail(true));
 $("#btn-audit-load-more")?.addEventListener("click", () => loadAuditTrail(false));

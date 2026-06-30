@@ -1,6 +1,8 @@
 import re
 from typing import Any
 
+from app.services.source_catalog import SourceCatalog
+
 SOURCE_TAG_PATTERN = re.compile(r"\[SOURCE:\s*([^\]]+)\]", re.IGNORECASE)
 
 BOILERPLATE_SECTION_HEADERS = (
@@ -76,7 +78,11 @@ def replace_source_tags_with_numbers(text: str, registry: dict[str, int]) -> str
     return SOURCE_TAG_PATTERN.sub(repl, text)
 
 
-def section_reference_entries(text: str, registry: dict[str, int]) -> list[dict[str, Any]]:
+def section_reference_entries(
+    text: str,
+    registry: dict[str, int],
+    catalog: SourceCatalog | None = None,
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     seen: set[int] = set()
     for label in extract_source_labels(text):
@@ -84,46 +90,65 @@ def section_reference_entries(text: str, registry: dict[str, int]) -> list[dict[
         if number is None or number in seen:
             continue
         seen.add(number)
-        entries.append({"num": number, "label": label})
+        if catalog:
+            entries.append(catalog.enrich_reference(label, number))
+        else:
+            entries.append({"num": number, "label": label, "raw_label": label})
     entries.sort(key=lambda item: item["num"])
     return entries
 
 
-def format_reference_label(label: str) -> str:
+def format_reference_label(label: str, catalog: SourceCatalog | None = None) -> str:
+    if catalog:
+        return catalog.describe(label)["display_label"]
     cleaned = label.strip()
     lower = cleaned.casefold()
     if lower.startswith("document "):
-        return cleaned
+        title = cleaned[9:].strip().strip('"')
+        return title or cleaned
     if lower.startswith("patient context"):
         return "Patient context (settings — not verified clinical record)"
     if "inference" in lower and "not verified" in lower:
         return "AI inference — not verified"
     if lower.startswith("unknown"):
-        return "Unknown — not in documents"
+        return "Not documented"
     return cleaned
 
 
-def build_reference_registry(*texts: str) -> tuple[dict[str, int], list[dict[str, Any]]]:
+def build_reference_registry(
+    *texts: str,
+    catalog: SourceCatalog | None = None,
+) -> tuple[dict[str, int], list[dict[str, Any]]]:
     labels: list[str] = []
     for text in texts:
         labels.extend(extract_source_labels(strip_boilerplate_sections(text)))
 
     appendix_labels = unique_preserve_order(labels)
     registry = {_normalize_label_key(label): index + 1 for index, label in enumerate(appendix_labels)}
-    appendix = [
-        {"num": registry[_normalize_label_key(label)], "label": format_reference_label(label)}
-        for label in appendix_labels
-    ]
+    appendix: list[dict[str, Any]] = []
+    for label in appendix_labels:
+        num = registry[_normalize_label_key(label)]
+        if catalog:
+            appendix.append(catalog.enrich_reference(label, num))
+        else:
+            appendix.append(
+                {
+                    "num": num,
+                    "label": format_reference_label(label),
+                    "raw_label": label,
+                }
+            )
     return registry, appendix
 
 
-def prepare_section(text: str, registry: dict[str, int]) -> dict[str, Any]:
+def prepare_section(
+    text: str,
+    registry: dict[str, int],
+    catalog: SourceCatalog | None = None,
+) -> dict[str, Any]:
     cleaned = strip_boilerplate_sections(text or "")
     body = replace_source_tags_with_numbers(cleaned, registry)
-    references = [
-        {**entry, "label": format_reference_label(entry["label"])}
-        for entry in section_reference_entries(cleaned, registry)
-    ]
+    references = section_reference_entries(cleaned, registry, catalog)
     return {"body": body, "references": references}
 
 
@@ -132,15 +157,27 @@ def build_reference_bundle(
     executive_summary: str | None = None,
     response: str | None = None,
     patient_context: str | None = None,
+    catalog: SourceCatalog | None = None,
 ) -> dict[str, Any]:
     summary_raw = executive_summary or ""
     response_raw = response or ""
     context_raw = patient_context or ""
 
-    registry, appendix = build_reference_registry(summary_raw, response_raw, context_raw)
+    registry, appendix = build_reference_registry(
+        summary_raw,
+        response_raw,
+        context_raw,
+        catalog=catalog,
+    )
     sections = {
-        "executive_summary": prepare_section(summary_raw, registry),
-        "response": prepare_section(response_raw, registry),
-        "patient_context": prepare_section(context_raw, registry),
+        "executive_summary": prepare_section(summary_raw, registry, catalog),
+        "response": prepare_section(response_raw, registry, catalog),
+        "patient_context": prepare_section(context_raw, registry, catalog),
     }
-    return {"appendix": appendix, "sections": sections, "registry": registry}
+    registry_by_num = {entry["num"]: entry for entry in appendix}
+    return {
+        "appendix": appendix,
+        "sections": sections,
+        "registry": registry,
+        "registry_by_num": registry_by_num,
+    }

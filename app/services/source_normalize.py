@@ -42,6 +42,17 @@ def _paren_to_source_tag(match: re.Match, titles: list[str]) -> str:
     return match.group(0)
 
 
+def canonicalize_unknown_tags(text: str) -> str:
+    if not text:
+        return text
+    return re.sub(
+        r"\[SOURCE:\s*Unknown(?:\s*[—-]\s*not in documents)?[^\]]*\]",
+        "[SOURCE: Unknown]",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_source_attribution(text: str, document_titles: list[str]) -> str:
     if not text or not document_titles:
         return text
@@ -111,6 +122,8 @@ def enrich_with_sources(
     """
     if not text:
         return text, "missing"
+
+    text = canonicalize_unknown_tags(text)
 
     if has_source_tags(text):
         return text, "full"
