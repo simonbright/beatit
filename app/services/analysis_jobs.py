@@ -58,6 +58,7 @@ async def _run_job(job_id: str) -> None:
                 query=job["query"],
                 document_ids=document_ids,
                 include_baseline_assessment=job["include_baseline_assessment"],
+                assessment_guidance=job.get("assessment_guidance"),
                 analysis_type=job["job_type"],
                 created_by=job.get("requested_by"),
             )
@@ -124,6 +125,7 @@ async def enqueue_analysis_job(
     query: str = "",
     document_ids: list[str] | None = None,
     include_baseline_assessment: bool = False,
+    assessment_guidance: str | None = None,
     requested_by: str | None = None,
 ) -> dict[str, Any]:
     db = Database()
@@ -136,6 +138,7 @@ async def enqueue_analysis_job(
         query=query,
         document_ids=document_ids,
         include_baseline_assessment=include_baseline_assessment,
+        assessment_guidance=assessment_guidance,
         requested_by=requested_by,
     )
     _spawn_job(job["id"])

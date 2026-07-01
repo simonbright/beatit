@@ -106,6 +106,7 @@ class AnalyzeRequest(BaseModel):
     query: str = Field(default="")
     document_ids: list[str] | None = None
     include_baseline_assessment: bool = False
+    assessment_guidance: str | None = Field(default=None, max_length=5000)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -836,6 +837,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
             query=body.query,
             document_ids=body.document_ids,
             include_baseline_assessment=body.include_baseline_assessment,
+            assessment_guidance=body.assessment_guidance,
             requested_by=_actor(request),
         )
     except ActiveAnalysisJobError as exc:
@@ -854,6 +856,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
             "job_type": job_type,
             "query_preview": preview_text(body.query or "Baseline assessment"),
             "document_count": len(body.document_ids or []),
+            "guidance_preview": preview_text(body.assessment_guidance or ""),
             "save_as_draft": job_type == "query",
         },
     )

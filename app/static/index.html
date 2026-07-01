@@ -125,6 +125,12 @@
           <div id="assessment-scope-next" class="assessment-scope-block"></div>
           <div id="assessment-scope-last" class="assessment-scope-block hidden"></div>
           <div id="assessment-scope-warning" class="assessment-scope-warning hidden"></div>
+          <div class="assessment-guidance-section">
+            <label class="assessment-guidance-form" for="assessment-guidance">Assessment guidance <span class="muted">(optional)</span>
+              <textarea id="assessment-guidance" rows="3" placeholder="e.g. Pay close attention to the ABC pathology report and the Facebook video transcript. Do not flag liver mets as unconfirmed if the CT report documents them."></textarea>
+            </label>
+            <div class="assessment-guidance-presets" id="assessment-guidance-presets"></div>
+          </div>
           <div class="assessment-scope-actions">
             <button type="button" class="btn secondary" id="btn-scope-select-all">Select all</button>
             <button type="button" class="btn ghost" id="btn-scope-clear">Clear selection</button>
@@ -166,7 +172,7 @@
           <div class="open-item-meta" id="open-item-meta"></div>
 
           <div id="open-item-scope-hint" class="open-item-scope-hint hidden">
-            <p class="muted small">If this gap looks wrong, a report may have been left out of the last assessment. Adjust scope on Home or in the Library, then re-run baseline.</p>
+            <p class="muted small">If this gap looks wrong, a report may have been left out of the last assessment. Adjust scope or add guidance below, then re-run baseline.</p>
             <div class="open-item-scope-actions">
               <button type="button" class="btn secondary btn-sm" id="btn-open-item-adjust-scope">Adjust assessment scope</button>
               <button type="button" class="btn primary btn-sm" id="btn-open-item-reassess">Re-run baseline</button>

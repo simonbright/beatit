@@ -5,6 +5,7 @@ from app.services.llm import LLMClient
 from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_content
 from app.services.source_policy import (
     BASELINE_GAP_RULES,
+    BASELINE_GUIDANCE_SECTION,
     CUSTOM_QUERY_RESPONSE_STRUCTURE,
     LIST_ITEM_SOURCE_RULES,
     RESPONSE_STRUCTURE_WITH_SOURCES,
@@ -109,6 +110,7 @@ class SynthesisService:
         query: str,
         document_ids: list[str] | None = None,
         include_baseline_assessment: bool = False,
+        assessment_guidance: str | None = None,
         analysis_type: str = "query",
         created_by: str | None = None,
     ) -> dict[str, Any]:
@@ -127,6 +129,12 @@ class SynthesisService:
             )
 
         gap_rules = f"\n{BASELINE_GAP_RULES}\n" if analysis_type == "baseline" else ""
+        guidance_text = (assessment_guidance or "").strip()
+        guidance_section = (
+            BASELINE_GUIDANCE_SECTION.format(guidance=guidance_text)
+            if analysis_type == "baseline" and guidance_text
+            else ""
+        )
 
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
@@ -136,7 +144,7 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 
 === STORED DOCUMENTS ===
 {corpus_text}
-
+{guidance_section}
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
 {gap_rules}
@@ -183,6 +191,7 @@ Use clear ### headings for each section."""
             open_items_json=open_items_to_json(parsed["open_items"]),
             record_status=record_status,
             created_by=created_by,
+            assessment_guidance=guidance_text or None,
         )
         return saved
 

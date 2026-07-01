@@ -50,6 +50,14 @@ OPEN ITEMS / GAPS (baseline assessment only):
 - If a clinical report exists in the library (e.g. CT, MRI, pathology), do not claim that report is missing — cite it or state what it does not contain.
 """
 
+BASELINE_GUIDANCE_SECTION = """
+=== ASSESSMENT GUIDANCE (user instructions — follow carefully) ===
+{guidance}
+
+Apply this guidance when reading STORED DOCUMENTS and writing the assessment.
+Prioritize sources the user mentions by title, author, facility, or type (e.g. video, PDF, pathology) when they appear in the library above.
+"""
+
 CUSTOM_QUERY_RESPONSE_STRUCTURE = """
 This is a CUSTOM TASK — answer ONLY the user's question below.
 Do NOT repeat a full baseline case assessment, executive case overview, or restate the entire chart unless it directly supports your answer.

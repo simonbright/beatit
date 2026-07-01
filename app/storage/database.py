@@ -500,6 +500,7 @@ class Database:
         additions = {
             "refine_analysis_id": "TEXT",
             "refinement_notes": "TEXT",
+            "assessment_guidance": "TEXT",
         }
         for column, col_type in additions.items():
             if column not in columns:
@@ -565,6 +566,7 @@ class Database:
         requested_by: str | None = None,
         refine_analysis_id: str | None = None,
         refinement_notes: str | None = None,
+        assessment_guidance: str | None = None,
     ) -> dict[str, Any]:
         job_id = str(uuid4())
         now = _now_iso()
@@ -580,6 +582,7 @@ class Database:
             "requested_by": requested_by,
             "refine_analysis_id": refine_analysis_id,
             "refinement_notes": refinement_notes,
+            "assessment_guidance": assessment_guidance,
             "created_at": now,
             "started_at": None,
             "completed_at": None,
@@ -590,11 +593,11 @@ class Database:
                 INSERT INTO analysis_jobs
                 (id, status, job_type, query, document_ids_json,
                  include_baseline_assessment, analysis_id, error, requested_by,
-                 refine_analysis_id, refinement_notes,
+                 refine_analysis_id, refinement_notes, assessment_guidance,
                  created_at, started_at, completed_at)
                 VALUES (:id, :status, :job_type, :query, :document_ids_json,
                         :include_baseline_assessment, :analysis_id, :error, :requested_by,
-                        :refine_analysis_id, :refinement_notes,
+                        :refine_analysis_id, :refinement_notes, :assessment_guidance,
                         :created_at, :started_at, :completed_at)
                 """,
                 row,
@@ -676,6 +679,7 @@ class Database:
             "requested_by": row.get("requested_by"),
             "refine_analysis_id": row.get("refine_analysis_id"),
             "refinement_notes": row.get("refinement_notes"),
+            "assessment_guidance": row.get("assessment_guidance"),
             "created_at": row["created_at"],
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
@@ -733,6 +737,9 @@ class Database:
             await db.execute(
                 "ALTER TABLE analyses ADD COLUMN refinement_count INTEGER NOT NULL DEFAULT 0"
             )
+            await db.commit()
+        if "assessment_guidance" not in columns:
+            await db.execute("ALTER TABLE analyses ADD COLUMN assessment_guidance TEXT")
             await db.commit()
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_analyses_record_status ON analyses(record_status, created_at DESC)"
@@ -943,6 +950,7 @@ class Database:
         open_items_json: str | None = None,
         record_status: str = "official",
         created_by: str | None = None,
+        assessment_guidance: str | None = None,
     ) -> dict[str, Any]:
         analysis_id = str(uuid4())
         now = _now_iso()
@@ -964,6 +972,7 @@ class Database:
             "created_at": now,
             "updated_at": now,
             "refinement_count": 0,
+            "assessment_guidance": assessment_guidance,
         }
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -972,11 +981,11 @@ class Database:
                 (id, query, response, document_ids_json, model, analysis_type,
                  executive_summary, open_items_json, record_status, promoted_at,
                  created_by, annotation_title, annotation_header, annotation_notes,
-                 created_at, updated_at, refinement_count)
+                 created_at, updated_at, refinement_count, assessment_guidance)
                 VALUES (:id, :query, :response, :document_ids_json, :model, :analysis_type,
                         :executive_summary, :open_items_json, :record_status, :promoted_at,
                         :created_by, :annotation_title, :annotation_header, :annotation_notes,
-                        :created_at, :updated_at, :refinement_count)
+                        :created_at, :updated_at, :refinement_count, :assessment_guidance)
                 """,
                 row,
             )
@@ -1295,6 +1304,7 @@ class Database:
             "created_at": row["created_at"],
             "updated_at": row.get("updated_at") or row["created_at"],
             "refinement_count": int(row.get("refinement_count") or 0),
+            "assessment_guidance": row.get("assessment_guidance"),
         }
 
     async def insert_audit_event(

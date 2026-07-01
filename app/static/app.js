@@ -395,7 +395,7 @@ async function pollAnalysisJob(jobId, { isCustomQuery = false } = {}) {
   throw new Error("Analysis is taking longer than expected. Refresh the page to check status.");
 }
 
-async function startAnalysisJob({ query = "", baseline = false, summarize = false } = {}) {
+async function startAnalysisJob({ query = "", baseline = false, summarize = false, assessmentGuidance = "" } = {}) {
   const docIds = state.selectedIds.size ? [...state.selectedIds] : null;
 
   if (summarize) {
@@ -404,12 +404,14 @@ async function startAnalysisJob({ query = "", baseline = false, summarize = fals
     return { jobId: data.job.id, jobType: "summarize" };
   }
 
+  const guidance = (assessmentGuidance || "").trim();
   const data = await api("/api/analyze", {
     method: "POST",
     body: JSON.stringify({
       query,
       document_ids: docIds,
       include_baseline_assessment: baseline,
+      assessment_guidance: guidance || null,
     }),
   });
   const jobType = baseline && !query.trim() ? "baseline" : "query";
@@ -1297,6 +1299,7 @@ async function savePatientContext() {
 
 const LIBRARY_PAGE_SIZE = 10;
 const SELECTION_STORAGE_KEY = "beatit-assessment-selection";
+const ASSESSMENT_GUIDANCE_STORAGE_KEY = "beatit-assessment-guidance";
 
 const LIBRARY_TYPE_LABELS = {
   text: "Clinical notes",
@@ -1446,6 +1449,7 @@ function renderAssessmentScopeCard() {
         <p class="assessment-scope-heading">Last assessment used</p>
         <p class="assessment-scope-value"><strong>${last.count} document${last.count === 1 ? "" : "s"}</strong> · ${escapeHtml(formatTimestamp(state.latestAnalysis.created_at))}</p>
         ${breakdown ? `<p class="muted small">${escapeHtml(breakdown)}</p>` : ""}
+        ${state.latestAnalysis.assessment_guidance ? `<p class="muted small assessment-scope-guidance-note"><strong>Guidance:</strong> ${escapeHtml(truncate(state.latestAnalysis.assessment_guidance, 240))}</p>` : ""}
         ${sampleTitles.length ? `<ul class="assessment-scope-doc-list">${sampleTitles.map((t) => `<li>${t}</li>`).join("")}${more}</ul>` : ""}`;
     } else {
       lastEl.classList.add("hidden");
@@ -1516,6 +1520,65 @@ function goToLibraryForScope() {
   toast("Select documents with checkboxes, then return to Home to reassess");
 }
 
+const ASSESSMENT_GUIDANCE_PRESETS = [
+  "Pay close attention to pathology and imaging reports — cite them explicitly",
+  "Include findings from video and Facebook transcripts when they are in scope",
+  "Do not flag as missing anything already covered in stored clinical reports",
+  "Compare dates across reports and use the most recent staging data",
+  "Focus on the report from ABC and related follow-up documents",
+];
+
+function getAssessmentGuidanceInput() {
+  return $("#assessment-guidance")?.value.trim() || "";
+}
+
+function setAssessmentGuidanceInput(text) {
+  const el = $("#assessment-guidance");
+  if (el) el.value = text || "";
+  saveAssessmentGuidanceToSession();
+}
+
+function appendAssessmentGuidance(text) {
+  const el = $("#assessment-guidance");
+  if (!el || !text) return;
+  const current = el.value.trim();
+  el.value = current ? `${current}\n\n${text}` : text;
+  saveAssessmentGuidanceToSession();
+}
+
+function saveAssessmentGuidanceToSession() {
+  try {
+    sessionStorage.setItem(ASSESSMENT_GUIDANCE_STORAGE_KEY, $("#assessment-guidance")?.value || "");
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadAssessmentGuidanceFromSession() {
+  try {
+    const raw = sessionStorage.getItem(ASSESSMENT_GUIDANCE_STORAGE_KEY);
+    if (raw != null) setAssessmentGuidanceInput(raw);
+  } catch {
+    /* ignore */
+  }
+}
+
+function initAssessmentGuidancePresets() {
+  const container = $("#assessment-guidance-presets");
+  if (!container) return;
+  container.innerHTML = ASSESSMENT_GUIDANCE_PRESETS.map(
+    (text, index) =>
+      `<button type="button" class="btn ghost guidance-preset" data-index="${index}">${escapeHtml(text)}</button>`
+  ).join("");
+  container.querySelectorAll(".guidance-preset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      appendAssessmentGuidance(ASSESSMENT_GUIDANCE_PRESETS[Number(btn.dataset.index)]);
+      $("#assessment-guidance")?.focus();
+    });
+  });
+  $("#assessment-guidance")?.addEventListener("input", saveAssessmentGuidanceToSession);
+}
+
 async function confirmAndRunBaseline() {
   const nextIds = plannedAssessmentIds();
   if (!nextIds.length) return toast("Add documents to the library first", "error");
@@ -1523,14 +1586,27 @@ async function confirmAndRunBaseline() {
   const usingAll = state.selectedIds.size === 0;
   const mode = usingAll ? `all ${next.count} stored documents` : `${next.count} selected documents`;
   const breakdown = formatScopeBreakdown(next.byType);
+  const guidance = getAssessmentGuidanceInput();
   const hasAssessment = Boolean(state.latestAnalysis);
   let msg = hasAssessment
     ? `Re-run baseline assessment using ${mode}?`
     : `Run baseline assessment using ${mode}?`;
   if (breakdown) msg += `\n\nIncludes: ${breakdown}`;
+  if (guidance) msg += `\n\nGuidance:\n${truncate(guidance, 500)}`;
   if (hasAssessment) msg += "\n\nThis replaces the current Home assessment and open items.";
   if (!confirm(msg)) return;
-  await runAnalysis({ baseline: true });
+  await runAnalysis({ baseline: true, assessmentGuidance: guidance });
+}
+
+function reassessFromOpenItem() {
+  scrollToAssessmentScope();
+  const item = state.selectedOpenItem;
+  if (item && !getAssessmentGuidanceInput()) {
+    setAssessmentGuidanceInput(
+      `Check whether this is truly an open gap or already documented in stored reports: ${item.item}`
+    );
+  }
+  $("#assessment-guidance")?.focus();
 }
 
 function documentIdsOfType(sourceType) {
@@ -3161,7 +3237,7 @@ async function deleteDocument(id) {
   await refreshLibrary({ page, sourceType: state.libraryFilter });
 }
 
-async function runAnalysis({ query = "", baseline = false, summarize = false } = {}) {
+async function runAnalysis({ query = "", baseline = false, summarize = false, assessmentGuidance = "" } = {}) {
   if (state.analysisRunning) {
     toast("An analysis is already running. Please wait for it to finish.", "error");
     return;
@@ -3170,7 +3246,7 @@ async function runAnalysis({ query = "", baseline = false, summarize = false } =
   const isCustomQuery = !baseline && !summarize && query.trim().length > 0;
 
   try {
-    const { jobId, jobType } = await startAnalysisJob({ query, baseline, summarize });
+    const { jobId, jobType } = await startAnalysisJob({ query, baseline, summarize, assessmentGuidance });
     setAnalysisRunning(true, jobId, jobType);
     if (isCustomQuery) {
       switchTab("custom-tasks");
@@ -3215,6 +3291,7 @@ function bootstrapUi() {
   initTheme();
   initScrollTop();
   initInvestigationGuidancePresets();
+  initAssessmentGuidancePresets();
   initUploadResultBanner();
   initHowToNavigation();
   updateNativeShareButton();
@@ -3224,6 +3301,7 @@ function bootstrapUi() {
 
 async function loadInitialData() {
   loadSelectionFromSession();
+  loadAssessmentGuidanceFromSession();
   try {
     await Promise.allSettled([loadDocumentIndex(), loadLatestAssessment(), loadCustomTasks()]);
   } finally {
@@ -3630,7 +3708,7 @@ safeOn("#btn-scope-select-all", "click", selectAllDocuments);
 safeOn("#btn-scope-clear", "click", clearDocumentSelection);
 safeOn("#btn-scope-match-last", "click", applyLastAssessmentScope);
 safeOn("#btn-open-item-adjust-scope", "click", scrollToAssessmentScope);
-safeOn("#btn-open-item-reassess", "click", () => confirmAndRunBaseline());
+safeOn("#btn-open-item-reassess", "click", reassessFromOpenItem);
 safeOn("#btn-summarize", "click", () => runAnalysis({ summarize: true }));
 
 safeOn("#btn-analyze", "click", () => {
