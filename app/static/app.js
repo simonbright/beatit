@@ -176,8 +176,9 @@ async function checkHealth() {
 function updateLlmStatusDisplay(data, pill, settingsConn) {
   const llm = data?.llm || {};
   const active = llm.active || {};
+  const provider = llm.configured_provider || "openrouter";
   const model =
-    state.settings.openrouter_model ||
+    state.settings?.openrouter_model ||
     llm.openrouter?.model ||
     active.model ||
     "Unknown model";
@@ -185,7 +186,17 @@ function updateLlmStatusDisplay(data, pill, settingsConn) {
   if (active.ready) {
     if (pill) pill.classList.add("hidden");
     if (settingsConn) {
-      settingsConn.textContent = `Connected · ${active.provider} · ${active.model || model}`;
+      const via =
+        active.provider === "ollama"
+          ? `Ollama VM · ${active.model || llm.ollama?.configured_model || "model"}`
+          : `OpenRouter · ${active.model || model}`;
+      const mode =
+        provider === "auto" && active.provider === "ollama"
+          ? " (auto — VM active)"
+          : provider === "auto"
+            ? " (auto — cloud fallback)"
+            : "";
+      settingsConn.textContent = `Connected · ${via}${mode}`;
       settingsConn.className = "settings-llm-connection ok";
     }
     return;
@@ -193,7 +204,28 @@ function updateLlmStatusDisplay(data, pill, settingsConn) {
 
   let headerText = "LLM unavailable";
   let settingsText = "LLM is not available.";
-  if (llm.configured_provider === "openrouter") {
+  if (provider === "ollama") {
+    const err =
+      llm.ollama?.error ||
+      active.error ||
+      "Ollama not reachable — check OLLAMA_BASE_URL and Tailscale";
+    headerText = "Ollama offline";
+    settingsText = err;
+  } else if (provider === "auto") {
+    const ollama = llm.ollama || {};
+    const or = llm.openrouter || {};
+    if (!or.connected && or.error) {
+      headerText = "LLM error";
+      settingsText = `Auto mode: VM unreachable and OpenRouter failed — ${or.error}`;
+    } else if (!ollama.connected) {
+      headerText = "VM offline";
+      settingsText = `Auto mode: Ollama unreachable (${ollamaReachabilityHint(ollama)}). Using OpenRouter when configured.`;
+    } else if (!ollama.model_available) {
+      settingsText = `Ollama connected but model missing — run ollama pull ${ollama.configured_model || "your model"} on the VM`;
+    } else if (active.error) {
+      settingsText = active.error;
+    }
+  } else if (provider === "openrouter") {
     const err = llm.openrouter?.error || active.error || "Set OPENROUTER_API_KEY";
     headerText = "LLM error";
     settingsText = `OpenRouter error: ${err}`;
@@ -210,6 +242,31 @@ function updateLlmStatusDisplay(data, pill, settingsConn) {
     settingsConn.textContent = settingsText;
     settingsConn.className = "settings-llm-connection bad";
   }
+}
+
+function renderSettingsOllamaInfo(settings, llmHealth) {
+  const el = $("#settings-ollama-info");
+  if (!el) return;
+  const provider = settings?.llm_provider || "openrouter";
+  if (provider === "openrouter") {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  const base = settings?.ollama_base_url || "—";
+  const model = settings?.ollama_model || "—";
+  const ollama = llmHealth?.ollama || {};
+  const models = (ollama.available_models || []).slice(0, 8);
+  const modelList = models.length ? models.join(", ") : "none reported";
+  el.classList.remove("hidden");
+  el.innerHTML = `
+    <p><strong>Provider:</strong> ${escapeHtml(provider)} · <strong>Ollama URL:</strong> ${escapeHtml(base)} · <strong>Model:</strong> ${escapeHtml(model)}</p>
+    <p>VM models: ${escapeHtml(modelList)}${(ollama.available_models || []).length > 8 ? " …" : ""}</p>
+    <p>Setup guide: <code>docs/TAILSCALE_OLLAMA_SETUP.md</code> · test: <code>./scripts/check_ollama.sh</code></p>`;
+}
+
+function ollamaReachabilityHint(ollama) {
+  return ollama?.base_url || "check Tailscale and firewall";
 }
 
 function docPathLines(doc) {
@@ -1173,11 +1230,13 @@ async function loadSettings() {
     current.textContent = `Selected model: ${modelId}`;
   }
 
-  try {
+  const llmHealth = data.llm;
+  renderSettingsOllamaInfo(state.settings, llmHealth);
+  if (llmHealth) {
+    updateLlmStatusDisplay({ llm: llmHealth }, $("#llm-status"), $("#settings-llm-connection"));
+  } else {
     const health = await api("/api/health");
     updateLlmStatusDisplay(health, $("#llm-status"), $("#settings-llm-connection"));
-  } catch {
-    /* checkHealth handles errors on its own schedule */
   }
 
   await loadAuditTrail(true);

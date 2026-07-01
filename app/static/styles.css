@@ -316,6 +316,23 @@ body {
 }
 
 .settings-llm-connection.ok { border-color: rgba(5, 150, 105, 0.35); color: var(--accent-2); }
+
+.settings-ollama-info {
+  margin: 0 0 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.settings-ollama-info p {
+  margin: 0 0 0.35rem;
+}
+
+.settings-ollama-info p:last-child {
+  margin-bottom: 0;
+}
+
 .settings-llm-connection.bad { border-color: rgba(220, 38, 38, 0.35); color: var(--danger-soft); }
 
 .container {

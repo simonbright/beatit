@@ -671,7 +671,9 @@
 
       <div class="card settings-card">
         <h3>LLM settings</h3>
-        <p class="muted">OpenRouter model used for medical synthesis. Budget models cost less; premium models may give deeper analysis.</p>
+        <p class="muted">OpenRouter model for cloud synthesis (Render and fallback). When <code>LLM_PROVIDER=auto</code>, BeatIt uses your Tailscale Ollama VM when it is reachable.</p>
+
+        <div id="settings-ollama-info" class="settings-ollama-info muted small hidden"></div>
 
         <label for="settings-model">OpenRouter model
           <select id="settings-model"></select>

@@ -282,13 +282,17 @@ async def get_app_settings():
     model = await db.get_setting("openrouter_model") or settings.openrouter_model or DEFAULT_OPENROUTER_MODEL
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
     catalog = await _source_catalog(db, [])
+    llm_health = await llm.health()
     return {
         "settings": {
             "llm_provider": settings.llm_provider,
             "openrouter_model": model,
+            "ollama_base_url": settings.ollama_base_url,
+            "ollama_model": settings.ollama_model,
             "patient_context": patient_context,
             "source_labels": _source_labels_payload(catalog),
         },
+        "llm": llm_health,
         "models": OPENROUTER_MODELS,
         "default_model": DEFAULT_OPENROUTER_MODEL,
         "default_patient_context": DEFAULT_PATIENT_CONTEXT,

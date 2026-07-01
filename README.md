@@ -107,20 +107,21 @@ data/           # Created at runtime (gitignored)
 
 This tool supports research and case organization. It is **not** medical advice and does not replace evaluation by qualified oncology teams.
 
-## Remote Ollama notes
+## Remote Ollama over Tailscale
 
-If Ollama runs on another machine, ensure:
+Full step-by-step guide: **[docs/TAILSCALE_OLLAMA_SETUP.md](docs/TAILSCALE_OLLAMA_SETUP.md)**
+
+Quick test from your Mac:
+
+```bash
+./scripts/check_ollama.sh http://100.x.x.x:11434
+```
+
+If Ollama runs on another machine without Tailscale, ensure:
 
 1. `OLLAMA_HOST=0.0.0.0` on the server (or appropriate bind)
 2. Firewall allows your client IP on port 11434
 3. Use VPN/SSH tunnel if not exposing publicly
-
-Example SSH tunnel:
-
-```bash
-ssh -L 11434:localhost:11434 user@remote-server
-# then set OLLAMA_BASE_URL=http://localhost:11434
-```
 
 ## Deploy to Render (secured)
 
