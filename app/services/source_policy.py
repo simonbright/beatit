@@ -42,6 +42,14 @@ Structure your response with these sections:
 Do NOT include a separate "Source key" section — references are compiled automatically in the report appendix.
 """
 
+BASELINE_GAP_RULES = """
+OPEN ITEMS / GAPS (baseline assessment only):
+- Before listing something as a gap or open item, search ALL provided document text and titles.
+- Do NOT flag as missing any finding, report, test, or date that appears in any stored document above, even partially or in an appendix.
+- Only list gaps for information genuinely absent from the STORED DOCUMENTS section.
+- If a clinical report exists in the library (e.g. CT, MRI, pathology), do not claim that report is missing — cite it or state what it does not contain.
+"""
+
 CUSTOM_QUERY_RESPONSE_STRUCTURE = """
 This is a CUSTOM TASK — answer ONLY the user's question below.
 Do NOT repeat a full baseline case assessment, executive case overview, or restate the entire chart unless it directly supports your answer.

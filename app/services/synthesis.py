@@ -4,6 +4,7 @@ from app.services.assessment_parse import open_items_to_json, parse_assessment
 from app.services.llm import LLMClient
 from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_content
 from app.services.source_policy import (
+    BASELINE_GAP_RULES,
     CUSTOM_QUERY_RESPONSE_STRUCTURE,
     LIST_ITEM_SOURCE_RULES,
     RESPONSE_STRUCTURE_WITH_SOURCES,
@@ -125,6 +126,8 @@ class SynthesisService:
                 "with possible liver metastasis."
             )
 
+        gap_rules = f"\n{BASELINE_GAP_RULES}\n" if analysis_type == "baseline" else ""
+
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
 
@@ -136,7 +139,7 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
-
+{gap_rules}
 {_response_structure_for_analysis(analysis_type=analysis_type, query=query)}
 
 CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."] or another SOURCE tag.

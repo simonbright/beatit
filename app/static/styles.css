@@ -613,6 +613,63 @@ textarea { resize: vertical; min-height: 100px; }
   margin: 0;
 }
 
+.library-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.library-selection-summary {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+
+.library-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+}
+
+.library-selection-actions .btn {
+  margin-top: 0;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+}
+
+.library-select-type-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.library-select-type {
+  min-width: 10rem;
+}
+
+.doc-select-check {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.35rem;
+}
+
+.doc-select-check input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .library-pagination {
   display: flex;
   align-items: center;
@@ -964,6 +1021,71 @@ textarea { resize: vertical; min-height: 100px; }
 .analyze-actions-card {
   margin-bottom: 1rem;
   border-color: var(--accent);
+}
+
+.assessment-scope-card {
+  margin-bottom: 1rem;
+  border-color: var(--accent);
+}
+
+.assessment-scope-block + .assessment-scope-block {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.assessment-scope-heading {
+  margin: 0 0 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.assessment-scope-value {
+  margin: 0 0 0.35rem;
+}
+
+.assessment-scope-doc-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+}
+
+.assessment-scope-warning {
+  margin-top: 0.75rem;
+}
+
+.assessment-scope-alert {
+  margin: 0 0 0.35rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning, #c89200) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #c89200) 35%, var(--border));
+  font-size: 0.88rem;
+}
+
+.assessment-scope-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.open-item-scope-hint {
+  margin: 0.75rem 0 1rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.open-item-scope-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
 }
 
 .analyze-actions-card.analyze-actions-secondary {

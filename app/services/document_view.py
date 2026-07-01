@@ -69,7 +69,7 @@ def build_document_view(doc: dict[str, Any]) -> dict[str, Any]:
     ext = _file_extension(doc)
     source_type = doc.get("source_type") or ""
 
-    if source_url and source_type in {"url", "youtube"} and not has_file:
+    if source_url and source_type in {"url", "youtube", "facebook"} and not has_file:
         return {
             "has_file": False,
             "file_url": None,
@@ -89,7 +89,7 @@ def build_document_view(doc: dict[str, Any]) -> dict[str, Any]:
         view_kind = "pdf"
     elif is_dicom_document(doc, ext):
         view_kind = "dicom"
-    elif source_type == "video" or ext in VIDEO_EXTENSIONS:
+    elif source_type == "video" or source_type == "facebook" or ext in VIDEO_EXTENSIONS:
         view_kind = "video"
     elif ext in IMAGE_EXTENSIONS:
         view_kind = "image"

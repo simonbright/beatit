@@ -95,6 +95,13 @@ class YoutubeIngestRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class FacebookIngestRequest(BaseModel):
+    url: str = Field(min_length=4)
+    title: str | None = None
+    notes: str | None = Field(default=None, max_length=20000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class AnalyzeRequest(BaseModel):
     query: str = Field(default="")
     document_ids: list[str] | None = None
@@ -645,6 +652,36 @@ async def ingest_youtube_route(body: YoutubeIngestRequest, request: Request):
             store,
             url=body.url,
             title=body.title,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+        },
+    )
+    return {"document": doc}
+
+
+@router.post("/ingest/facebook")
+async def ingest_facebook_route(body: FacebookIngestRequest, request: Request):
+    from app.ingest.facebook import ingest_facebook
+
+    db, store, _, _, _ = await _get_services()
+    try:
+        doc = await ingest_facebook(
+            store,
+            url=body.url,
+            title=body.title,
+            notes=body.notes,
             metadata=body.metadata,
         )
     except ValueError as exc:

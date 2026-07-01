@@ -116,10 +116,27 @@
           </div>
         </details>
 
+        <div class="card assessment-scope-card" id="assessment-scope-card">
+          <div class="row-between wrap">
+            <h3>Assessment scope</h3>
+            <button type="button" class="btn ghost" id="btn-scope-library">Choose in Library</button>
+          </div>
+          <p class="muted small">Control which stored documents are sent to the LLM. False gaps often mean a report was left out of scope.</p>
+          <div id="assessment-scope-next" class="assessment-scope-block"></div>
+          <div id="assessment-scope-last" class="assessment-scope-block hidden"></div>
+          <div id="assessment-scope-warning" class="assessment-scope-warning hidden"></div>
+          <div class="assessment-scope-actions">
+            <button type="button" class="btn secondary" id="btn-scope-select-all">Select all</button>
+            <button type="button" class="btn ghost" id="btn-scope-clear">Clear selection</button>
+            <button type="button" class="btn ghost hidden" id="btn-scope-match-last">Match last assessment</button>
+            <button type="button" class="btn primary" id="btn-reassess-baseline">Run baseline assessment</button>
+          </div>
+        </div>
+
         <div class="card open-items-card" id="open-items-card">
           <h3>Open items</h3>
           <p class="section-updated muted small hidden">Last updated <time id="open-items-time"></time></p>
-          <p class="muted small open-items-hint">Prioritized items still to resolve. Click Explore on a row to investigate.</p>
+          <p class="muted small open-items-hint">Prioritized items still to resolve. If a gap looks wrong, check Assessment scope above — then re-run baseline. Click Explore on a row to investigate.</p>
           <div class="table-wrap">
             <table class="open-items-table" id="open-items-table">
               <thead>
@@ -147,6 +164,14 @@
             <button type="button" class="btn ghost" id="btn-close-open-item">Close</button>
           </div>
           <div class="open-item-meta" id="open-item-meta"></div>
+
+          <div id="open-item-scope-hint" class="open-item-scope-hint hidden">
+            <p class="muted small">If this gap looks wrong, a report may have been left out of the last assessment. Adjust scope on Home or in the Library, then re-run baseline.</p>
+            <div class="open-item-scope-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-open-item-adjust-scope">Adjust assessment scope</button>
+              <button type="button" class="btn primary btn-sm" id="btn-open-item-reassess">Re-run baseline</button>
+            </div>
+          </div>
 
           <div class="open-item-investigation-section">
             <h5>Investigation guidance</h5>
@@ -202,7 +227,7 @@
           <span class="muted small analyze-actions-summary-hint">Baseline, summarize, or custom question</span>
         </summary>
         <div class="analyze-actions-body">
-          <p class="muted small">Uses all stored documents unless you select specific ones in the library.</p>
+          <p class="muted small">Choose specific documents in the <strong>Library</strong> to include in assessments. Leave none selected to use everything.</p>
 
           <div class="analyze-actions">
             <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
@@ -351,6 +376,15 @@
         </article>
 
         <article class="card">
+          <h3>Facebook reel / video</h3>
+          <label>Video URL<input type="url" id="facebook-input" placeholder="https://www.facebook.com/reel/…"></label>
+          <label>Title (optional)<input type="text" id="facebook-title"></label>
+          <label>Notes (optional)<textarea id="facebook-notes" rows="3" placeholder="Clinical context or manual notes to include with the transcript"></textarea></label>
+          <p class="muted small">Downloads the public video and any available English captions. Private or login-only videos may not work.</p>
+          <button class="btn primary" id="btn-ingest-facebook">Ingest Facebook video</button>
+        </article>
+
+        <article class="card">
           <h3>PDF document</h3>
           <label class="file-label">
             <input type="file" id="pdf-file" accept=".pdf,application/pdf">
@@ -422,6 +456,7 @@
           <h3>Stored documents</h3>
           <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
         </div>
+        <p class="muted small">Check items to include in assessments, or leave none selected to use everything. Filter by type, then <strong>Select all …</strong> for bulk selection across pages.</p>
         <div class="library-toolbar">
           <label class="library-filter-label" for="library-type-filter">
             Type
@@ -430,6 +465,22 @@
             </select>
           </label>
           <p id="library-summary" class="library-summary muted small"></p>
+        </div>
+        <div class="library-selection-bar" id="library-selection-bar">
+          <p id="library-selection-summary" class="library-selection-summary muted small"></p>
+          <div class="library-selection-actions">
+            <button type="button" class="btn ghost" id="btn-select-page">Select page</button>
+            <button type="button" class="btn ghost hidden" id="btn-select-filtered-type">Select filtered type</button>
+            <label class="library-select-type-label" for="library-select-type">
+              Select by type
+              <select id="library-select-type" class="library-select-type">
+                <option value="">Choose type…</option>
+              </select>
+            </label>
+            <button type="button" class="btn ghost" id="btn-select-by-type">Select type</button>
+            <button type="button" class="btn ghost" id="btn-select-all-docs">Select all</button>
+            <button type="button" class="btn ghost" id="btn-clear-selection">Clear selection</button>
+          </div>
         </div>
         <div id="documents-list" class="documents-list"></div>
         <div id="library-pagination" class="library-pagination hidden">

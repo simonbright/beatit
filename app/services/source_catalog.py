@@ -93,6 +93,7 @@ DOCUMENT_SOURCE_TYPE_MAP: dict[str, str] = {
     "text": "document",
     "url": "web",
     "youtube": "web",
+    "facebook": "web",
     "video": "web",
 }
 
