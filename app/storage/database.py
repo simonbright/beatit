@@ -501,6 +501,7 @@ class Database:
             "refine_analysis_id": "TEXT",
             "refinement_notes": "TEXT",
             "assessment_guidance": "TEXT",
+            "build_on_analysis_id": "TEXT",
         }
         for column, col_type in additions.items():
             if column not in columns:
@@ -567,6 +568,7 @@ class Database:
         refine_analysis_id: str | None = None,
         refinement_notes: str | None = None,
         assessment_guidance: str | None = None,
+        build_on_analysis_id: str | None = None,
     ) -> dict[str, Any]:
         job_id = str(uuid4())
         now = _now_iso()
@@ -583,6 +585,7 @@ class Database:
             "refine_analysis_id": refine_analysis_id,
             "refinement_notes": refinement_notes,
             "assessment_guidance": assessment_guidance,
+            "build_on_analysis_id": build_on_analysis_id,
             "created_at": now,
             "started_at": None,
             "completed_at": None,
@@ -593,11 +596,11 @@ class Database:
                 INSERT INTO analysis_jobs
                 (id, status, job_type, query, document_ids_json,
                  include_baseline_assessment, analysis_id, error, requested_by,
-                 refine_analysis_id, refinement_notes, assessment_guidance,
+                 refine_analysis_id, refinement_notes, assessment_guidance, build_on_analysis_id,
                  created_at, started_at, completed_at)
                 VALUES (:id, :status, :job_type, :query, :document_ids_json,
                         :include_baseline_assessment, :analysis_id, :error, :requested_by,
-                        :refine_analysis_id, :refinement_notes, :assessment_guidance,
+                        :refine_analysis_id, :refinement_notes, :assessment_guidance, :build_on_analysis_id,
                         :created_at, :started_at, :completed_at)
                 """,
                 row,
@@ -680,6 +683,7 @@ class Database:
             "refine_analysis_id": row.get("refine_analysis_id"),
             "refinement_notes": row.get("refinement_notes"),
             "assessment_guidance": row.get("assessment_guidance"),
+            "build_on_analysis_id": row.get("build_on_analysis_id"),
             "created_at": row["created_at"],
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
@@ -827,6 +831,9 @@ class Database:
             rows = await cursor.fetchall()
         return [self._row_to_doc(dict(row)) for row in rows]
 
+    async def list_imaging_documents(self) -> list[dict[str, Any]]:
+        return await self.list_documents(source_type="imaging")
+
     async def count_documents(self, source_type: str | None = None) -> int:
         clauses: list[str] = []
         params: list[Any] = []
@@ -873,6 +880,42 @@ class Database:
             }
             for row in rows
         ]
+
+    async def update_document_metadata(
+        self,
+        doc_id: str,
+        *,
+        metadata: dict[str, Any],
+        extracted_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = _now_iso()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT id FROM documents WHERE id = ?", (doc_id,))
+            if not await cursor.fetchone():
+                return None
+            if extracted_path is None:
+                await db.execute(
+                    """
+                    UPDATE documents
+                    SET metadata_json = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(metadata), now, doc_id),
+                )
+            else:
+                await db.execute(
+                    """
+                    UPDATE documents
+                    SET metadata_json = ?, extracted_path = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(metadata), extracted_path, now, doc_id),
+                )
+            await db.commit()
+            cursor = await db.execute("SELECT * FROM documents WHERE id = ?", (doc_id,))
+            row = await cursor.fetchone()
+        return self._row_to_doc(dict(row)) if row else None
 
     async def get_document(self, doc_id: str) -> dict[str, Any] | None:
         async with aiosqlite.connect(self.db_path) as db:

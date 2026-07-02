@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.storage.documents import DocumentStore
+
+if TYPE_CHECKING:
+    from app.storage.database import Database
 
 ALLOWED_IMAGING_EXTENSIONS = {
     ".dcm",
@@ -115,7 +118,14 @@ def _extract_dicom_metadata(content: bytes) -> dict[str, str]:
         value = getattr(dataset, name, None)
         if value is None:
             return ""
+        if isinstance(value, (list, tuple)):
+            return "\\".join(str(v).strip() for v in value if str(v).strip())
         return str(value).strip()
+
+    image_position = getattr(dataset, "ImagePositionPatient", None)
+    image_position_z = ""
+    if image_position is not None and len(image_position) >= 3:
+        image_position_z = str(image_position[2]).strip()
 
     fields = {
         "modality": _get("Modality"),
@@ -126,6 +136,16 @@ def _extract_dicom_metadata(content: bytes) -> dict[str, str]:
         "instance_number": _get("InstanceNumber"),
         "body_part": _get("BodyPartExamined"),
         "slice_thickness": _get("SliceThickness"),
+        "slice_location": _get("SliceLocation"),
+        "image_position_z": image_position_z,
+        "spacing_between_slices": _get("SpacingBetweenSlices"),
+        "window_center": _get("WindowCenter"),
+        "window_width": _get("WindowWidth"),
+        "convolution_kernel": _get("ConvolutionKernel"),
+        "protocol_name": _get("ProtocolName"),
+        "image_type": _get("ImageType"),
+        "rows": _get("Rows"),
+        "columns": _get("Columns"),
     }
     return {key: value for key, value in fields.items() if value}
 
@@ -156,10 +176,23 @@ def _build_extracted_text(
         ("Instance", "instance_number"),
         ("Body part", "body_part"),
         ("Slice thickness", "slice_thickness"),
+        ("Slice location (mm)", "slice_location"),
+        ("Image Z position (mm)", "image_position_z"),
+        ("Reconstruction kernel", "convolution_kernel"),
+        ("Window center/width", "window_center"),
+        ("Window width", "window_width"),
+        ("Protocol", "protocol_name"),
+        ("Slice spacing (mm)", "spacing_between_slices"),
+        ("Image type", "image_type"),
     ):
         value = dicom_meta.get(key)
         if value:
-            lines.append(f"{label}: {value}")
+            if key == "window_center" and dicom_meta.get("window_width"):
+                lines.append(f"Window preset: {value} / {dicom_meta['window_width']}")
+            elif key == "window_width" and dicom_meta.get("window_center"):
+                continue
+            else:
+                lines.append(f"{label}: {value}")
 
     lines.extend(
         [
@@ -257,3 +290,72 @@ async def ingest_imaging_file(
         raw_content=content,
         metadata=meta,
     )
+
+
+def merge_dicom_metadata(meta: dict[str, Any], dicom_meta: dict[str, str]) -> dict[str, Any]:
+    merged = dict(meta or {})
+    merged.update({f"dicom_{key}": value for key, value in dicom_meta.items()})
+    if dicom_meta.get("modality"):
+        merged["modality"] = dicom_meta["modality"]
+    return merged
+
+
+async def reindex_imaging_document(
+    store: DocumentStore,
+    db: "Database",
+    doc: dict[str, Any],
+) -> bool:
+    from pathlib import Path
+
+    path_value = doc.get("file_path")
+    if not path_value:
+        return False
+    path = Path(path_value)
+    if not path.is_file():
+        return False
+
+    content = path.read_bytes()
+    resolved = resolve_imaging_type(
+        (doc.get("metadata") or {}).get("original_filename") or path.name,
+        content,
+    )
+    if not resolved:
+        return False
+
+    ext, _format_label = resolved
+    dicom_meta: dict[str, str] = {}
+    if ext in {".dcm", ".dicom"} or is_dicom_bytes(content):
+        dicom_meta = _extract_dicom_metadata(content)
+
+    meta = merge_dicom_metadata(doc.get("metadata") or {}, dicom_meta)
+    filename = meta.get("original_filename") or path.name
+    extracted = _build_extracted_text(
+        filename=filename,
+        ext=meta.get("file_extension") or ext,
+        file_size=meta.get("file_size") or len(content),
+        relative_path=meta.get("relative_path"),
+        notes=None,
+        dicom_meta=dicom_meta,
+    )
+    saved_text = await store.save_extracted_text(doc["id"], extracted)
+    await db.update_document_metadata(
+        doc["id"],
+        metadata=meta,
+        extracted_path=str(saved_text),
+    )
+    return True
+
+
+async def reindex_all_imaging_metadata(store: DocumentStore, db: "Database") -> dict[str, int]:
+    documents = await db.list_imaging_documents()
+    updated = 0
+    skipped = 0
+    for doc in documents:
+        try:
+            if await reindex_imaging_document(store, db, doc):
+                updated += 1
+            else:
+                skipped += 1
+        except Exception:
+            skipped += 1
+    return {"total": len(documents), "updated": updated, "skipped": skipped}

@@ -88,7 +88,12 @@ def _normalize_to_uint8(arr: Any) -> Any:
     return np.clip(scaled, 0, 255).astype(np.uint8)
 
 
-def render_dicom_preview_png(*, file_path: Path | None = None, content: bytes | None = None) -> bytes:
+def render_dicom_preview_png(
+    *,
+    file_path: Path | None = None,
+    content: bytes | None = None,
+    max_dimension: int | None = None,
+) -> bytes:
     import numpy as np
     import pydicom
     from PIL import Image
@@ -123,5 +128,7 @@ def render_dicom_preview_png(*, file_path: Path | None = None, content: bytes | 
         raise ValueError("Unsupported DICOM pixel layout for preview")
 
     buffer = BytesIO()
+    if max_dimension and max(image.size) > max_dimension:
+        image.thumbnail((max_dimension, max_dimension), resample=Image.Resampling.LANCZOS)
     image.save(buffer, format="PNG")
     return buffer.getvalue()

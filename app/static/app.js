@@ -24,7 +24,16 @@ const state = {
   selectedCustomTaskId: null,
   activeJobType: null,
   refiningCustomTaskId: null,
+  imagingFacets: null,
+  imagingFacetsError: null,
+  imagingFilters: {},
+  imagingMatch: null,
+  imagingWorkflowIds: [],
+  lastVisionDocumentId: null,
 };
+
+const backgroundTasks = new Map();
+let backgroundStatusTimer = null;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -68,9 +77,14 @@ function toast(message, type = "success") {
 
 async function api(path, options = {}) {
   const controller = new AbortController();
+  const externalSignal = options.signal;
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
   const timeoutMs = options.timeoutMs ?? 120000;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+  const { timeoutMs: _timeoutMs, signal: _signal, ...fetchOptions } = options;
 
   try {
     const res = await fetch(path, {
@@ -99,6 +113,9 @@ async function api(path, options = {}) {
     return data;
   } catch (err) {
     if (err.name === "AbortError") {
+      if (externalSignal?.aborted) {
+        throw new Error("Cancelled");
+      }
       throw new Error("Request timed out — check your connection and try again.");
     }
     throw err;
@@ -109,6 +126,171 @@ async function api(path, options = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatElapsedDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatTaskStartedAt(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return "";
+  return value.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function upsertBackgroundTask(task) {
+  const existing = backgroundTasks.get(task.id) || {};
+  backgroundTasks.set(task.id, {
+    ...existing,
+    ...task,
+    startedAt: task.startedAt || existing.startedAt || new Date(),
+  });
+  renderBackgroundStatusBar();
+  ensureBackgroundStatusTimer();
+}
+
+function removeBackgroundTask(taskId) {
+  backgroundTasks.delete(taskId);
+  renderBackgroundStatusBar();
+  if (backgroundTasks.size === 0 && backgroundStatusTimer) {
+    clearInterval(backgroundStatusTimer);
+    backgroundStatusTimer = null;
+  }
+}
+
+function renderBackgroundStatusBar() {
+  const bar = $("#background-status-bar");
+  const list = $("#background-status-list");
+  if (!bar || !list) return;
+
+  if (backgroundTasks.size === 0) {
+    bar.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+
+  bar.classList.remove("hidden");
+  const now = Date.now();
+  list.innerHTML = [...backgroundTasks.values()]
+    .map((task) => {
+      const elapsed = formatElapsedDuration(now - task.startedAt.getTime());
+      const started = formatTaskStartedAt(task.startedAt);
+      const detail = task.detail ? `<span class="bg-status-detail muted">${escapeHtml(task.detail)}</span>` : "";
+      const cancelBtn =
+        task.cancelable === false
+          ? ""
+          : `<button type="button" class="btn ghost bg-status-cancel" data-cancel-task="${escapeHtml(task.id)}">Cancel</button>`;
+      return `
+        <div class="bg-status-item" data-task-id="${escapeHtml(task.id)}">
+          <span class="bg-status-spinner" aria-hidden="true"></span>
+          <div class="bg-status-body">
+            <span class="bg-status-label">${escapeHtml(task.label)}</span>
+            <span class="bg-status-meta muted">Started ${escapeHtml(started)} · ${escapeHtml(elapsed)}</span>
+            ${detail}
+          </div>
+          ${cancelBtn}
+        </div>`;
+    })
+    .join("");
+}
+
+function ensureBackgroundStatusTimer() {
+  if (backgroundStatusTimer) return;
+  backgroundStatusTimer = setInterval(() => renderBackgroundStatusBar(), 1000);
+}
+
+async function cancelBackgroundTask(taskId) {
+  const task = backgroundTasks.get(taskId);
+  if (!task?.onCancel) return;
+  await task.onCancel();
+  if (task.kind !== "analysis") {
+    removeBackgroundTask(taskId);
+  }
+}
+
+async function withBackgroundTask({ id, label, run }) {
+  let cancelled = false;
+  const taskId = id || `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+  upsertBackgroundTask({
+    id: taskId,
+    kind: "upload",
+    label,
+    startedAt: new Date(),
+    detail: "",
+    cancelable: true,
+    onCancel: () => {
+      cancelled = true;
+    },
+  });
+
+  try {
+    return await run({
+      setDetail: (detail) => upsertBackgroundTask({ id: taskId, detail }),
+      isCancelled: () => cancelled,
+    });
+  } finally {
+    removeBackgroundTask(taskId);
+  }
+}
+
+function analysisTaskLabel(jobType, query) {
+  if (jobType === "baseline") return "Baseline assessment";
+  if (jobType === "summarize") return "Summarizing documents";
+  const q = (query || "").trim();
+  if (jobType === "query") return q ? `Custom analysis: ${truncate(q, 72)}` : "Custom analysis";
+  return "Analysis";
+}
+
+function analysisTaskDetail(job) {
+  const docs = job.document_ids?.length;
+  const scope = docs ? `${docs} document${docs === 1 ? "" : "s"}` : "all documents";
+  return `${jobStatusLabel(job.status)} · ${scope}`;
+}
+
+function beginAnalysisBackgroundTask(jobId, jobType, { query = "", startedAt = null } = {}) {
+  const taskId = `analysis-${jobId}`;
+  upsertBackgroundTask({
+    id: taskId,
+    kind: "analysis",
+    label: analysisTaskLabel(jobType, query),
+    startedAt: startedAt ? new Date(startedAt) : new Date(),
+    detail: "Starting…",
+    cancelable: true,
+    onCancel: async () => {
+      await api(`/api/analyze/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+    },
+  });
+  return taskId;
+}
+
+function updateAnalysisBackgroundTask(taskId, job) {
+  if (!taskId || !backgroundTasks.has(taskId)) return;
+  upsertBackgroundTask({ id: taskId, detail: analysisTaskDetail(job) });
+}
+
+function initBackgroundStatusBar() {
+  $("#background-status-list")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-cancel-task]");
+    if (!btn) return;
+    const taskId = btn.dataset.cancelTask;
+    btn.disabled = true;
+    cancelBackgroundTask(taskId)
+      .then(() => {
+        if (backgroundTasks.has(taskId)) return;
+        toast("Cancelled");
+      })
+      .catch((err) => {
+        toast(err.message, "error");
+        btn.disabled = false;
+      });
+  });
 }
 
 function formatVersionUpdated(isoDate) {
@@ -274,6 +456,25 @@ function docPathLines(doc) {
   const meta = doc.metadata || {};
   if (meta.original_filename) lines.push({ label: "Original file", value: meta.original_filename });
   if (meta.modality) lines.push({ label: "Modality", value: meta.modality });
+  if (meta.dicom_series_description || meta.series_description) {
+    lines.push({
+      label: "Series",
+      value: meta.dicom_series_description || meta.series_description,
+    });
+  }
+  if (meta.dicom_series_number) lines.push({ label: "Series #", value: meta.dicom_series_number });
+  if (meta.dicom_instance_number) lines.push({ label: "Instance #", value: meta.dicom_instance_number });
+  if (meta.dicom_slice_location) lines.push({ label: "Slice location (mm)", value: meta.dicom_slice_location });
+  if (meta.dicom_convolution_kernel) {
+    lines.push({ label: "Kernel", value: meta.dicom_convolution_kernel });
+  }
+  if (meta.dicom_window_center && meta.dicom_window_width) {
+    lines.push({
+      label: "Window",
+      value: `${meta.dicom_window_center} / ${meta.dicom_window_width}`,
+    });
+  }
+  if (meta.dicom_protocol_name) lines.push({ label: "Protocol", value: meta.dicom_protocol_name });
   if (meta.file_size_label) lines.push({ label: "File size", value: meta.file_size_label });
   if (meta.relative_path && meta.relative_path !== meta.original_filename) {
     lines.push({ label: "Folder path", value: meta.relative_path });
@@ -406,7 +607,7 @@ function setAnalysisRunning(running, jobId = null, jobType = null) {
   if (running) {
     $("#analyze-actions-card")?.setAttribute("open", "");
   }
-  ["#btn-baseline", "#btn-summarize", "#btn-analyze", "#btn-reassess-baseline"].forEach((sel) => {
+  ["#btn-baseline", "#btn-summarize", "#btn-analyze"].forEach((sel) => {
     const btn = $(sel);
     if (!btn) return;
     btn.disabled = running;
@@ -419,11 +620,12 @@ function setAnalysisRunning(running, jobId = null, jobType = null) {
   });
 }
 
-async function pollAnalysisJob(jobId, { isCustomQuery = false } = {}) {
+async function pollAnalysisJob(jobId, { isCustomQuery = false, taskId = null } = {}) {
   const deadline = Date.now() + 30 * 60 * 1000;
   while (Date.now() < deadline) {
     const data = await api(`/api/analyze/jobs/${jobId}`);
     const job = data.job;
+    if (taskId) updateAnalysisBackgroundTask(taskId, job);
     if (job.status === "completed") {
       if (job.analysis) return job.analysis;
       if (job.analysis_id) {
@@ -438,6 +640,9 @@ async function pollAnalysisJob(jobId, { isCustomQuery = false } = {}) {
     }
     if (job.status === "failed") {
       throw new Error(job.error || "Analysis failed");
+    }
+    if (job.status === "cancelled") {
+      throw new Error("Analysis cancelled");
     }
     if (isCustomQuery) {
       updateCustomTasksRunningBanner(true, job.query);
@@ -599,11 +804,12 @@ function setAnalyzeActionsExpanded(expanded) {
 }
 
 async function resumeActiveAnalysisJob() {
+  let jobId = null;
   try {
     const data = await api("/api/analyze/jobs/active");
     if (!data.job) return;
 
-    const jobId = data.job.id;
+    jobId = data.job.id;
     const payload = await api(`/api/analyze/jobs/${jobId}`);
     const job = payload.job;
     const isCustomQuery = job.job_type === "query";
@@ -618,18 +824,27 @@ async function resumeActiveAnalysisJob() {
       if (isCustomQuery) loadCustomTasks();
       return;
     }
+    if (job.status === "cancelled") {
+      return;
+    }
 
+    const taskId = beginAnalysisBackgroundTask(jobId, job.job_type, {
+      query: job.query,
+      startedAt: job.started_at || job.created_at,
+    });
     setAnalysisRunning(true, jobId, job.job_type);
     if (isCustomQuery) {
       switchTab("custom-tasks");
       updateCustomTasksRunningBanner(true, job.query);
     }
-    const analysis = await pollAnalysisJob(jobId, { isCustomQuery });
+    const analysis = await pollAnalysisJob(jobId, { isCustomQuery, taskId });
     if (isCustomQuery) finishCustomTaskRun(analysis, job.query);
     else finishAnalysisRun(analysis);
   } catch (err) {
-    toast(err.message, "error");
+    if (err.message === "Analysis cancelled") toast("Analysis cancelled");
+    else if (err.message !== "Analysis cancelled") toast(err.message, "error");
   } finally {
+    if (jobId) removeBackgroundTask(`analysis-${jobId}`);
     setAnalysisRunning(false);
   }
 }
@@ -642,12 +857,20 @@ function resumeActiveAnalysisJobInBackground() {
 }
 
 function switchTab(name, options = {}) {
+  if (!VALID_TABS.has(name)) return;
   $$(".tab").forEach((t) => {
     const active = t.dataset.tab === name;
     t.classList.toggle("active", active);
     t.setAttribute("aria-selected", active ? "true" : "false");
   });
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${name}`));
+  if (!options.skipTabSave) {
+    try {
+      sessionStorage.setItem(TAB_STORAGE_KEY, name);
+    } catch {
+      /* ignore */
+    }
+  }
   if (name === "library" && !options.skipLibraryLoad) {
     loadDocuments().catch((e) => toast(e.message, "error"));
   }
@@ -658,11 +881,23 @@ function switchTab(name, options = {}) {
   updateHomeToolbar();
 }
 
+function restoreActiveTab() {
+  let saved = null;
+  try {
+    saved = sessionStorage.getItem(TAB_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+  if (!saved || !VALID_TABS.has(saved) || saved === "analyze") return;
+  switchTab(saved, { skipTabSave: true });
+}
+
 function jobStatusLabel(status) {
   if (status === "pending") return "Queued";
   if (status === "running") return "Running";
   if (status === "completed") return "Complete";
   if (status === "failed") return "Failed";
+  if (status === "cancelled") return "Cancelled";
   return status || "Unknown";
 }
 
@@ -899,7 +1134,7 @@ async function refineCustomTask() {
   }
 
   const docIds = state.selectedIds.size ? [...state.selectedIds] : null;
-  const btn = $("#btn-refine-custom-task");
+  let jobId = null;
 
   try {
     const data = await api(`/api/analyses/${id}/refine`, {
@@ -910,24 +1145,28 @@ async function refineCustomTask() {
         document_ids: docIds,
       }),
     });
-    const jobId = data.job.id;
+    jobId = data.job.id;
     state.refiningCustomTaskId = id;
+    const taskId = beginAnalysisBackgroundTask(jobId, "query", { query });
     setAnalysisRunning(true, jobId, "query");
     updateCustomTasksRunningBanner(true, query, { refining: true });
     updateCustomTaskRefineControls(draft);
     toast("Refinement started");
 
-    const analysis = await pollAnalysisJob(jobId, { isCustomQuery: true });
+    const analysis = await pollAnalysisJob(jobId, { isCustomQuery: true, taskId });
     finishCustomTaskRun(analysis, query);
     if ($("#custom-task-refine-notes")) $("#custom-task-refine-notes").value = "";
   } catch (err) {
-    if (err.status === 409) {
+    if (err.message === "Analysis cancelled") toast("Analysis cancelled");
+    else if (err.status === 409) {
       toast("An analysis is already running — resuming progress.", "error");
       await resumeActiveAnalysisJob();
       return;
+    } else {
+      toast(err.message, "error");
     }
-    toast(err.message, "error");
   } finally {
+    if (jobId) removeBackgroundTask(`analysis-${jobId}`);
     state.refiningCustomTaskId = null;
     setAnalysisRunning(false);
     updateCustomTasksRunningBanner(false);
@@ -1359,6 +1598,26 @@ async function savePatientContext() {
 const LIBRARY_PAGE_SIZE = 10;
 const SELECTION_STORAGE_KEY = "beatit-assessment-selection";
 const ASSESSMENT_GUIDANCE_STORAGE_KEY = "beatit-assessment-guidance";
+const TAB_STORAGE_KEY = "beatit-active-tab";
+const VALID_TABS = new Set([
+  "analyze",
+  "custom-tasks",
+  "ingest",
+  "library",
+  "history",
+  "howto",
+  "settings",
+]);
+const IMAGING_VISION_SLICE_LIMIT = 3;
+
+const IMAGING_FILTER_SPECS = [
+  { key: "series_key", label: "Series" },
+  { key: "series_kind", label: "Series type" },
+  { key: "convolution_kernel", label: "Reconstruction kernel" },
+  { key: "anatomy_level", label: "Anatomical level" },
+  { key: "study_description", label: "Study" },
+  { key: "modality", label: "Modality" },
+];
 
 const LIBRARY_TYPE_LABELS = {
   text: "Clinical notes",
@@ -1482,7 +1741,6 @@ function renderAssessmentScopeCard() {
   const lastEl = $("#assessment-scope-last");
   const warnEl = $("#assessment-scope-warning");
   const matchBtn = $("#btn-scope-match-last");
-  const reassessBtn = $("#btn-reassess-baseline");
   const baselineBtn = $("#btn-baseline");
 
   if (nextEl) {
@@ -1551,9 +1809,10 @@ function renderAssessmentScopeCard() {
   matchBtn?.classList.toggle("hidden", !lastIds.length);
 
   const reassessLabel = hasAssessment ? "Re-run baseline assessment" : "Run baseline assessment";
-  if (reassessBtn) reassessBtn.textContent = reassessLabel;
-  if (baselineBtn) baselineBtn.textContent = reassessLabel;
-  if (reassessBtn) reassessBtn.disabled = state.analysisRunning || !total;
+  if (baselineBtn) {
+    baselineBtn.textContent = reassessLabel;
+    baselineBtn.disabled = state.analysisRunning || !total;
+  }
 }
 
 function applyLastAssessmentScope() {
@@ -1569,6 +1828,7 @@ function applyLastAssessmentScope() {
 
 function scrollToAssessmentScope() {
   switchTab("analyze");
+  setAnalyzeActionsExpanded(true);
   const card = $("#assessment-scope-card");
   requestAnimationFrame(() => scrollToElement(card));
 }
@@ -1652,7 +1912,7 @@ async function confirmAndRunBaseline() {
     : `Run baseline assessment using ${mode}?`;
   if (breakdown) msg += `\n\nIncludes: ${breakdown}`;
   if (guidance) msg += `\n\nGuidance:\n${truncate(guidance, 500)}`;
-  if (hasAssessment) msg += "\n\nThis replaces the current Home assessment and open items.";
+  if (hasAssessment) msg += "\n\nBuilds on your current assessment and integrates the selected documents.";
   if (!confirm(msg)) return;
   await runAnalysis({ baseline: true, assessmentGuidance: guidance });
 }
@@ -1704,6 +1964,15 @@ function selectAllDocuments() {
   toast(`Selected all ${ids.length} documents`);
 }
 
+function selectAllShownDocuments() {
+  const filterType = state.libraryFilter || "";
+  if (filterType) {
+    selectDocumentsByType(filterType);
+    return;
+  }
+  selectAllDocuments();
+}
+
 function clearDocumentSelection() {
   if (!state.selectedIds.size) return;
   state.selectedIds.clear();
@@ -1715,8 +1984,8 @@ function clearDocumentSelection() {
 
 function renderLibrarySelectionControls() {
   const summary = $("#library-selection-summary");
-  const filteredBtn = $("#btn-select-filtered-type");
-  const typeSelect = $("#library-select-type");
+  const selectShownBtn = $("#btn-select-all-shown");
+  const matchLastBtn = $("#btn-scope-match-last-lib");
   const counts = state.libraryCounts || {};
   const selected = state.selectedIds.size;
   const total = state.documentIndex.length || Object.values(counts).reduce((a, b) => a + b, 0);
@@ -1733,30 +2002,19 @@ function renderLibrarySelectionControls() {
     }
   }
 
-  if (filteredBtn) {
+  if (selectShownBtn) {
     const filterType = state.libraryFilter || "";
-    const filterCount = filterType ? counts[filterType] || 0 : 0;
-    if (filterType && filterCount > 0) {
-      filteredBtn.classList.remove("hidden");
-      filteredBtn.textContent = `Select all ${libraryTypeLabel(filterType)} (${filterCount})`;
+    const shownCount = filterType ? counts[filterType] || 0 : total;
+    if (filterType) {
+      selectShownBtn.textContent = `Select all ${libraryTypeLabel(filterType)} (${shownCount})`;
     } else {
-      filteredBtn.classList.add("hidden");
+      selectShownBtn.textContent = `Select all (${shownCount})`;
     }
   }
 
-  if (typeSelect) {
-    const current = typeSelect.value || "";
-    const typeKeys = [
-      ...Object.keys(LIBRARY_TYPE_LABELS).filter((type) => counts[type]),
-      ...Object.keys(counts).filter((type) => !LIBRARY_TYPE_LABELS[type]),
-    ].sort((a, b) => libraryTypeLabel(a).localeCompare(libraryTypeLabel(b)));
-    typeSelect.innerHTML = [
-      `<option value="">Choose type…</option>`,
-      ...typeKeys.map(
-        (type) =>
-          `<option value="${escapeHtml(type)}"${type === current ? " selected" : ""}>${escapeHtml(libraryTypeLabel(type))} (${counts[type]})</option>`
-      ),
-    ].join("");
+  if (matchLastBtn) {
+    const lastIds = state.latestAnalysis?.document_ids || [];
+    matchLastBtn.classList.toggle("hidden", !lastIds.length);
   }
 }
 
@@ -1795,13 +2053,15 @@ function renderDocuments() {
       const meta = doc.metadata || {};
       const excerpt = meta.page_count
         ? `${meta.page_count} pages`
-        : meta.modality
-          ? meta.modality
-          : meta.imaging_format === "DICOM" || meta.is_dicom || [".dcm", ".dicom"].includes(meta.file_extension)
-            ? "DICOM"
-            : meta.file_size_label
-              ? meta.file_size_label
-              : "";
+        : doc.source_type === "imaging"
+          ? imagingDocExcerpt(meta) || meta.modality || "DICOM"
+          : meta.modality
+            ? meta.modality
+            : meta.imaging_format === "DICOM" || meta.is_dicom || [".dcm", ".dicom"].includes(meta.file_extension)
+              ? "DICOM"
+              : meta.file_size_label
+                ? meta.file_size_label
+                : "";
       const paths = renderPathLines(docPathLines(doc));
       const info = doc.source_info || {};
       const sourceBadge = info.shorthand
@@ -1877,6 +2137,421 @@ function renderLibraryPagination() {
   next.disabled = state.libraryPage >= totalPages;
 }
 
+function updateImagingFilterVisibility() {
+  const card = $("#imaging-filter-card");
+  const count = state.libraryCounts?.imaging || 0;
+  if (!card) return;
+  card.classList.toggle("hidden", count === 0);
+}
+
+function imagingWorkflowIds() {
+  return state.imagingWorkflowIds || [];
+}
+
+function setImagingWorkflowIds(ids) {
+  state.imagingWorkflowIds = [...new Set(ids.filter(Boolean))];
+  renderImagingWorkflowSummary();
+}
+
+function sampleIdsEvenly(ids, count) {
+  if (!ids.length) return [];
+  const limit = Math.max(1, Math.min(count, ids.length, IMAGING_VISION_SLICE_LIMIT));
+  if (ids.length <= limit) return [...ids];
+  if (limit === 1) return [ids[Math.floor(ids.length / 2)]];
+  const step = (ids.length - 1) / (limit - 1);
+  const picked = new Set();
+  for (let i = 0; i < limit; i += 1) {
+    picked.add(Math.round(i * step));
+  }
+  return [...picked].sort((a, b) => a - b).map((index) => ids[index]);
+}
+
+function renderImagingWorkflowSummary() {
+  const el = $("#imaging-workflow-summary");
+  if (!el) return;
+  const ids = imagingWorkflowIds();
+  if (!ids.length && !state.lastVisionDocumentId) {
+    el.textContent = "Set filters above, then Analyze with vision (uses up to 3 matching slices).";
+    return;
+  }
+
+  const parts = [];
+  if (ids.length) {
+    parts.push(`<strong>${ids.length}</strong> slice${ids.length === 1 ? "" : "s"} selected for vision.`);
+  }
+  if (state.lastVisionDocumentId) {
+    parts.push("Vision report saved — re-run baseline on Home to integrate it.");
+  }
+  el.innerHTML = parts.join(" ");
+}
+
+function visionTaskDetail(job) {
+  const progress = job.progress;
+  if (progress?.slice_label) {
+    const phase = progress.phase === "analyzing" ? "Analyzing" : "Preparing";
+    return `${phase} slice ${progress.current}/${progress.total}: ${progress.slice_label}`;
+  }
+  if (job.status === "completed") return "Vision read complete";
+  if (job.status === "failed") return job.error || "Vision analysis failed";
+  return "Starting vision analysis…";
+}
+
+function beginVisionBackgroundTask(jobId) {
+  const taskId = `vision-${jobId}`;
+  upsertBackgroundTask({
+    id: taskId,
+    kind: "vision",
+    label: "CT vision analysis",
+    startedAt: new Date(),
+    detail: "Starting…",
+    cancelable: true,
+    onCancel: async () => {
+      await api(`/api/documents/imaging/vision-jobs/${encodeURIComponent(jobId)}/cancel`, {
+        method: "POST",
+      });
+    },
+  });
+  return taskId;
+}
+
+async function pollVisionJob(jobId, { taskId = null } = {}) {
+  const deadline = Date.now() + 45 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const job = await api(`/api/documents/imaging/vision-jobs/${encodeURIComponent(jobId)}`);
+    if (taskId) upsertBackgroundTask({ id: taskId, detail: visionTaskDetail(job) });
+    if (job.status === "completed") return job.result;
+    if (job.status === "failed") throw new Error(job.error || "Vision analysis failed");
+    if (job.status === "cancelled") throw new Error("Vision analysis cancelled");
+    await sleep(2000);
+  }
+  throw new Error("Vision analysis is taking longer than expected. Check Library for a new vision report.");
+}
+
+async function resolveVisionSliceIdsForAnalysis() {
+  const workflow = imagingWorkflowIds();
+  if (workflow.length) return workflow.slice(0, IMAGING_VISION_SLICE_LIMIT);
+
+  readImagingFiltersFromUi();
+  if (!Object.keys(state.imagingFilters || {}).length) {
+    throw new Error("Set one or more imaging filters above to match slices, then click Analyze with vision.");
+  }
+  await refreshImagingMatch();
+  const matched = imagingMatchIds();
+  if (!matched.length) {
+    throw new Error("No slices match the current filters.");
+  }
+  const limit = Math.min(IMAGING_VISION_SLICE_LIMIT, matched.length);
+  const sampled = sampleIdsEvenly(matched, limit);
+  setImagingWorkflowIds(sampled);
+  return sampled;
+}
+
+function resolveVisionSliceIds() {
+  const workflow = imagingWorkflowIds();
+  if (workflow.length) return workflow.slice(0, IMAGING_VISION_SLICE_LIMIT);
+  const matched = imagingMatchIds();
+  if (matched.length) {
+    return sampleIdsEvenly(matched, Math.min(IMAGING_VISION_SLICE_LIMIT, matched.length));
+  }
+  return [];
+}
+
+async function analyzeImagingWorkflowVision() {
+  let ids;
+  try {
+    ids = await resolveVisionSliceIdsForAnalysis();
+  } catch (err) {
+    return toast(err.message, "error");
+  }
+
+  const filterParts = Object.values(state.imagingMatch?.filters || state.imagingFilters || {});
+  const filterNote = filterParts.length ? `\nFilters: ${filterParts.join(" · ")}` : "";
+
+  if (
+    !confirm(
+      `Send ${ids.length} CT slice${ids.length === 1 ? "" : "s"} to the vision model?${filterNote}\n\nCreates a text report and adds it to your last assessment scope. May take several minutes.`
+    )
+  ) {
+    return;
+  }
+
+  const btn = $("#btn-imaging-analyze-vision");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/documents/imaging/analyze-vision", {
+      method: "POST",
+      body: JSON.stringify({ document_ids: ids }),
+    });
+    const jobId = data.job?.id;
+    if (!jobId) throw new Error("Vision job did not start");
+
+    const taskId = beginVisionBackgroundTask(jobId);
+    const result = await pollVisionJob(jobId, { taskId });
+    removeBackgroundTask(taskId);
+
+    state.lastVisionDocumentId = result.document_id;
+    await loadDocumentIndex();
+    const { added } = applyScopeFromLastAssessmentPlus([result.document_id]);
+    await loadDocuments({ page: 1, sourceType: state.libraryFilter || "" });
+    renderAssessmentScopeCard();
+    updateSelectedLabel();
+    renderImagingWorkflowSummary();
+    switchTab("analyze");
+    scrollToAssessmentScope();
+
+    const scopeNote = added
+      ? `${state.selectedIds.size} documents selected (last assessment + vision report).`
+      : `Vision report saved. ${state.selectedIds.size} document${state.selectedIds.size === 1 ? "" : "s"} selected.`;
+    toast(`Vision read complete. ${scopeNote}`);
+
+    const guidance = getAssessmentGuidanceInput();
+    const rerunMsg =
+      "Vision read saved.\n\n" +
+      `${scopeNote}\n\n` +
+      "Re-run baseline now? This will build on your current assessment and integrate the vision findings.";
+    if (!confirm(rerunMsg)) {
+      toast("Scope updated — click Re-run baseline assessment when ready.");
+      return;
+    }
+
+    await runAnalysis({ baseline: true, assessmentGuidance: guidance });
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function existingDocumentIdSet() {
+  const ids = new Set(state.documentIndex.map((doc) => doc.id));
+  return ids;
+}
+
+function applyScopeFromLastAssessmentPlus(extraIds) {
+  const known = existingDocumentIdSet();
+  const lastIds = (state.latestAnalysis?.document_ids || []).filter((id) => known.has(id));
+  const combined = new Set(lastIds);
+  extraIds.forEach((id) => combined.add(id));
+  state.selectedIds = combined;
+  saveSelectionToSession();
+  return { added: lastIds.length > 0 };
+}
+
+function addImagingVisionReportToAssessment() {
+  const docId = state.lastVisionDocumentId;
+  if (!docId) {
+    return toast("Run Analyze with vision first to create a report", "error");
+  }
+  const { added } = applyScopeFromLastAssessmentPlus([docId]);
+  renderDocuments();
+  updateSelectedLabel();
+  renderAssessmentScopeCard();
+  toast(
+    added
+      ? `Vision report added to your last assessment's documents (${state.selectedIds.size} total)`
+      : "Vision report added to assessment scope"
+  );
+  switchTab("analyze");
+  scrollToAssessmentScope();
+}
+
+function getImagingFilterQueryParams() {
+  const params = new URLSearchParams();
+  Object.entries(state.imagingFilters || {}).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  return params;
+}
+
+function imagingDocExcerpt(meta) {
+  if (!meta) return "";
+  const parts = [];
+  if (meta.dicom_series_description) parts.push(meta.dicom_series_description);
+  if (meta.dicom_instance_number) parts.push(`#${meta.dicom_instance_number}`);
+  if (meta.dicom_slice_location) parts.push(`${meta.dicom_slice_location} mm`);
+  if (meta.dicom_convolution_kernel) parts.push(meta.dicom_convolution_kernel);
+  return parts.join(" · ");
+}
+
+function renderImagingFilterFields() {
+  const container = $("#imaging-filter-fields");
+  if (!container) return;
+
+  const facetMap = Object.fromEntries(
+    (state.imagingFacets?.facets || []).map((facet) => [facet.key, facet])
+  );
+
+  container.innerHTML = IMAGING_FILTER_SPECS.map((spec) => {
+    const facet = facetMap[spec.key];
+    const values = facet?.values || [];
+    const current = state.imagingFilters[spec.key] || "";
+    const options = [
+      `<option value="">Any</option>`,
+      ...values.map(
+        (row) =>
+          `<option value="${escapeHtml(row.value)}"${row.value === current ? " selected" : ""}>${escapeHtml(row.value)} (${row.count})</option>`
+      ),
+    ].join("");
+    return `<div class="imaging-filter-field"><label for="imaging-filter-${escapeHtml(spec.key)}">${escapeHtml(spec.label)}<select id="imaging-filter-${escapeHtml(spec.key)}" data-imaging-filter="${escapeHtml(spec.key)}">${options}</select></label></div>`;
+  }).join("");
+}
+
+function renderImagingReindexNote() {
+  const note = $("#imaging-filter-reindex-note");
+  if (!note) return;
+  if (state.imagingFacetsError) {
+    note.classList.remove("hidden");
+    note.innerHTML = `${escapeHtml(state.imagingFacetsError)}. Refresh the page after restarting the server.`;
+    return;
+  }
+  if (state.imagingFacets?.needs_reindex) {
+    note.classList.remove("hidden");
+    note.innerHTML =
+      'Slice details are missing for older uploads. <button type="button" class="btn ghost btn-sm" id="btn-imaging-reindex">Refresh slice details</button>';
+    $("#btn-imaging-reindex")?.addEventListener("click", () =>
+      reindexImagingMetadata().catch((e) => toast(e.message, "error"))
+    );
+    return;
+  }
+  note.classList.add("hidden");
+  note.innerHTML = "";
+}
+
+function renderImagingMatchSummary() {
+  const summary = $("#imaging-filter-match-summary");
+  const match = state.imagingMatch;
+  if (!summary) return;
+
+  if (!match || !Object.keys(state.imagingFilters || {}).length) {
+    summary.textContent = "Set filters to see matching slices.";
+    return;
+  }
+
+  const filterParts = Object.entries(match.filters || {}).map(([, value]) => `${value}`);
+  summary.innerHTML = `<strong>${match.total}</strong> slice${match.total === 1 ? "" : "s"} match${
+    filterParts.length ? `: ${escapeHtml(filterParts.join(" · "))}` : ""
+  } · vision uses up to ${IMAGING_VISION_SLICE_LIMIT}`;
+}
+
+async function loadImagingFacets() {
+  if (!(state.libraryCounts?.imaging > 0)) {
+    state.imagingFacets = null;
+    state.imagingFacetsError = null;
+    updateImagingFilterVisibility();
+    renderImagingFilterFields();
+    renderImagingReindexNote();
+    return;
+  }
+  updateImagingFilterVisibility();
+  renderImagingFilterFields();
+  try {
+    state.imagingFacets = await api("/api/documents/imaging/facets");
+    state.imagingFacetsError = null;
+  } catch (err) {
+    state.imagingFacets = null;
+    state.imagingFacetsError = err.message || "Could not load imaging filters";
+  }
+  renderImagingReindexNote();
+  renderImagingFilterFields();
+  renderImagingWorkflowSummary();
+}
+
+async function refreshImagingMatch() {
+  if (!Object.keys(state.imagingFilters || {}).length) {
+    state.imagingMatch = null;
+    renderImagingMatchSummary();
+    return;
+  }
+  const params = getImagingFilterQueryParams();
+  state.imagingMatch = await api(`/api/documents/imaging/match?${params}`);
+  renderImagingMatchSummary();
+}
+
+function readImagingFiltersFromUi() {
+  const filters = {};
+  $$("[data-imaging-filter]").forEach((select) => {
+    const key = select.dataset.imagingFilter;
+    const value = select.value.trim();
+    if (key && value) filters[key] = value;
+  });
+  state.imagingFilters = filters;
+}
+
+async function onImagingFilterChange() {
+  readImagingFiltersFromUi();
+  state.imagingWorkflowIds = [];
+  await refreshImagingMatch();
+  renderImagingWorkflowSummary();
+}
+
+function clearImagingFilters() {
+  state.imagingFilters = {};
+  state.imagingMatch = null;
+  state.imagingWorkflowIds = [];
+  renderImagingFilterFields();
+  renderImagingMatchSummary();
+  renderImagingWorkflowSummary();
+}
+
+async function reindexImagingMetadata() {
+  const btn = $("#btn-imaging-reindex");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Refreshing…";
+  }
+  try {
+    const result = await api("/api/documents/imaging/reindex-metadata", { method: "POST" });
+    toast(`Refreshed imaging details for ${result.updated}/${result.total} files`);
+    await loadImagingFacets();
+    if (Object.keys(state.imagingFilters).length) {
+      await refreshImagingMatch();
+    }
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Refresh slice details";
+    }
+  }
+}
+
+function imagingMatchIds() {
+  return state.imagingMatch?.document_ids || [];
+}
+
+function scrollToImagingFilter() {
+  $("#imaging-filter-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function goToLibraryForImagingFilter() {
+  switchTab("library", { skipLibraryLoad: true });
+  (async () => {
+    const typeFilter = $("#library-type-filter");
+    if (typeFilter && typeFilter.value !== "imaging") {
+      typeFilter.value = "imaging";
+    }
+    await loadDocuments({ page: 1, sourceType: "imaging" });
+    await loadImagingFacets();
+    scrollToImagingFilter();
+  })().catch((e) => toast(e.message, "error"));
+}
+
+function initImagingFilterPanel() {
+  $("#imaging-filter-fields")?.addEventListener("change", (event) => {
+    if (event.target.matches("[data-imaging-filter]")) {
+      onImagingFilterChange().catch((e) => toast(e.message, "error"));
+    }
+  });
+  safeOn("#btn-imaging-filter-clear", "click", () => clearImagingFilters());
+  safeOn("#btn-imaging-analyze-vision", "click", () =>
+    analyzeImagingWorkflowVision().catch((e) => toast(e.message, "error"))
+  );
+  safeOn("#btn-imaging-add-workflow", "click", () => addImagingVisionReportToAssessment());
+  safeOn("#btn-scope-imaging", "click", () => goToLibraryForImagingFilter());
+  renderImagingWorkflowSummary();
+}
+
 async function loadDocumentIndex() {
   const data = await api("/api/documents/index");
   state.documentIndex = data.documents || [];
@@ -1888,6 +2563,9 @@ async function loadDocumentIndex() {
   renderLibraryTypeFilter();
   renderLibrarySelectionControls();
   renderAssessmentScopeCard();
+  updateImagingFilterVisibility();
+  await loadImagingFacets().catch(() => {});
+  renderImagingWorkflowSummary();
 }
 
 async function refreshLibrary(options = {}) {
@@ -1919,6 +2597,10 @@ async function loadDocuments(options = {}) {
   if (data.source_legend) {
     state.sourceLegend = data.source_legend;
     renderSourceLegend(state.sourceLegend);
+  }
+  updateImagingFilterVisibility();
+  if (state.libraryCounts?.imaging > 0 && !state.imagingFacets && !state.imagingFacetsError) {
+    loadImagingFacets().catch(() => {});
   }
   renderLibraryTypeFilter();
   renderLibrarySelectionControls();
@@ -3303,27 +3985,34 @@ async function runAnalysis({ query = "", baseline = false, summarize = false, as
   }
 
   const isCustomQuery = !baseline && !summarize && query.trim().length > 0;
+  let jobId = null;
 
   try {
-    const { jobId, jobType } = await startAnalysisJob({ query, baseline, summarize, assessmentGuidance });
+    const started = await startAnalysisJob({ query, baseline, summarize, assessmentGuidance });
+    jobId = started.jobId;
+    const jobType = started.jobType;
+    const taskId = beginAnalysisBackgroundTask(jobId, jobType, { query });
     setAnalysisRunning(true, jobId, jobType);
     if (isCustomQuery) {
       switchTab("custom-tasks");
       updateCustomTasksRunningBanner(true, query);
       toast("Custom task submitted");
     }
-    const analysis = await pollAnalysisJob(jobId, { isCustomQuery });
+    const analysis = await pollAnalysisJob(jobId, { isCustomQuery, taskId });
     if (isCustomQuery) finishCustomTaskRun(analysis, query);
     else finishAnalysisRun(analysis);
   } catch (err) {
-    if (err.status === 409) {
+    if (err.message === "Analysis cancelled") toast("Analysis cancelled");
+    else if (err.status === 409) {
       toast("An analysis is already running — resuming progress.", "error");
       await resumeActiveAnalysisJob();
       return;
+    } else {
+      toast(err.message, "error");
     }
-    toast(err.message, "error");
     if (isCustomQuery) loadCustomTasks();
   } finally {
+    if (jobId) removeBackgroundTask(`analysis-${jobId}`);
     setAnalysisRunning(false);
   }
 }
@@ -3349,6 +4038,8 @@ function safeOn(selector, event, handler) {
 function bootstrapUi() {
   initTheme();
   initScrollTop();
+  initBackgroundStatusBar();
+  initImagingFilterPanel();
   initInvestigationGuidancePresets();
   initAssessmentGuidancePresets();
   initUploadResultBanner();
@@ -3366,6 +4057,7 @@ async function loadInitialData() {
   } finally {
     updateHomeToolbar();
   }
+  restoreActiveTab();
   resumeActiveAnalysisJobInBackground();
 }
 
@@ -3383,19 +4075,15 @@ safeOn("#btn-refresh-docs", "click", () =>
     toast(e.message, "error")
   )
 );
-safeOn("#library-type-filter", "change", (event) =>
-  loadDocuments({ page: 1, sourceType: event.target.value }).catch((e) => toast(e.message, "error"))
-);
-safeOn("#btn-select-page", "click", () => selectDocumentsOnPage());
-safeOn("#btn-select-filtered-type", "click", () => {
-  if (state.libraryFilter) selectDocumentsByType(state.libraryFilter);
+safeOn("#library-type-filter", "change", (event) => {
+  const sourceType = event.target.value;
+  loadDocuments({ page: 1, sourceType }).catch((e) => toast(e.message, "error"));
+  if (sourceType === "imaging") {
+    loadImagingFacets().catch((e) => toast(e.message, "error"));
+  }
 });
-safeOn("#btn-select-by-type", "click", () => {
-  const type = $("#library-select-type")?.value;
-  if (!type) return toast("Choose a document type first", "error");
-  selectDocumentsByType(type);
-});
-safeOn("#btn-select-all-docs", "click", () => selectAllDocuments());
+safeOn("#btn-select-all-shown", "click", () => selectAllShownDocuments());
+safeOn("#btn-scope-match-last-lib", "click", () => applyLastAssessmentScope());
 safeOn("#btn-clear-selection", "click", () => clearDocumentSelection());
 safeOn("#btn-library-prev", "click", () => {
   if (state.libraryPage <= 1) return;
@@ -3482,30 +4170,39 @@ safeOn("#btn-ingest-youtube", "click", async () => {
 });
 
 safeOn("#btn-ingest-facebook", "click", async () => {
+  const url = $("#facebook-input").value.trim();
+  const title = $("#facebook-title").value.trim() || null;
+  const notes = $("#facebook-notes")?.value.trim() || null;
+  if (!url) return toast("Facebook URL required", "error");
+  const btn = $("#btn-ingest-facebook");
+
   try {
-    const url = $("#facebook-input").value.trim();
-    const title = $("#facebook-title").value.trim() || null;
-    const notes = $("#facebook-notes")?.value.trim() || null;
-    if (!url) return toast("Facebook URL required", "error");
-    const btn = $("#btn-ingest-facebook");
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Downloading…";
-    }
-    const data = await api("/api/ingest/facebook", {
-      method: "POST",
-      body: JSON.stringify({ url, title, notes }),
+    await withBackgroundTask({
+      id: `ingest-facebook-${Date.now()}`,
+      label: "Ingesting Facebook video",
+      run: async ({ setDetail, isCancelled }) => {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Downloading…";
+        }
+        setDetail("Downloading transcript…");
+        const data = await api("/api/ingest/facebook", {
+          method: "POST",
+          body: JSON.stringify({ url, title, notes }),
+          timeoutMs: 600000,
+        });
+        if (isCancelled()) return;
+        showUploadResult(data.document);
+        if ($("#facebook-input")) $("#facebook-input").value = "";
+        if ($("#facebook-title")) $("#facebook-title").value = "";
+        if ($("#facebook-notes")) $("#facebook-notes").value = "";
+        toast("Facebook video ingested");
+        await openLibraryAfterIngest();
+      },
     });
-    showUploadResult(data.document);
-    if ($("#facebook-input")) $("#facebook-input").value = "";
-    if ($("#facebook-title")) $("#facebook-title").value = "";
-    if ($("#facebook-notes")) $("#facebook-notes").value = "";
-    toast("Facebook video ingested");
-    await openLibraryAfterIngest();
   } catch (e) {
-    toast(e.message, "error");
+    if (e.message !== "Cancelled") toast(e.message, "error");
   } finally {
-    const btn = $("#btn-ingest-facebook");
     if (btn) {
       btn.disabled = false;
       btn.textContent = "Ingest Facebook video";
@@ -3517,23 +4214,31 @@ safeOn("#btn-ingest-pdf", "click", async () => {
   try {
     const file = $("#pdf-file").files[0];
     if (!file) return toast("Choose a PDF file", "error");
-    const fd = new FormData();
-    fd.append("file", file);
-    const title = $("#pdf-title").value.trim();
-    if (title) fd.append("title", title);
-    const data = await api("/api/ingest/pdf", { method: "POST", body: fd });
-    showUploadResult(data.document);
-    $("#pdf-file").value = "";
-    $("#pdf-file").closest(".file-label")?.querySelector(".file-name")?.remove();
-    const pdfTitle = $("#pdf-title");
-    if (pdfTitle) {
-      pdfTitle.value = "";
-      delete pdfTitle.dataset.userEdited;
-    }
-    toast(`PDF uploaded · ${file.name}`);
-    await openLibraryAfterIngest();
+    await withBackgroundTask({
+      id: `upload-pdf-${Date.now()}`,
+      label: `Uploading PDF: ${file.name}`,
+      run: async ({ setDetail, isCancelled }) => {
+        setDetail("Processing document…");
+        const fd = new FormData();
+        fd.append("file", file);
+        const title = $("#pdf-title").value.trim();
+        if (title) fd.append("title", title);
+        const data = await api("/api/ingest/pdf", { method: "POST", body: fd, timeoutMs: 600000 });
+        if (isCancelled()) return;
+        showUploadResult(data.document);
+        $("#pdf-file").value = "";
+        $("#pdf-file").closest(".file-label")?.querySelector(".file-name")?.remove();
+        const pdfTitle = $("#pdf-title");
+        if (pdfTitle) {
+          pdfTitle.value = "";
+          delete pdfTitle.dataset.userEdited;
+        }
+        toast(`PDF uploaded · ${file.name}`);
+        await openLibraryAfterIngest();
+      },
+    });
   } catch (e) {
-    toast(e.message, "error");
+    if (e.message !== "Cancelled") toast(e.message, "error");
   }
 });
 
@@ -3674,42 +4379,66 @@ async function uploadImagingSelection() {
   const titlePrefix = $("#imaging-title-prefix")?.value.trim() || "";
   const notes = $("#imaging-notes")?.value.trim() || "";
   const total = imagingSelection.length;
-  let uploaded = 0;
-  let failed = 0;
-  let lastDoc = null;
-
-  btn.disabled = true;
-  setImagingUploadProgress(`Uploading 0/${total}…`, true);
 
   try {
-    for (const file of imagingSelection) {
-      uploaded += 1;
-      setImagingUploadProgress(`Uploading ${uploaded}/${total}: ${file.name}`, true);
-      const fd = new FormData();
-      fd.append("file", file, file.name);
-      if (titlePrefix) fd.append("title_prefix", titlePrefix);
-      if (notes) fd.append("notes", notes);
-      const relativePath = file.webkitRelativePath || file.name;
-      if (relativePath) fd.append("relative_path", relativePath);
-      try {
-        const data = await api("/api/ingest/imaging", { method: "POST", body: fd });
-        lastDoc = data.document;
-      } catch (err) {
-        failed += 1;
-        console.error(err);
-      }
-    }
+    await withBackgroundTask({
+      id: `upload-imaging-${Date.now()}`,
+      label: `Uploading ${total} imaging file${total === 1 ? "" : "s"}`,
+      run: async ({ setDetail, isCancelled }) => {
+        let uploaded = 0;
+        let failed = 0;
+        let lastDoc = null;
 
-    if (lastDoc) showUploadResult(lastDoc);
-    if (failed === 0) {
-      toast(`Uploaded ${total} imaging file${total === 1 ? "" : "s"}`);
-    } else {
-      toast(`Uploaded ${total - failed}/${total} imaging files (${failed} failed)`, "error");
-    }
-    clearImagingSelection();
-    await openLibraryAfterIngest();
+        btn.disabled = true;
+        setImagingUploadProgress(`Uploading 0/${total}…`, true);
+
+        for (const file of imagingSelection) {
+          if (isCancelled()) {
+            toast(`Upload cancelled after ${uploaded}/${total} file${uploaded === 1 ? "" : "s"}`);
+            break;
+          }
+          uploaded += 1;
+          const progress = `${uploaded}/${total}: ${file.name}`;
+          setDetail(progress);
+          setImagingUploadProgress(`Uploading ${progress}`, true);
+          const fd = new FormData();
+          fd.append("file", file, file.name);
+          if (titlePrefix) fd.append("title_prefix", titlePrefix);
+          if (notes) fd.append("notes", notes);
+          const relativePath = file.webkitRelativePath || file.name;
+          if (relativePath) fd.append("relative_path", relativePath);
+          try {
+            const data = await api("/api/ingest/imaging", {
+              method: "POST",
+              body: fd,
+              timeoutMs: 600000,
+            });
+            lastDoc = data.document;
+          } catch (err) {
+            if (err.message === "Cancelled") break;
+            failed += 1;
+            console.error(err);
+          }
+        }
+
+        if (isCancelled()) return;
+
+        if (lastDoc) showUploadResult(lastDoc);
+        if (failed === 0 && uploaded === total) {
+          toast(`Uploaded ${total} imaging file${total === 1 ? "" : "s"}`);
+          clearImagingSelection();
+          await openLibraryAfterIngest();
+        } else if (uploaded > failed) {
+          toast(`Uploaded ${uploaded - failed}/${total} imaging files (${failed} failed)`, "error");
+          clearImagingSelection();
+          await openLibraryAfterIngest();
+        } else if (failed > 0) {
+          toast(`Upload failed for ${failed} file${failed === 1 ? "" : "s"}`, "error");
+        }
+      },
+    });
   } catch (err) {
-    toast(err.message, "error");
+    if (err.message !== "Cancelled") toast(err.message, "error");
   } finally {
     setImagingUploadProgress("", false);
     renderImagingSelection();
@@ -3743,25 +4472,36 @@ safeOn("#btn-ingest-video", "click", async () => {
   try {
     const file = $("#video-file").files[0];
     if (!file) return toast("Choose a video file", "error");
-    const fd = new FormData();
-    fd.append("file", file);
-    const title = $("#video-title").value.trim();
-    const notes = $("#video-notes").value.trim();
-    if (title) fd.append("title", title);
-    if (notes) fd.append("notes", notes);
-    const data = await api("/api/ingest/video", { method: "POST", body: fd });
-    showUploadResult(data.document);
-    $("#video-file").value = "";
-    $("#video-file").closest(".file-label")?.querySelector(".file-name")?.remove();
-    toast(`Video stored · ${file.name}`);
-    await openLibraryAfterIngest();
+    await withBackgroundTask({
+      id: `upload-video-${Date.now()}`,
+      label: `Uploading video: ${file.name}`,
+      run: async ({ setDetail, isCancelled }) => {
+        setDetail("Processing video…");
+        const fd = new FormData();
+        fd.append("file", file);
+        const title = $("#video-title").value.trim();
+        const notes = $("#video-notes").value.trim();
+        if (title) fd.append("title", title);
+        if (notes) fd.append("notes", notes);
+        const data = await api("/api/ingest/video", {
+          method: "POST",
+          body: fd,
+          timeoutMs: 600000,
+        });
+        if (isCancelled()) return;
+        showUploadResult(data.document);
+        $("#video-file").value = "";
+        $("#video-file").closest(".file-label")?.querySelector(".file-name")?.remove();
+        toast(`Video stored · ${file.name}`);
+        await openLibraryAfterIngest();
+      },
+    });
   } catch (e) {
-    toast(e.message, "error");
+    if (e.message !== "Cancelled") toast(e.message, "error");
   }
 });
 
 safeOn("#btn-baseline", "click", () => confirmAndRunBaseline());
-safeOn("#btn-reassess-baseline", "click", () => confirmAndRunBaseline());
 safeOn("#btn-scope-library", "click", goToLibraryForScope);
 safeOn("#btn-scope-select-all", "click", selectAllDocuments);
 safeOn("#btn-scope-clear", "click", clearDocumentSelection);

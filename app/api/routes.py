@@ -19,6 +19,7 @@ from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL, MODEL_IDS, 
 from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
 from app.services.analysis_jobs import (
     ActiveAnalysisJobError,
+    cancel_analysis_job,
     enqueue_analysis_job,
     enqueue_refinement_job,
     get_job_payload,
@@ -27,6 +28,18 @@ from app.services.synthesis import SynthesisService
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
 from app.services.dicom_preview import is_dicom_document, render_dicom_preview_png
 from app.services.investigation import InvestigationService
+from app.services.imaging_catalog import (
+    build_imaging_facets,
+    build_imaging_series_catalog,
+    match_imaging_documents,
+)
+from app.services.imaging_vision import sample_document_ids
+from app.services.vision_jobs import (
+    cancel_vision_job,
+    enqueue_vision_job,
+    get_job_payload as get_vision_job_payload,
+)
+from app.ingest.imaging import reindex_all_imaging_metadata
 from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
 from app.services.source_catalog import (
     DEFAULT_SOURCE_TYPES,
@@ -107,6 +120,10 @@ class AnalyzeRequest(BaseModel):
     document_ids: list[str] | None = None
     include_baseline_assessment: bool = False
     assessment_guidance: str | None = Field(default=None, max_length=5000)
+
+
+class ImagingVisionRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=1, max_length=10)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -437,6 +454,144 @@ async def document_index():
         "documents": await db.list_document_index(),
         "total": await db.count_documents(),
         "counts_by_type": await db.document_type_counts(),
+    }
+
+
+@router.get("/documents/imaging/facets")
+async def imaging_facets():
+    db, _, _, _, _ = await _get_services()
+    documents = await db.list_imaging_documents()
+    return build_imaging_facets(documents)
+
+
+@router.get("/documents/imaging/series")
+async def imaging_series():
+    db, _, _, _, _ = await _get_services()
+    documents = await db.list_imaging_documents()
+    return build_imaging_series_catalog(documents)
+
+
+@router.post("/documents/imaging/reindex-metadata")
+async def imaging_reindex_metadata(request: Request):
+    db, store, _, _, _ = await _get_services()
+    result = await reindex_all_imaging_metadata(store, db)
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="imaging",
+        metadata={"action": "reindex_metadata", **result},
+    )
+    return result
+
+
+@router.get("/documents/imaging/match")
+async def imaging_match(
+    modality: str | None = None,
+    study_description: str | None = None,
+    study_date: str | None = None,
+    series_kind: str | None = None,
+    series_description: str | None = None,
+    series_key: str | None = None,
+    convolution_kernel: str | None = None,
+    anatomy_level: str | None = None,
+    body_part: str | None = None,
+    preview_limit: int = 40,
+):
+    db, _, _, _, _ = await _get_services()
+    documents = await db.list_imaging_documents()
+    return match_imaging_documents(
+        documents,
+        filters={
+            "modality": modality,
+            "study_description": study_description,
+            "study_date": study_date,
+            "series_kind": series_kind,
+            "series_description": series_description,
+            "series_key": series_key,
+            "convolution_kernel": convolution_kernel,
+            "anatomy_level": anatomy_level,
+            "body_part": body_part,
+        },
+        preview_limit=preview_limit,
+    )
+
+
+@router.post("/documents/imaging/analyze-vision", status_code=202)
+async def imaging_analyze_vision(body: ImagingVisionRequest, request: Request):
+    db, _, _, _, _ = await _get_services()
+    for doc_id in body.document_ids:
+        doc = await db.get_document(doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
+        if doc.get("source_type") != "imaging":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Vision analysis requires imaging documents: {doc.get('title') or doc_id}",
+            )
+    job = enqueue_vision_job(
+        document_ids=body.document_ids,
+        requested_by=_actor(request),
+    )
+    await _audit(
+        db,
+        request,
+        ANALYSIS_REQUESTED,
+        resource_type="vision_job",
+        resource_id=job["id"],
+        metadata={
+            "slice_count": len(body.document_ids),
+            "document_ids": body.document_ids[:10],
+        },
+    )
+    return {"job": job}
+
+
+@router.get("/documents/imaging/vision-jobs/{job_id}")
+async def imaging_vision_job_status(job_id: str):
+    payload = get_vision_job_payload(job_id)
+    if payload.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Vision job not found")
+    return payload
+
+
+@router.post("/documents/imaging/vision-jobs/{job_id}/cancel")
+async def imaging_vision_job_cancel(job_id: str):
+    payload = await cancel_vision_job(job_id)
+    if payload.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Vision job not found")
+    return payload
+
+
+@router.get("/documents/imaging/sample")
+async def imaging_sample(
+    anatomy_level: str | None = None,
+    series_kind: str | None = None,
+    series_key: str | None = None,
+    convolution_kernel: str | None = None,
+    count: int = 3,
+):
+    db, _, _, _, _ = await _get_services()
+    documents = await db.list_imaging_documents()
+    match = match_imaging_documents(
+        documents,
+        filters={
+            "anatomy_level": anatomy_level,
+            "series_kind": series_kind,
+            "series_key": series_key,
+            "convolution_kernel": convolution_kernel,
+        },
+        preview_limit=100,
+    )
+    sample_count = max(1, min(count, 10))
+    sampled = sample_document_ids(match["document_ids"], sample_count)
+    preview_by_id = {row["id"]: row for row in match.get("preview") or []}
+    return {
+        "filters": match.get("filters") or {},
+        "total_matches": match.get("total") or 0,
+        "sample_count": len(sampled),
+        "document_ids": sampled,
+        "slices": [preview_by_id.get(doc_id) or {"id": doc_id} for doc_id in sampled],
     }
 
 
@@ -835,6 +990,12 @@ async def analyze(body: AnalyzeRequest, request: Request):
             detail="Provide a query or set include_baseline_assessment=true",
         )
     job_type = "baseline" if body.include_baseline_assessment and not body.query.strip() else "query"
+    db, _, _, _, _ = await _get_services()
+    build_on_id = None
+    if job_type == "baseline":
+        prior = await db.get_latest_analysis()
+        if prior and prior.get("analysis_type") == "baseline":
+            build_on_id = prior["id"]
     try:
         job = await enqueue_analysis_job(
             job_type=job_type,
@@ -843,13 +1004,13 @@ async def analyze(body: AnalyzeRequest, request: Request):
             include_baseline_assessment=body.include_baseline_assessment,
             assessment_guidance=body.assessment_guidance,
             requested_by=_actor(request),
+            build_on_analysis_id=build_on_id,
         )
     except ActiveAnalysisJobError as exc:
         raise HTTPException(
             status_code=409,
             detail="An analysis is already running",
         ) from exc
-    db, _, _, _, _ = await _get_services()
     await _audit(
         db,
         request,
@@ -862,6 +1023,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
             "document_count": len(body.document_ids or []),
             "guidance_preview": preview_text(body.assessment_guidance or ""),
             "save_as_draft": job_type == "query",
+            "build_on_analysis_id": build_on_id,
         },
     )
     return {"job": job, "save_as_draft": job_type == "query"}
@@ -912,6 +1074,27 @@ async def get_analysis_job(job_id: str):
     payload = await get_job_payload(job_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Analysis job not found")
+    return {"job": payload}
+
+
+@router.post("/analyze/jobs/{job_id}/cancel")
+async def cancel_analysis_job_route(job_id: str, request: Request):
+    payload = await cancel_analysis_job(job_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="No running analysis job found")
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        ANALYSIS_FAILED,
+        resource_type="analysis_job",
+        resource_id=job_id,
+        metadata={
+            "job_id": job_id,
+            "job_type": payload.get("job_type"),
+            "cancelled": True,
+        },
+    )
     return {"job": payload}
 
 

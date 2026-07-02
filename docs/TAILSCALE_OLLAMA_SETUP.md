@@ -176,6 +176,7 @@ The VM is **not** reachable from Render unless you add Tailscale to Render (adva
 | `model_available: false` | Run `ollama pull` for the name in `OLLAMA_MODEL` |
 | Very slow responses | Normal on CPU; use smaller model or increase VM to 8 vCPU / 32 GB RAM |
 | BeatIt still uses OpenRouter | `LLM_PROVIDER=auto` and VM health must pass; check `./scripts/check_ollama.sh` |
+| Vision fails with `500` / `unknown model architecture: 'mllama'` | Ollama on the VM is outdated or broken — reinstall from https://ollama.com/download, restart Ollama, retry. Or use a lighter model: `ollama pull moondream` and set `OLLAMA_VISION_MODEL=moondream` in `.env` |
 
 ---
 

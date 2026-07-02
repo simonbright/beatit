@@ -61,6 +61,7 @@ async def _run_job(job_id: str) -> None:
                 assessment_guidance=job.get("assessment_guidance"),
                 analysis_type=job["job_type"],
                 created_by=job.get("requested_by"),
+                build_on_analysis_id=job.get("build_on_analysis_id"),
             )
 
         await db.update_analysis_job(
@@ -87,8 +88,20 @@ async def _run_job(job_id: str) -> None:
                 "query_preview": preview_text(job.get("query")),
                 "refinement": bool(job.get("refine_analysis_id")),
                 "refine_analysis_id": job.get("refine_analysis_id"),
+                "build_on_analysis_id": job.get("build_on_analysis_id"),
             },
         )
+    except asyncio.CancelledError:
+        db = Database()
+        current = await db.get_analysis_job(job_id)
+        if current and current["status"] in {"pending", "running"}:
+            await db.update_analysis_job(
+                job_id,
+                status="cancelled",
+                error="Cancelled by user",
+                completed_at=_now_iso(),
+            )
+        raise
     except Exception as exc:
         logger.exception("Analysis job %s failed", job_id)
         await db.update_analysis_job(
@@ -127,6 +140,7 @@ async def enqueue_analysis_job(
     include_baseline_assessment: bool = False,
     assessment_guidance: str | None = None,
     requested_by: str | None = None,
+    build_on_analysis_id: str | None = None,
 ) -> dict[str, Any]:
     db = Database()
     active = await db.get_active_analysis_job()
@@ -140,6 +154,7 @@ async def enqueue_analysis_job(
         include_baseline_assessment=include_baseline_assessment,
         assessment_guidance=assessment_guidance,
         requested_by=requested_by,
+        build_on_analysis_id=build_on_analysis_id,
     )
     _spawn_job(job["id"])
     return job
@@ -192,3 +207,24 @@ async def get_job_payload(job_id: str) -> dict[str, Any] | None:
     else:
         payload["analysis"] = None
     return payload
+
+
+async def cancel_analysis_job(job_id: str) -> dict[str, Any] | None:
+    db = Database()
+    job = await db.get_analysis_job(job_id)
+    if not job or job["status"] not in {"pending", "running"}:
+        return None
+
+    task = _running_tasks.get(job_id)
+    if task and not task.done():
+        task.cancel()
+    else:
+        await db.update_analysis_job(
+            job_id,
+            status="cancelled",
+            error="Cancelled by user",
+            completed_at=_now_iso(),
+        )
+        _running_tasks.pop(job_id, None)
+
+    return await get_job_payload(job_id)

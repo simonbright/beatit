@@ -68,6 +68,12 @@
     </nav>
   </header>
 
+  <div id="background-status-bar" class="background-status-bar hidden" role="status" aria-live="polite" aria-label="Background tasks">
+    <div class="background-status-inner">
+      <div id="background-status-list" class="background-status-list"></div>
+    </div>
+  </div>
+
   <main class="container">
     <div id="upload-result" class="card upload-result hidden" aria-live="polite">
       <div class="upload-result-header row-between wrap">
@@ -116,33 +122,10 @@
           </div>
         </details>
 
-        <div class="card assessment-scope-card" id="assessment-scope-card">
-          <div class="row-between wrap">
-            <h3>Assessment scope</h3>
-            <button type="button" class="btn ghost" id="btn-scope-library">Choose in Library</button>
-          </div>
-          <p class="muted small">Control which stored documents are sent to the LLM. False gaps often mean a report was left out of scope.</p>
-          <div id="assessment-scope-next" class="assessment-scope-block"></div>
-          <div id="assessment-scope-last" class="assessment-scope-block hidden"></div>
-          <div id="assessment-scope-warning" class="assessment-scope-warning hidden"></div>
-          <div class="assessment-guidance-section">
-            <label class="assessment-guidance-form" for="assessment-guidance">Assessment guidance <span class="muted">(optional)</span>
-              <textarea id="assessment-guidance" rows="3" placeholder="e.g. Pay close attention to the ABC pathology report and the Facebook video transcript. Do not flag liver mets as unconfirmed if the CT report documents them."></textarea>
-            </label>
-            <div class="assessment-guidance-presets" id="assessment-guidance-presets"></div>
-          </div>
-          <div class="assessment-scope-actions">
-            <button type="button" class="btn secondary" id="btn-scope-select-all">Select all</button>
-            <button type="button" class="btn ghost" id="btn-scope-clear">Clear selection</button>
-            <button type="button" class="btn ghost hidden" id="btn-scope-match-last">Match last assessment</button>
-            <button type="button" class="btn primary" id="btn-reassess-baseline">Run baseline assessment</button>
-          </div>
-        </div>
-
         <div class="card open-items-card" id="open-items-card">
           <h3>Open items</h3>
           <p class="section-updated muted small hidden">Last updated <time id="open-items-time"></time></p>
-          <p class="muted small open-items-hint">Prioritized items still to resolve. If a gap looks wrong, check Assessment scope above — then re-run baseline. Click Explore on a row to investigate.</p>
+          <p class="muted small open-items-hint">Prioritized items still to resolve. If a gap looks wrong, check assessment scope in <strong>Run further analysis</strong> below — then re-run baseline. Click Explore on a row to investigate.</p>
           <div class="table-wrap">
             <table class="open-items-table" id="open-items-table">
               <thead>
@@ -230,11 +213,9 @@
       <details class="card analyze-actions-card" id="analyze-actions-card" open>
         <summary class="analyze-actions-summary">
           <span class="analyze-actions-summary-title">Run further analysis</span>
-          <span class="muted small analyze-actions-summary-hint">Baseline, summarize, or custom question</span>
+          <span class="muted small analyze-actions-summary-hint">Baseline, summarize, custom question, and document scope</span>
         </summary>
         <div class="analyze-actions-body">
-          <p class="muted small">Choose specific documents in the <strong>Library</strong> to include in assessments. Leave none selected to use everything.</p>
-
           <div class="analyze-actions">
             <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
             <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
@@ -254,6 +235,29 @@
           </div>
           <div id="analyze-loading" class="loading hidden">Running analysis in the background… this may take several minutes.</div>
           <p class="muted small custom-analysis-note">Custom questions run as <strong>drafts</strong> in the Custom Tasks tab until you add them to the medical record.</p>
+
+          <div class="assessment-scope-section" id="assessment-scope-card">
+            <div class="row-between wrap">
+              <h4 class="assessment-scope-title">Assessment scope</h4>
+              <button type="button" class="btn ghost btn-sm" id="btn-scope-library">Choose in Library</button>
+            </div>
+            <p class="muted small">Control which stored documents are sent to the LLM. False gaps often mean a report was left out of scope.</p>
+            <div id="assessment-scope-next" class="assessment-scope-block"></div>
+            <div id="assessment-scope-last" class="assessment-scope-block hidden"></div>
+            <div id="assessment-scope-warning" class="assessment-scope-warning hidden"></div>
+            <div class="assessment-guidance-section">
+              <label class="assessment-guidance-form" for="assessment-guidance">Assessment guidance <span class="muted">(optional)</span>
+                <textarea id="assessment-guidance" rows="3" placeholder="e.g. Pay close attention to the ABC pathology report and the Facebook video transcript. Do not flag liver mets as unconfirmed if the CT report documents them."></textarea>
+              </label>
+              <div class="assessment-guidance-presets" id="assessment-guidance-presets"></div>
+            </div>
+            <div class="assessment-scope-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-scope-select-all">Select all</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-scope-clear">Clear selection</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-scope-imaging">Imaging workflow…</button>
+              <button type="button" class="btn ghost btn-sm hidden" id="btn-scope-match-last">Match last assessment</button>
+            </div>
+          </div>
         </div>
       </details>
     </section>
@@ -392,9 +396,9 @@
 
         <article class="card">
           <h3>PDF document</h3>
-          <label class="file-label">
-            <input type="file" id="pdf-file" accept=".pdf,application/pdf">
-            <span>Choose PDF file</span>
+          <label class="file-label btn primary file-picker-btn">
+            <input type="file" id="pdf-file" accept=".pdf,application/pdf" hidden>
+            Choose PDF file
           </label>
           <label>Title<input type="text" id="pdf-title" placeholder="Defaults to the PDF filename"></label>
           <button class="btn primary" id="btn-ingest-pdf">Upload PDF</button>
@@ -472,19 +476,28 @@
           </label>
           <p id="library-summary" class="library-summary muted small"></p>
         </div>
+
+        <div id="imaging-filter-card" class="imaging-filter-card hidden">
+          <div class="row-between wrap">
+            <h4>Imaging workflow</h4>
+            <button type="button" class="btn ghost" id="btn-imaging-filter-clear">Clear filters</button>
+          </div>
+          <p class="muted small imaging-workflow-intro">Use the filters below to match CT slices, then run vision analysis. The vision report is added to your assessment scope; re-running baseline <strong>builds on</strong> your current assessment rather than starting over.</p>
+          <p id="imaging-filter-reindex-note" class="imaging-filter-reindex-note hidden"></p>
+          <div id="imaging-filter-fields" class="imaging-filter-fields"></div>
+          <p id="imaging-filter-match-summary" class="imaging-filter-match-summary muted small">Set filters to see matching slices.</p>
+          <div class="imaging-filter-actions">
+            <button type="button" class="btn primary" id="btn-imaging-analyze-vision">Analyze with vision</button>
+            <button type="button" class="btn ghost" id="btn-imaging-add-workflow">Add report to last assessment</button>
+          </div>
+          <p id="imaging-workflow-summary" class="imaging-workflow-summary muted small"></p>
+        </div>
+
         <div class="library-selection-bar" id="library-selection-bar">
           <p id="library-selection-summary" class="library-selection-summary muted small"></p>
           <div class="library-selection-actions">
-            <button type="button" class="btn ghost" id="btn-select-page">Select page</button>
-            <button type="button" class="btn ghost hidden" id="btn-select-filtered-type">Select filtered type</button>
-            <label class="library-select-type-label" for="library-select-type">
-              Select by type
-              <select id="library-select-type" class="library-select-type">
-                <option value="">Choose type…</option>
-              </select>
-            </label>
-            <button type="button" class="btn ghost" id="btn-select-by-type">Select type</button>
-            <button type="button" class="btn ghost" id="btn-select-all-docs">Select all</button>
+            <button type="button" class="btn ghost" id="btn-select-all-shown">Select all shown</button>
+            <button type="button" class="btn ghost hidden" id="btn-scope-match-last-lib">Match last assessment</button>
             <button type="button" class="btn ghost" id="btn-clear-selection">Clear selection</button>
           </div>
         </div>

@@ -93,6 +93,35 @@ def _response_structure_for_analysis(*, analysis_type: str, query: str) -> str:
     return RESPONSE_STRUCTURE_WITH_SOURCES
 
 
+BASELINE_BUILD_ON_PRIOR_SECTION = """
+=== PRIOR BASELINE ASSESSMENT (revise and build on this — do not discard accurate content) ===
+{prior_text}
+{new_docs_note}
+=== INSTRUCTIONS FOR THIS RE-RUN ===
+This is an UPDATE to the prior baseline, not a blank-slate rewrite.
+- RETAIN findings from the prior assessment that remain supported by the documents below.
+- INTEGRATE new documents (especially vision reads and radiology reports) into the appropriate sections.
+- UPDATE open items: resolve items now documented; add new gaps only when truly missing from all sources.
+- Do NOT drop prior clinical facts unless contradicted by stronger source evidence in the current document set.
+"""
+
+
+def _prior_assessment_text(analysis: dict[str, Any]) -> str:
+    summary = (analysis.get("executive_summary") or "").strip()
+    response = (analysis.get("response") or "").strip()
+    if summary and response and response not in summary:
+        return f"{summary}\n\n{response}"
+    return summary or response
+
+
+def _new_document_titles(
+    prior_ids: list[str],
+    corpus: list[dict[str, Any]],
+) -> list[str]:
+    prior = set(prior_ids or [])
+    return [d["title"] for d in corpus if d.get("id") not in prior and d.get("title")]
+
+
 class SynthesisService:
     def __init__(
         self,
@@ -113,11 +142,30 @@ class SynthesisService:
         assessment_guidance: str | None = None,
         analysis_type: str = "query",
         created_by: str | None = None,
+        build_on_analysis_id: str | None = None,
     ) -> dict[str, Any]:
         corpus = await self.store.get_corpus(document_ids)
         corpus_text = _format_corpus(corpus)
         doc_titles = [d["title"] for d in corpus if d.get("title")]
         title_list = "\n".join(f'- "{t}"' for t in doc_titles) if doc_titles else "[No documents stored]"
+
+        prior_section = ""
+        if build_on_analysis_id:
+            prior = await self.db.get_analysis_by_id(build_on_analysis_id)
+            if prior and prior.get("record_status") == "official":
+                prior_text = _prior_assessment_text(prior)
+                new_titles = _new_document_titles(prior.get("document_ids") or [], corpus)
+                new_docs_note = ""
+                if new_titles:
+                    listed = "\n".join(f'- "{t}"' for t in new_titles)
+                    new_docs_note = (
+                        f"\n=== NEW DOCUMENTS SINCE PRIOR BASELINE (integrate these) ===\n{listed}\n"
+                    )
+                if prior_text:
+                    prior_section = BASELINE_BUILD_ON_PRIOR_SECTION.format(
+                        prior_text=prior_text[:120000],
+                        new_docs_note=new_docs_note,
+                    )
 
         if include_baseline_assessment and not query.strip():
             analysis_type = "baseline"
@@ -144,7 +192,7 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 
 === STORED DOCUMENTS ===
 {corpus_text}
-{guidance_section}
+{prior_section}{guidance_section}
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
 {gap_rules}
