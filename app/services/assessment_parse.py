@@ -35,6 +35,40 @@ def extract_section(response: str, header_keywords: list[str]) -> str:
     return "\n".join(capture).strip()
 
 
+_EXECUTIVE_SUMMARY_HEADERS = ("executive summary", "1 executive summary")
+
+
+def _section_header_name(line: str) -> str | None:
+    stripped = line.strip()
+    match = re.match(r"^(?:#{1,3}\s*|\d+\.\s+)(.+)$", stripped)
+    if not match:
+        return None
+    return _normalize_header(match.group(1))
+
+
+def strip_executive_summary_section(response: str) -> str:
+    """Remove the executive summary section from a full assessment (PDF exports it separately)."""
+    if not response:
+        return ""
+
+    lines = response.splitlines()
+    result: list[str] = []
+    skipping = False
+
+    for line in lines:
+        header = _section_header_name(line)
+        if header is not None:
+            if any(keyword in header for keyword in _EXECUTIVE_SUMMARY_HEADERS):
+                skipping = True
+                continue
+            skipping = False
+
+        if not skipping:
+            result.append(line)
+
+    return "\n".join(result).strip()
+
+
 def _bullet_lines(section_text: str) -> list[str]:
     items: list[str] = []
     for line in section_text.splitlines():
@@ -71,7 +105,7 @@ def ensure_executive_summary(parsed: dict[str, Any], response: str) -> str:
     summary = (parsed.get("executive_summary") or "").strip()
     full = (response or "").strip()
 
-    if _substantive_length(summary) >= 80:
+    if _substantive_length(summary) >= 120:
         return summary
 
     what_we_know = extract_section(full, ["what we know", "2 what we know"]).strip()
@@ -81,7 +115,7 @@ def ensure_executive_summary(parsed: dict[str, Any], response: str) -> str:
     if not summary and full:
         summary = full.strip().split("\n\n")[0][:1200]
 
-    if _substantive_length(summary) >= 80:
+    if _substantive_length(summary) >= 120:
         return summary
 
     chunks: list[str] = []

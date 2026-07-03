@@ -6,6 +6,7 @@ from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_
 from app.services.source_policy import (
     BASELINE_GAP_RULES,
     BASELINE_GUIDANCE_SECTION,
+    COMPREHENSIVE_SYNTHESIS_RULES,
     CUSTOM_QUERY_RESPONSE_STRUCTURE,
     LIST_ITEM_SOURCE_RULES,
     RESPONSE_STRUCTURE_WITH_SOURCES,
@@ -15,15 +16,15 @@ from app.services.source_policy import (
 from app.services.source_normalize import enrich_with_sources
 from app.storage.database import Database
 from app.storage.documents import DocumentStore
-from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
+from app.services.patient_context import DEFAULT_PATIENT_CONTEXT, DEFAULT_REVIEWER_CONTEXT
 
-MEDICAL_SYSTEM_TEMPLATE = """You are an experienced medical oncologist assisting with case review and treatment planning discussion.
+MEDICAL_SYSTEM_TEMPLATE = """{reviewer_context}
 
-Patient context (baseline — update as new evidence arrives):
+Patient and case context (baseline — update as new evidence arrives):
 {patient_context}
 
-Your role:
-1. Synthesize available clinical and research material clearly and accurately
+Core responsibilities:
+1. Synthesize available clinical and research material clearly and accurately across ALL sources in scope
 2. Distinguish what is KNOWN vs UNKNOWN vs UNCERTAIN
 3. Identify critical information gaps that should be closed before major treatment decisions
 4. Outline a broad range of treatment options (surgery, systemic therapy, radiation, clinical trials, molecular testing, staging workup)
@@ -40,15 +41,175 @@ Important constraints:
 
 
 async def build_medical_system_prompt(db: Database) -> str:
-    context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
-    base = MEDICAL_SYSTEM_TEMPLATE.format(patient_context=context.strip())
+    reviewer = await db.get_setting("reviewer_context") or DEFAULT_REVIEWER_CONTEXT
+    patient = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+    base = MEDICAL_SYSTEM_TEMPLATE.format(
+        reviewer_context=reviewer.strip(),
+        patient_context=patient.strip(),
+    )
     return f"{base}\n\n{PALLIATIVE_EXCLUSION}"
 
 
-def _format_corpus(corpus: list[dict[str, Any]], max_chars: int = 120_000) -> str:
-    sections = []
-    used = 0
+IMAGING_STUB_MARKER = "Imaging pixels are stored locally and are not sent to the LLM"
+
+
+def _is_imaging_stub(item: dict[str, Any]) -> bool:
+    if item.get("source_type") != "imaging":
+        return False
+    meta = item.get("metadata") or {}
+    if meta.get("vision_read"):
+        return False
+    return IMAGING_STUB_MARKER in (item.get("text") or "")
+
+
+def _parse_stub_field(text: str, label: str) -> str:
+    prefix = f"{label}:"
+    for line in (text or "").splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return ""
+
+
+def _aggregate_imaging_stubs(stubs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for item in stubs:
+        meta = item.get("metadata") or {}
+        rel = str(meta.get("relative_path") or item.get("title") or "").replace("\\", "/")
+        folder = rel.split("/")[0] if "/" in rel else "Imaging upload"
+        text = item.get("text") or ""
+        modality = (
+            _parse_stub_field(text, "Modality")
+            or meta.get("modality")
+            or meta.get("dicom_modality")
+            or "Imaging"
+        )
+        study_date = _parse_stub_field(text, "Study date") or meta.get("dicom_study_date") or ""
+        study_desc = (
+            _parse_stub_field(text, "Study")
+            or meta.get("dicom_study_description")
+            or ""
+        )
+        key = f"{folder}|{modality}|{study_date}|{study_desc}"
+        if key not in groups:
+            groups[key] = {
+                "folder": folder,
+                "modality": modality,
+                "study_date": study_date,
+                "study_desc": study_desc,
+                "count": 0,
+                "sample_titles": [],
+            }
+        group = groups[key]
+        group["count"] += 1
+        if len(group["sample_titles"]) < 3 and item.get("title"):
+            group["sample_titles"].append(item["title"])
+
+    aggregated: list[dict[str, Any]] = []
+    for key, group in groups.items():
+        date_part = group["study_date"] or "unknown date"
+        title = f'{group["folder"]} — {group["modality"]} — {date_part} ({group["count"]} DICOM slices)'
+        body_lines = [
+            f"[Aggregated DICOM upload — {group['count']} slice files; pixel data not included in LLM context]",
+            f"Upload folder: {group['folder']}",
+            f"Modality: {group['modality']}",
+        ]
+        if group["study_date"]:
+            body_lines.append(f"Study date: {group['study_date']}")
+        if group["study_desc"]:
+            body_lines.append(f"Study description: {group['study_desc']}")
+        if group["sample_titles"]:
+            body_lines.append("Sample slice titles: " + "; ".join(group["sample_titles"]))
+        body_lines.append(
+            "Use formal radiology reports, vision reads, and clinical notes for imaging interpretation — not individual slice metadata."
+        )
+        aggregated.append(
+            {
+                "id": f"imaging-group-{abs(hash(key)) % 10**8}",
+                "title": title,
+                "source_type": "imaging",
+                "source_uri": None,
+                "text": "\n".join(body_lines),
+                "metadata": {},
+            }
+        )
+    return sorted(aggregated, key=lambda row: row["title"])
+
+
+def _corpus_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    source_type = item.get("source_type") or ""
+    title_lower = (item.get("title") or "").lower()
+    priority = {
+        "pdf": 0,
+        "text": 1,
+        "youtube": 2,
+        "facebook": 3,
+        "url": 4,
+        "video": 5,
+        "imaging": 8,
+    }.get(source_type, 6)
+    if "vision read" in title_lower:
+        priority = 0
+    return (priority, -(len(item.get("text") or "")), item.get("title") or "")
+
+
+def _prepare_corpus_items(corpus: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    substantive: list[dict[str, Any]] = []
+    stubs: list[dict[str, Any]] = []
     for item in corpus:
+        if _is_imaging_stub(item):
+            stubs.append(item)
+        else:
+            substantive.append(item)
+
+    substantive.sort(key=_corpus_sort_key)
+    aggregated = _aggregate_imaging_stubs(stubs)
+    stats = {
+        "total_docs": len(corpus),
+        "substantive_count": len(substantive),
+        "imaging_stub_count": len(stubs),
+        "imaging_groups": len(aggregated),
+        "included_titles": [],
+        "truncated_titles": [],
+    }
+    return substantive + aggregated, stats
+
+
+def _format_document_inventory(corpus: list[dict[str, Any]]) -> str:
+    rows = sorted(
+        corpus,
+        key=lambda item: ((item.get("source_type") or ""), (item.get("title") or "")),
+    )
+    lines = [
+        f'- [{item.get("source_type", "unknown").upper()}] "{item.get("title") or "Untitled"}"'
+        for item in rows
+        if item.get("title")
+    ]
+    return "\n".join(lines) if lines else "[No documents in scope]"
+
+
+def _format_coverage_notes(stats: dict[str, Any]) -> str:
+    lines: list[str] = []
+    if stats.get("imaging_stub_count"):
+        lines.append(
+            f"- {stats['imaging_stub_count']} DICOM slice file(s) summarized into "
+            f"{stats.get('imaging_groups', 0)} upload group(s). Pixel data is excluded; use radiology reports and vision reads."
+        )
+    truncated = stats.get("truncated_titles") or []
+    if truncated:
+        preview = ", ".join(f'"{title}"' for title in truncated[:12])
+        suffix = f" (+{len(truncated) - 12} more)" if len(truncated) > 12 else ""
+        lines.append(
+            f"- {len(truncated)} document(s) were partially truncated due to context size: {preview}{suffix}"
+        )
+    return "\n".join(lines)
+
+
+def _format_corpus(corpus: list[dict[str, Any]], max_chars: int = 200_000) -> tuple[str, str]:
+    items, stats = _prepare_corpus_items(corpus)
+    sections: list[str] = []
+    used = 0
+
+    for item in items:
         header = (
             f"### [{item['source_type'].upper()}] {item['title']}\n"
             f"ID: {item['id']}\n"
@@ -60,10 +221,16 @@ def _format_corpus(corpus: list[dict[str, Any]], max_chars: int = 120_000) -> st
             remaining = max_chars - used - len(header) - 50
             if remaining > 500:
                 sections.append(f"{header}\n{body[:remaining]}\n...[truncated]\n")
+                stats["truncated_titles"].append(item["title"])
+            else:
+                stats["truncated_titles"].append(item["title"])
             break
         sections.append(chunk)
         used += len(chunk)
-    return "\n---\n".join(sections) if sections else "[No document text available]"
+        stats["included_titles"].append(item["title"])
+
+    text = "\n---\n".join(sections) if sections else "[No document text available]"
+    return text, _format_coverage_notes(stats)
 
 
 def _is_trial_search_query(query: str) -> bool:
@@ -90,7 +257,7 @@ def _response_structure_for_analysis(*, analysis_type: str, query: str) -> str:
         if _is_trial_search_query(query):
             structure = f"{structure}\n\n{TRIAL_SEARCH_QUERY_INSTRUCTIONS}"
         return structure
-    return RESPONSE_STRUCTURE_WITH_SOURCES
+    return f"{RESPONSE_STRUCTURE_WITH_SOURCES}\n\n{COMPREHENSIVE_SYNTHESIS_RULES}"
 
 
 BASELINE_BUILD_ON_PRIOR_SECTION = """
@@ -145,9 +312,19 @@ class SynthesisService:
         build_on_analysis_id: str | None = None,
     ) -> dict[str, Any]:
         corpus = await self.store.get_corpus(document_ids)
-        corpus_text = _format_corpus(corpus)
+        corpus_text, coverage_notes = _format_corpus(corpus)
         doc_titles = [d["title"] for d in corpus if d.get("title")]
         title_list = "\n".join(f'- "{t}"' for t in doc_titles) if doc_titles else "[No documents stored]"
+        inventory = _format_document_inventory(corpus)
+        coverage_section = (
+            f"\n=== CORPUS COVERAGE NOTES ===\n{coverage_notes}\n"
+            if coverage_notes
+            else ""
+        )
+        inventory_section = f"""
+=== DOCUMENT INVENTORY ({len(corpus)} documents in this assessment scope) ===
+{inventory}
+"""
 
         prior_section = ""
         if build_on_analysis_id:
@@ -170,10 +347,9 @@ class SynthesisService:
         if include_baseline_assessment and not query.strip():
             analysis_type = "baseline"
             query = (
-                "Provide a comprehensive baseline oncology assessment: what we know, "
-                "what we do not know, critical gaps to close, staging considerations, "
-                "and a broad overview of treatment options for this pancreatic cancer case "
-                "with possible liver metastasis."
+                "Provide a comprehensive baseline oncology assessment synthesizing ALL documents in scope: "
+                "what we know from every report and source, what we do not know, critical gaps to close, "
+                "staging considerations, and a broad overview of treatment options."
             )
 
         gap_rules = f"\n{BASELINE_GAP_RULES}\n" if analysis_type == "baseline" else ""
@@ -186,7 +362,7 @@ class SynthesisService:
 
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
-
+{inventory_section}{coverage_section}
 DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags:
 {title_list}
 
@@ -261,7 +437,7 @@ Use clear ### headings for each section."""
 
         doc_ids = document_ids if document_ids else existing.get("document_ids") or None
         corpus = await self.store.get_corpus(doc_ids)
-        corpus_text = _format_corpus(corpus)
+        corpus_text, coverage_notes = _format_corpus(corpus)
         doc_titles = [d["title"] for d in corpus if d.get("title")]
         title_list = "\n".join(f'- "{t}"' for t in doc_titles) if doc_titles else "[No documents stored]"
 
@@ -275,9 +451,19 @@ Use clear ### headings for each section."""
         refinement_text = refinement.strip() or "Improve clarity and completeness while keeping what already works."
         query_text = query.strip() or prior_query
 
+        inventory = _format_document_inventory(corpus)
+        coverage_section = (
+            f"\n=== CORPUS COVERAGE NOTES ===\n{coverage_notes}\n"
+            if coverage_notes
+            else ""
+        )
+
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
 
+=== DOCUMENT INVENTORY ({len(corpus)} documents in this assessment scope) ===
+{inventory}
+{coverage_section}
 DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags:
 {title_list}
 

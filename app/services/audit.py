@@ -6,6 +6,7 @@ DOCUMENT_CREATED = "document.created"
 DOCUMENT_DELETED = "document.deleted"
 SETTINGS_MODEL_UPDATED = "settings.model_updated"
 SETTINGS_PATIENT_CONTEXT_UPDATED = "settings.patient_context_updated"
+SETTINGS_REVIEWER_CONTEXT_UPDATED = "settings.reviewer_context_updated"
 SETTINGS_SOURCE_LABELS_UPDATED = "settings.source_labels_updated"
 DOCUMENT_CITATION_UPDATED = "document.citation_updated"
 ANALYSIS_REQUESTED = "analysis.requested"
@@ -32,6 +33,7 @@ EVENT_LABELS: dict[str, str] = {
     DOCUMENT_DELETED: "Document removed",
     SETTINGS_MODEL_UPDATED: "LLM model changed",
     SETTINGS_PATIENT_CONTEXT_UPDATED: "Patient context updated",
+    SETTINGS_REVIEWER_CONTEXT_UPDATED: "Clinical reviewer context updated",
     SETTINGS_SOURCE_LABELS_UPDATED: "Source labels updated",
     DOCUMENT_CITATION_UPDATED: "Document citation name updated",
     ANALYSIS_REQUESTED: "Analysis requested",
@@ -79,6 +81,7 @@ CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
     "settings": (
         SETTINGS_MODEL_UPDATED,
         SETTINGS_PATIENT_CONTEXT_UPDATED,
+        SETTINGS_REVIEWER_CONTEXT_UPDATED,
         SETTINGS_SOURCE_LABELS_UPDATED,
     ),
     "auth": (AUTH_LOGIN, AUTH_LOGOUT),
@@ -149,6 +152,8 @@ def format_audit_summary(event: dict[str, Any]) -> str:
         return f'Model: {meta.get("old_model") or "—"} → {meta.get("new_model") or "—"}'
     if event_type == SETTINGS_PATIENT_CONTEXT_UPDATED:
         return f'Patient context updated ({meta.get("old_length", 0)} → {meta.get("new_length", 0)} chars)'
+    if event_type == SETTINGS_REVIEWER_CONTEXT_UPDATED:
+        return f'Clinical reviewer context updated ({meta.get("old_length", 0)} → {meta.get("new_length", 0)} chars)'
     if event_type == SETTINGS_SOURCE_LABELS_UPDATED:
         return meta.get("summary") or "Source type labels updated"
     if event_type == ANALYSIS_REQUESTED:
@@ -218,6 +223,13 @@ def format_audit_details(event: dict[str, Any]) -> list[str]:
         add("Previous model", meta.get("old_model"))
         add("New model", meta.get("new_model"))
     elif event_type == SETTINGS_PATIENT_CONTEXT_UPDATED:
+        add("Previous length", meta.get("old_length"))
+        add("New length", meta.get("new_length"))
+        if meta.get("old_preview"):
+            add("Previous preview", meta.get("old_preview"))
+        if meta.get("new_preview"):
+            add("New preview", meta.get("new_preview"))
+    elif event_type == SETTINGS_REVIEWER_CONTEXT_UPDATED:
         add("Previous length", meta.get("old_length"))
         add("New length", meta.get("new_length"))
         if meta.get("old_preview"):

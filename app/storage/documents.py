@@ -100,6 +100,7 @@ class DocumentStore:
                         "source_type": doc["source_type"],
                         "source_uri": doc.get("source_uri"),
                         "text": text,
+                        "metadata": doc.get("metadata") or {},
                     }
                 )
         return corpus

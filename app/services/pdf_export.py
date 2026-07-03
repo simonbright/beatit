@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from fpdf import FPDF
 
+from app.services.assessment_parse import strip_executive_summary_section
 from app.services.source_catalog import SourceCatalog
 from app.services.source_references import build_reference_bundle, format_reference_label
 from app.version import APP_NAME, APP_VERSION
@@ -421,7 +422,7 @@ def build_assessment_pdf(
 
     ref_bundle = build_reference_bundle(
         executive_summary=analysis.get("executive_summary") or "",
-        response=analysis.get("response") or "",
+        response=strip_executive_summary_section(analysis.get("response") or ""),
         patient_context=patient_context or "",
         catalog=catalog,
     )

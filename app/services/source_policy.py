@@ -29,7 +29,7 @@ STAGING RULES (critical):
 
 RESPONSE_STRUCTURE_WITH_SOURCES = """
 Structure your response with these sections:
-1. Executive summary — at least 4 complete sentences covering diagnosis, key findings, staging status, and immediate priorities. Every sentence must include clinical content AND a [SOURCE: …] tag. Never output only a source tag line.
+1. Executive summary — at least 6 complete sentences covering diagnosis, key findings from ALL major report types in scope, staging status, and immediate priorities. Every sentence must include clinical content AND a [SOURCE: …] tag. Never output only a source tag line.
 2. What we know — hard data only, each bullet tagged [SOURCE: Document "..."]
 3. What we do not know / uncertainties — tag [SOURCE: Unknown]
 4. Critical gaps to close (prioritized numbered list)
@@ -40,6 +40,16 @@ Structure your response with these sections:
 9. Disclaimer
 
 Do NOT include a separate "Source key" section — references are compiled automatically in the report appendix.
+"""
+
+COMPREHENSIVE_SYNTHESIS_RULES = """
+COMPREHENSIVE SYNTHESIS (mandatory for baseline assessment and executive summary):
+- Before writing, mentally inventory EVERY document in DOCUMENT INVENTORY and STORED DOCUMENTS.
+- The executive summary and "What we know" MUST reflect major findings from EACH substantive report type present (e.g. pathology, CT/MRI report, labs, clinic notes, transcripts, vision reads) — not only the first or most recent source.
+- If multiple documents address the same topic (e.g. two imaging reports), synthesize them together; note agreement or conflict.
+- Do NOT omit abnormal labs, tumor markers, metastatic sites, prior treatments, or comorbidities documented anywhere in scope.
+- DICOM slice uploads listed as aggregated groups are NOT diagnostic reads — rely on radiology reports and vision reads for imaging interpretation.
+- If a clinically important document in inventory has little extractable text, say what is missing and cite the document title anyway.
 """
 
 BASELINE_GAP_RULES = """

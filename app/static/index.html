@@ -468,7 +468,7 @@
           <h3>Stored documents</h3>
           <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
         </div>
-        <p class="muted small">Check items to include in assessments, or leave none selected to use everything. Filter by type, then <strong>Select all …</strong> for bulk selection across pages.</p>
+        <p class="muted small">Check items to include in assessments, or leave none selected to use everything. Filter by type — DICOM / imaging is grouped by upload folder and study date. Run baseline assessment from here once your selection is ready.</p>
         <div class="library-toolbar">
           <label class="library-filter-label" for="library-type-filter">
             Type
@@ -480,12 +480,13 @@
         </div>
 
         <div id="imaging-filter-card" class="imaging-filter-card hidden">
-          <p class="muted small">DICOM slices live in the Library. Use the <button type="button" class="btn-link" data-nav-imaging>Imaging</button> tab to filter slices and run a separate vision analysis.</p>
+          <p class="muted small">DICOM slices are grouped by upload folder and study date. Use the <button type="button" class="btn-link" data-nav-imaging>Imaging</button> tab to filter slices and run a separate vision analysis.</p>
         </div>
 
         <div class="library-selection-bar" id="library-selection-bar">
             <p id="library-selection-summary" class="library-selection-summary muted small"></p>
           <div class="library-selection-actions">
+            <button type="button" class="btn primary" id="btn-library-baseline">Run baseline assessment</button>
             <button type="button" class="btn ghost" id="btn-select-all-shown">Select all shown</button>
             <button type="button" class="btn ghost hidden" id="btn-scope-match-last-lib">Match last assessment</button>
             <button type="button" class="btn ghost" id="btn-clear-selection">Clear selection</button>
@@ -690,10 +691,22 @@
 
     <!-- SETTINGS -->
     <section id="panel-settings" class="panel">
+      <div class="card settings-card">
+        <h3>Clinical reviewer context</h3>
+        <p class="muted">Persona and synthesis instructions for every analysis. Default: medical oncologist. Controls how the model reads and integrates all selected documents.</p>
+        <label for="settings-reviewer-context">Reviewer role &amp; synthesis standards
+          <textarea id="settings-reviewer-context" rows="6" placeholder="Role, specialty, and how to synthesize all sources…"></textarea>
+        </label>
+        <div class="row-between wrap settings-actions">
+          <span class="muted small">Prepended to the system prompt for baseline, custom tasks, and investigations</span>
+          <button class="btn primary" id="btn-save-reviewer">Save reviewer context</button>
+        </div>
+      </div>
+
       <div class="card settings-card patient-banner">
         <div class="banner-duck" aria-hidden="true">🦆</div>
-        <h3>Patient context</h3>
-        <p class="muted">Baseline case details used in every medical analysis. Update as you learn more.</p>
+        <h3>Patient &amp; case context</h3>
+        <p class="muted">Case-specific facts used in every medical analysis. Update as you learn more.</p>
         <p class="muted small">For trial searches, include line of therapy, biomarkers (BRCA, KRAS, etc.), ECOG status, and prior treatments — the model uses this to tailor trial lists.</p>
 
         <label for="settings-patient-context">Case summary
@@ -701,7 +714,7 @@
         </label>
 
         <div class="row-between wrap settings-actions">
-          <span class="muted small">Used by the oncology synthesis prompt</span>
+          <span class="muted small">Cited as [SOURCE: Patient context] when used in assessments</span>
           <button class="btn primary" id="btn-save-patient">Save patient context</button>
         </div>
       </div>

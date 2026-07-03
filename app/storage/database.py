@@ -9,7 +9,7 @@ from app.services.openrouter_models import (
     DEFAULT_OPENROUTER_MODEL,
     DEPRECATED_OPENROUTER_MODELS,
 )
-from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
+from app.services.patient_context import DEFAULT_PATIENT_CONTEXT, DEFAULT_REVIEWER_CONTEXT
 from app.services.assessment_parse import ensure_executive_summary, parse_assessment
 from app.services.source_catalog import SourceCatalog
 from app.services.source_references import build_reference_bundle
@@ -78,6 +78,9 @@ class Database:
 
             if not await self.get_setting("patient_context"):
                 await self.set_setting("patient_context", DEFAULT_PATIENT_CONTEXT)
+
+            if not await self.get_setting("reviewer_context"):
+                await self.set_setting("reviewer_context", DEFAULT_REVIEWER_CONTEXT)
 
             await self._migrate_documents_citation_display_name(db)
             await self._migrate_documents_indexes(db)

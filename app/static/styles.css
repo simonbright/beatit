@@ -670,6 +670,62 @@ textarea { resize: vertical; min-height: 100px; }
   font-size: 0.82rem;
 }
 
+.library-imaging-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.library-imaging-group-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.library-imaging-group-summary::-webkit-details-marker {
+  display: none;
+}
+
+.library-imaging-group-check {
+  display: flex;
+  align-items: center;
+  margin: 0.1rem 0 0;
+  flex: 0 0 auto;
+}
+
+.library-imaging-group-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.library-imaging-group-slices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0 0.75rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.library-imaging-group-slices .doc-item-compact {
+  padding: 0.55rem 0.65rem;
+  background: var(--surface);
+}
+
+.library-imaging-group-slices .doc-item-compact .doc-actions {
+  gap: 0.35rem;
+}
+
+.library-imaging-group-slices .doc-item-compact .doc-actions .btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+}
+
 .library-select-type-label {
   display: flex;
   align-items: center;

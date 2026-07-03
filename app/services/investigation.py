@@ -34,7 +34,7 @@ class InvestigationService:
         analysis = await self.db.get_analysis_by_id(item["analysis_id"])
         document_ids = analysis.get("document_ids") if analysis else None
         corpus = await self.store.get_corpus(document_ids)
-        corpus_text = _format_corpus(corpus)
+        corpus_text, _coverage = _format_corpus(corpus)
         patient_context = (
             await self.db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
         )

@@ -613,7 +613,7 @@ function setAnalysisRunning(running, jobId = null, jobType = null) {
   if (running) {
     $("#analyze-actions-card")?.setAttribute("open", "");
   }
-  ["#btn-baseline", "#btn-summarize", "#btn-analyze"].forEach((sel) => {
+  ["#btn-baseline", "#btn-summarize", "#btn-analyze", "#btn-library-baseline"].forEach((sel) => {
     const btn = $(sel);
     if (!btn) return;
     btn.disabled = running;
@@ -871,11 +871,7 @@ function switchTab(name, options = {}) {
   });
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${name}`));
   if (!options.skipTabSave) {
-    try {
-      sessionStorage.setItem(TAB_STORAGE_KEY, name);
-    } catch {
-      /* ignore */
-    }
+    persistActiveTab(name);
   }
   if (name === "library" && !options.skipLibraryLoad) {
     loadDocuments().catch((e) => toast(e.message, "error"));
@@ -888,15 +884,64 @@ function switchTab(name, options = {}) {
   updateHomeToolbar();
 }
 
-function restoreActiveTab() {
-  let saved = null;
+function applyTabUi(name) {
+  if (!VALID_TABS.has(name)) return;
+  $$(".tab").forEach((t) => {
+    const active = t.dataset.tab === name;
+    t.classList.toggle("active", active);
+    t.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${name}`));
+}
+
+function readSavedTabName() {
+  const hash = window.location.hash.replace(/^#/, "").trim();
+  if (hash && VALID_TABS.has(hash)) return hash;
   try {
-    saved = sessionStorage.getItem(TAB_STORAGE_KEY);
+    const saved = sessionStorage.getItem(TAB_STORAGE_KEY);
+    if (saved && VALID_TABS.has(saved)) return saved;
   } catch {
     /* ignore */
   }
-  if (!saved || !VALID_TABS.has(saved) || saved === "analyze") return;
+  return null;
+}
+
+function persistActiveTab(name) {
+  if (!VALID_TABS.has(name)) return;
+  try {
+    sessionStorage.setItem(TAB_STORAGE_KEY, name);
+  } catch {
+    /* ignore */
+  }
+  const hash = `#${name}`;
+  if (window.location.hash !== hash) {
+    history.replaceState(null, "", `${window.location.pathname}${window.location.search}${hash}`);
+  }
+}
+
+function restoreActiveTabUiOnly() {
+  const saved = readSavedTabName();
+  if (!saved) return;
+  applyTabUi(saved);
+  updateHomeToolbar();
+}
+
+function restoreActiveTab() {
+  const saved = readSavedTabName();
+  if (!saved) return;
   switchTab(saved, { skipTabSave: true });
+}
+
+function initTabPersistence() {
+  restoreActiveTabUiOnly();
+  window.addEventListener("hashchange", () => {
+    const tab = readSavedTabName();
+    if (!tab) return;
+    const panel = $(`#panel-${tab}`);
+    if (panel && !panel.classList.contains("active")) {
+      switchTab(tab, { skipTabSave: true });
+    }
+  });
 }
 
 function jobStatusLabel(status) {
@@ -1469,6 +1514,11 @@ async function loadSettings() {
     patientEl.value =
       state.settings.patient_context || data.default_patient_context || "";
   }
+  const reviewerEl = $("#settings-reviewer-context");
+  if (reviewerEl) {
+    reviewerEl.value =
+      state.settings.reviewer_context || data.default_reviewer_context || "";
+  }
 
   const current = $("#settings-current");
   if (current) {
@@ -1590,6 +1640,20 @@ async function saveModelSettings() {
   const current = $("#settings-current");
   if (current) current.textContent = `Selected model: ${data.settings.openrouter_model}`;
   checkHealth();
+  if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
+}
+
+async function saveReviewerContext() {
+  const el = $("#settings-reviewer-context");
+  if (!el) return;
+  const reviewer_context = el.value.trim();
+  if (!reviewer_context) return toast("Clinical reviewer context cannot be empty", "error");
+  const data = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({ reviewer_context }),
+  });
+  state.settings = { ...state.settings, ...data.settings };
+  toast("Clinical reviewer context saved");
   if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
 }
 
@@ -2169,7 +2233,7 @@ function scrollToAssessmentScope() {
 function goToLibraryForScope() {
   switchTab("library");
   window.scrollTo({ top: 0, behavior: "smooth" });
-  toast("Select documents with checkboxes, then return to Home to reassess");
+  toast("Select documents with checkboxes, then run baseline assessment from here or Home");
 }
 
 const ASSESSMENT_GUIDANCE_PRESETS = [
@@ -2356,9 +2420,22 @@ function renderLibrarySelectionControls() {
     const lastIds = state.latestAnalysis?.document_ids || [];
     matchLastBtn.classList.toggle("hidden", !lastIds.length);
   }
+
+  const libraryBaselineBtn = $("#btn-library-baseline");
+  if (libraryBaselineBtn) {
+    const total = state.documentIndex.length || Object.values(counts).reduce((a, b) => a + b, 0);
+    libraryBaselineBtn.disabled = state.analysisRunning || !total;
+    const hasAssessment = Boolean(state.latestAnalysis);
+    libraryBaselineBtn.textContent = hasAssessment ? "Re-run baseline assessment" : "Run baseline assessment";
+  }
 }
 
 function renderDocuments() {
+  if (state.libraryFilter === "imaging") {
+    renderImagingLibraryGroups();
+    return;
+  }
+
   const list = $("#documents-list");
   const summary = $("#library-summary");
   const pagination = $("#library-pagination");
@@ -2388,56 +2465,11 @@ function renderDocuments() {
   }
 
   list.innerHTML = state.documents
-    .map((doc) => {
-      const selected = state.selectedIds.has(doc.id);
-      const meta = doc.metadata || {};
-      const excerpt = meta.page_count
-        ? `${meta.page_count} pages`
-        : doc.source_type === "imaging"
-          ? imagingDocExcerpt(meta) || meta.modality || "DICOM"
-          : meta.modality
-            ? meta.modality
-            : meta.imaging_format === "DICOM" || meta.is_dicom || [".dcm", ".dicom"].includes(meta.file_extension)
-              ? "DICOM"
-              : meta.file_size_label
-                ? meta.file_size_label
-                : "";
-      const paths = renderPathLines(docPathLines(doc));
-      const info = doc.source_info || {};
-      const sourceBadge = info.shorthand
-        ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}" title="${escapeHtml(info.type_display || "")}">${escapeHtml(info.shorthand)}</span>`
-        : "";
-      const displayName = info.display_name || doc.title;
-      const inclusionBadges = renderDocInclusionBadges(doc.id);
-      return `
-        <article class="doc-item ${selected ? "selected" : ""}" data-id="${doc.id}">
-          <div class="doc-item-heading">
-            <label class="doc-select-check" title="Include in assessment">
-              <input type="checkbox" class="doc-select-input" data-id="${doc.id}"${selected ? " checked" : ""}>
-            </label>
-            ${sourceBadge}
-            <strong>${escapeHtml(displayName)}</strong>
-          </div>
-          ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
-          ${displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
-          <div class="doc-meta">
-            <span class="badge">${escapeHtml(doc.source_type)}</span>
-            <span>${formatDate(doc.created_at)}</span>
-            ${excerpt ? `<span>${excerpt}</span>` : ""}
-          </div>
-          ${paths ? `<div class="doc-paths">${paths}</div>` : ""}
-          <div class="doc-actions">
-            <button class="btn ghost btn-view" data-id="${doc.id}">View</button>
-            <button class="btn secondary btn-select" data-id="${doc.id}">
-              ${selected ? "Deselect" : "Select for analysis"}
-            </button>
-            <button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>
-          </div>
-        </article>`;
-    })
+    .map((doc) => renderLibraryDocItem(doc))
     .join("");
 
   renderLibraryPagination();
+  syncImagingGroupCheckboxes();
 }
 
 function renderLibraryTypeFilter() {
@@ -2882,6 +2914,202 @@ function imagingDocExcerpt(meta) {
   return parts.join(" · ");
 }
 
+function formatDicomStudyDate(meta) {
+  const raw = String(meta?.dicom_study_date || meta?.study_date || "").trim();
+  if (raw.length === 8 && /^\d+$/.test(raw)) {
+    return `${raw.slice(4, 6)}/${raw.slice(6, 8)}/${raw.slice(0, 4)}`;
+  }
+  return raw;
+}
+
+function imagingLibraryGroupKey(doc) {
+  const meta = doc.metadata || {};
+  const folder = imagingFolderName(doc);
+  const modality = (meta.modality || meta.dicom_modality || "Imaging").trim() || "Imaging";
+  const studyDateRaw = String(meta.dicom_study_date || meta.study_date || "").trim();
+  const studyDate = formatDicomStudyDate(meta) || "Unknown date";
+  return `${folder}|${modality}|${studyDateRaw || studyDate}`;
+}
+
+function buildImagingLibraryGroups(docs) {
+  const groups = new Map();
+  docs.forEach((doc) => {
+    const meta = doc.metadata || {};
+    const folder = imagingFolderName(doc);
+    const modality = (meta.modality || meta.dicom_modality || "Imaging").trim() || "Imaging";
+    const studyDateRaw = String(meta.dicom_study_date || meta.study_date || "").trim();
+    const studyDate = formatDicomStudyDate(meta) || "Unknown date";
+    const key = imagingLibraryGroupKey(doc);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        folder,
+        modality,
+        studyDate,
+        studyDateRaw,
+        docs: [],
+      });
+    }
+    groups.get(key).docs.push(doc);
+  });
+
+  return [...groups.values()].sort((a, b) => {
+    const dateCmp = (b.studyDateRaw || b.studyDate).localeCompare(a.studyDateRaw || a.studyDate);
+    if (dateCmp) return dateCmp;
+    const folderCmp = a.folder.localeCompare(b.folder);
+    if (folderCmp) return folderCmp;
+    return a.modality.localeCompare(b.modality);
+  });
+}
+
+function imagingGroupSelectionState(docIds) {
+  const selectedCount = docIds.filter((id) => state.selectedIds.has(id)).length;
+  if (!selectedCount) return { checked: false, indeterminate: false };
+  if (selectedCount === docIds.length) return { checked: true, indeterminate: false };
+  return { checked: false, indeterminate: true };
+}
+
+function toggleImagingGroupSelection(groupKey, selected) {
+  const docIds = state.imagingLibraryGroupMap?.get(groupKey) || [];
+  docIds.forEach((id) => {
+    if (selected) state.selectedIds.add(id);
+    else state.selectedIds.delete(id);
+  });
+  saveSelectionToSession();
+  renderDocuments();
+  updateSelectedLabel();
+  renderAssessmentScopeCard();
+}
+
+function renderLibraryDocItem(doc, { compact = false } = {}) {
+  const selected = state.selectedIds.has(doc.id);
+  const meta = doc.metadata || {};
+  const excerpt = meta.page_count
+    ? `${meta.page_count} pages`
+    : doc.source_type === "imaging"
+      ? imagingDocExcerpt(meta) || meta.modality || "DICOM"
+      : meta.modality
+        ? meta.modality
+        : meta.imaging_format === "DICOM" || meta.is_dicom || [".dcm", ".dicom"].includes(meta.file_extension)
+          ? "DICOM"
+          : meta.file_size_label
+            ? meta.file_size_label
+            : "";
+  const paths = compact ? "" : renderPathLines(docPathLines(doc));
+  const info = doc.source_info || {};
+  const sourceBadge = info.shorthand
+    ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}" title="${escapeHtml(info.type_display || "")}">${escapeHtml(info.shorthand)}</span>`
+    : "";
+  const displayName = info.display_name || doc.title;
+  const inclusionBadges = renderDocInclusionBadges(doc.id);
+  return `
+    <article class="doc-item ${selected ? "selected" : ""}${compact ? " doc-item-compact" : ""}" data-id="${doc.id}">
+      <div class="doc-item-heading">
+        <label class="doc-select-check" title="Include in assessment">
+          <input type="checkbox" class="doc-select-input" data-id="${doc.id}"${selected ? " checked" : ""}>
+        </label>
+        ${sourceBadge}
+        <strong>${escapeHtml(displayName)}</strong>
+      </div>
+      ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
+      ${!compact && displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
+      <div class="doc-meta">
+        <span class="badge">${escapeHtml(doc.source_type)}</span>
+        ${compact ? "" : `<span>${formatDate(doc.created_at)}</span>`}
+        ${excerpt ? `<span>${escapeHtml(excerpt)}</span>` : ""}
+      </div>
+      ${paths ? `<div class="doc-paths">${paths}</div>` : ""}
+      <div class="doc-actions">
+        <button class="btn ghost btn-view" data-id="${doc.id}">View</button>
+        <button class="btn secondary btn-select" data-id="${doc.id}">
+          ${selected ? "Deselect" : "Select for analysis"}
+        </button>
+        <button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>
+      </div>
+    </article>`;
+}
+
+function renderImagingLibraryGroups() {
+  const list = $("#documents-list");
+  const summary = $("#library-summary");
+  const pagination = $("#library-pagination");
+  if (!list) return;
+
+  const imagingDocs = state.documentIndex.filter((doc) => doc.source_type === "imaging");
+  const groups = buildImagingLibraryGroups(imagingDocs);
+  state.imagingLibraryGroupMap = new Map(groups.map((group) => [group.key, group.docs.map((doc) => doc.id)]));
+
+  if (summary) {
+    if (!imagingDocs.length) {
+      summary.textContent = "No DICOM / imaging documents";
+    } else {
+      summary.textContent = `${groups.length} upload group${groups.length === 1 ? "" : "s"} · ${imagingDocs.length} slice${imagingDocs.length === 1 ? "" : "s"}`;
+    }
+  }
+
+  if (!imagingDocs.length) {
+    list.innerHTML = `<p class="muted">No DICOM or imaging files yet. Upload a study folder from Add data.</p>`;
+    pagination?.classList.add("hidden");
+    renderLibrarySelectionControls();
+    return;
+  }
+
+  list.innerHTML = groups
+    .map((group) => {
+      const docIds = group.docs.map((doc) => doc.id);
+      const selection = imagingGroupSelectionState(docIds);
+      const selectedCount = docIds.filter((id) => state.selectedIds.has(id)).length;
+      const title = `All ${group.modality} images from ${group.studyDate}`;
+      const subtitle = `${group.folder} · ${group.docs.length} slice${group.docs.length === 1 ? "" : "s"}${
+        selectedCount ? ` · ${selectedCount} selected` : ""
+      }`;
+      const slices = group.docs
+        .slice()
+        .sort((a, b) => {
+          const ai = Number(a.metadata?.dicom_instance_number) || 0;
+          const bi = Number(b.metadata?.dicom_instance_number) || 0;
+          return ai - bi || String(a.title || "").localeCompare(String(b.title || ""));
+        })
+        .map((doc) => renderLibraryDocItem(doc, { compact: true }))
+        .join("");
+      return `
+        <details class="library-imaging-group">
+          <summary class="library-imaging-group-summary">
+            <label class="library-imaging-group-check" title="Select all slices in this upload group">
+              <input type="checkbox" class="imaging-group-select" data-group-key="${escapeHtml(group.key)}"${
+                selection.checked ? " checked" : ""
+              }>
+            </label>
+            <span class="library-imaging-group-text">
+              <strong>${escapeHtml(title)}</strong>
+              <span class="muted small">${escapeHtml(subtitle)}</span>
+            </span>
+          </summary>
+          <div class="library-imaging-group-slices">${slices}</div>
+        </details>`;
+    })
+    .join("");
+
+  list.querySelectorAll(".imaging-group-select").forEach((input) => {
+    const docIds = state.imagingLibraryGroupMap.get(input.dataset.groupKey) || [];
+    const selection = imagingGroupSelectionState(docIds);
+    input.checked = selection.checked;
+    input.indeterminate = selection.indeterminate;
+  });
+
+  pagination?.classList.add("hidden");
+  renderLibrarySelectionControls();
+}
+
+function syncImagingGroupCheckboxes() {
+  $("#documents-list")?.querySelectorAll(".imaging-group-select").forEach((input) => {
+    const docIds = state.imagingLibraryGroupMap?.get(input.dataset.groupKey) || [];
+    const selection = imagingGroupSelectionState(docIds);
+    input.checked = selection.checked;
+    input.indeterminate = selection.indeterminate;
+  });
+}
+
 function renderImagingFilterFields() {
   const container = $("#imaging-filter-fields");
   if (!container) return;
@@ -3123,6 +3351,9 @@ async function loadDocumentIndex() {
   renderVisionReportsPanel();
   if ($("#panel-imaging")?.classList.contains("active")) {
     renderImagingSlicePicker();
+  }
+  if ($("#panel-library")?.classList.contains("active")) {
+    renderDocuments();
   }
 }
 
@@ -4526,6 +4757,7 @@ function toggleSelect(id, selected = null) {
   saveSelectionToSession();
   renderDocuments();
   updateSelectedLabel();
+  renderAssessmentScopeCard();
 }
 
 async function deleteDocument(id) {
@@ -4603,6 +4835,7 @@ function safeOn(selector, event, handler) {
 
 function bootstrapUi() {
   initTheme();
+  initTabPersistence();
   initScrollTop();
   initBackgroundStatusBar();
   initImagingFilterPanel();
@@ -4648,6 +4881,7 @@ safeOn("#library-type-filter", "change", (event) => {
     loadImagingFacets().catch((e) => toast(e.message, "error"));
   }
 });
+safeOn("#btn-library-baseline", "click", () => confirmAndRunBaseline());
 safeOn("#btn-select-all-shown", "click", () => selectAllShownDocuments());
 safeOn("#btn-scope-match-last-lib", "click", () => applyLastAssessmentScope());
 safeOn("#btn-clear-selection", "click", () => clearDocumentSelection());
@@ -4660,6 +4894,16 @@ safeOn("#btn-library-next", "click", () => {
   loadDocuments({ page: state.libraryPage + 1 }).catch((e) => toast(e.message, "error"));
 });
 safeOn("#documents-list", "click", (event) => {
+  const groupCheckbox = event.target.closest(".imaging-group-select");
+  if (groupCheckbox?.dataset.groupKey) {
+    event.stopPropagation();
+    toggleImagingGroupSelection(groupCheckbox.dataset.groupKey, groupCheckbox.checked);
+    return;
+  }
+  const groupCheckLabel = event.target.closest(".library-imaging-group-check");
+  if (groupCheckLabel) {
+    event.stopPropagation();
+  }
   const checkbox = event.target.closest(".doc-select-input");
   if (checkbox?.dataset.id) {
     event.stopPropagation();
@@ -5084,6 +5328,9 @@ safeOn("#btn-analyze", "click", () => {
 
 $("#btn-save-settings")?.addEventListener("click", () =>
   saveModelSettings().catch((e) => toast(e.message, "error"))
+);
+$("#btn-save-reviewer")?.addEventListener("click", () =>
+  saveReviewerContext().catch((e) => toast(e.message, "error"))
 );
 $("#btn-save-patient")?.addEventListener("click", () =>
   savePatientContext().catch((e) => toast(e.message, "error"))

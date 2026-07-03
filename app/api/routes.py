@@ -16,7 +16,7 @@ from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL, MODEL_IDS, OPENROUTER_MODELS
-from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
+from app.services.patient_context import DEFAULT_PATIENT_CONTEXT, DEFAULT_REVIEWER_CONTEXT
 from app.services.analysis_jobs import (
     ActiveAnalysisJobError,
     cancel_analysis_job,
@@ -70,6 +70,7 @@ from app.services.audit import (
     ANALYSIS_ANNOTATIONS_UPDATED,
     SETTINGS_MODEL_UPDATED,
     SETTINGS_PATIENT_CONTEXT_UPDATED,
+    SETTINGS_REVIEWER_CONTEXT_UPDATED,
     SETTINGS_SOURCE_LABELS_UPDATED,
     enrich_audit_event,
     log_audit,
@@ -128,6 +129,7 @@ class ImagingVisionRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     openrouter_model: str | None = None
+    reviewer_context: str | None = None
     patient_context: str | None = None
     source_labels: dict[str, dict[str, str]] | None = None
 
@@ -298,6 +300,7 @@ async def get_app_settings():
     db, _, llm, _, _ = await _get_services()
     model = await db.get_setting("openrouter_model") or settings.openrouter_model or DEFAULT_OPENROUTER_MODEL
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+    reviewer_context = await db.get_setting("reviewer_context") or DEFAULT_REVIEWER_CONTEXT
     catalog = await _source_catalog(db, [])
     llm_health = await llm.health()
     return {
@@ -308,12 +311,14 @@ async def get_app_settings():
             "ollama_model": settings.ollama_model,
             "ollama_vision_model": settings.ollama_vision_model,
             "patient_context": patient_context,
+            "reviewer_context": reviewer_context,
             "source_labels": _source_labels_payload(catalog),
         },
         "llm": llm_health,
         "models": OPENROUTER_MODELS,
         "default_model": DEFAULT_OPENROUTER_MODEL,
         "default_patient_context": DEFAULT_PATIENT_CONTEXT,
+        "default_reviewer_context": DEFAULT_REVIEWER_CONTEXT,
         "default_source_labels": _source_labels_payload(SourceCatalog.from_settings([], None)),
         "source_legend": catalog.legend(),
     }
@@ -323,6 +328,7 @@ async def get_app_settings():
 async def update_app_settings(body: SettingsUpdateRequest, request: Request):
     if (
         body.openrouter_model is None
+        and body.reviewer_context is None
         and body.patient_context is None
         and body.source_labels is None
     ):
@@ -348,6 +354,32 @@ async def update_app_settings(body: SettingsUpdateRequest, request: Request):
             resource_type="setting",
             resource_id="openrouter_model",
             metadata={"old_model": old_model, "new_model": model_id},
+        )
+
+    if body.reviewer_context is not None:
+        context = body.reviewer_context.strip()
+        if not context:
+            raise HTTPException(status_code=400, detail="Clinical reviewer context cannot be empty")
+        if len(context) > 5000:
+            raise HTTPException(
+                status_code=400,
+                detail="Clinical reviewer context is too long (max 5000 characters)",
+            )
+        old_context = await db.get_setting("reviewer_context") or ""
+        await db.set_setting("reviewer_context", context)
+        updated["reviewer_context"] = context
+        await _audit(
+            db,
+            request,
+            SETTINGS_REVIEWER_CONTEXT_UPDATED,
+            resource_type="setting",
+            resource_id="reviewer_context",
+            metadata={
+                "old_length": len(old_context),
+                "new_length": len(context),
+                "old_preview": preview_text(old_context, 180),
+                "new_preview": preview_text(context, 180),
+            },
         )
 
     if body.patient_context is not None:
