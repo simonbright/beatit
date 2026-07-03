@@ -1791,21 +1791,119 @@ function orderedDocsFromIds(ids) {
     .filter(Boolean);
 }
 
-function renderScopeDocumentListItems(docIds, { showInclusionBadges = false, limit = null } = {}) {
+function collectVisionAnalysisSliceIds() {
+  const ids = new Set();
+  (state.documentIndex || []).forEach((doc) => {
+    const sliceIds = doc.metadata?.vision_source_slice_ids;
+    if (Array.isArray(sliceIds)) {
+      sliceIds.forEach((id) => ids.add(id));
+    }
+  });
+  return ids;
+}
+
+function imagingFolderName(doc) {
+  const meta = doc.metadata || {};
+  const rel = String(meta.relative_path || meta.original_filename || doc.title || "")
+    .replace(/\\/g, "/")
+    .trim();
+  if (rel.includes("/")) {
+    return rel.split("/").filter(Boolean)[0] || "Imaging folder";
+  }
+  if (meta.dicom_study_description) return meta.dicom_study_description;
+  if (meta.dicom_study_instance_uid) {
+    return `Study …${String(meta.dicom_study_instance_uid).slice(-8)}`;
+  }
+  return "Imaging upload";
+}
+
+function imagingUsedInAnalysis(docId, { citedIds, visionSliceIds } = {}) {
+  if (visionSliceIds?.has(docId)) return true;
+  if (citedIds?.has(docId)) return true;
+  return false;
+}
+
+function buildScopeDisplayEntries(docIds, { citedIds = null } = {}) {
+  const cited = citedIds ?? getCitedDocumentIds();
+  const visionSliceIds = collectVisionAnalysisSliceIds();
+  const context = { citedIds: cited, visionSliceIds };
   const ordered = orderedDocsFromIds(docIds);
-  const shown = limit ? ordered.slice(0, limit) : ordered;
-  const more = limit && ordered.length > limit ? ordered.length - limit : 0;
-  const items = shown
-    .map((doc) => {
-      const title = escapeHtml(truncate(documentDisplayTitle(doc), 72));
-      const type = escapeHtml(libraryTypeLabel(doc.source_type));
-      const badges = showInclusionBadges ? renderDocInclusionBadges(doc.id) : "";
-      return `<li class="scope-doc-item">
-        <span class="scope-doc-item-main"><span class="badge badge-sm">${type}</span> <strong>${title}</strong></span>
-        ${badges ? `<span class="scope-doc-item-badges">${badges}</span>` : ""}
-      </li>`;
-    })
-    .join("");
+  const folderBuckets = new Map();
+
+  ordered.forEach((doc) => {
+    if (doc.source_type !== "imaging") return;
+    if (imagingUsedInAnalysis(doc.id, context)) return;
+    const key = imagingFolderName(doc);
+    if (!folderBuckets.has(key)) {
+      folderBuckets.set(key, { folderName: key, docs: [] });
+    }
+    folderBuckets.get(key).docs.push(doc);
+  });
+
+  const emittedFolders = new Set();
+  const entries = [];
+  ordered.forEach((doc) => {
+    if (doc.source_type === "imaging" && !imagingUsedInAnalysis(doc.id, context)) {
+      const key = imagingFolderName(doc);
+      if (emittedFolders.has(key)) return;
+      emittedFolders.add(key);
+      const bucket = folderBuckets.get(key);
+      entries.push({
+        kind: "imaging-folder",
+        folderName: bucket.folderName,
+        count: bucket.docs.length,
+        docIds: bucket.docs.map((item) => item.id),
+      });
+      return;
+    }
+    entries.push({ kind: "doc", doc });
+  });
+  return entries;
+}
+
+function renderScopeFolderInclusionBadges(docIds) {
+  const seen = new Set();
+  const parts = [];
+  docIds.forEach((docId) => {
+    const html = renderDocInclusionBadges(docId);
+    if (html && !seen.has(html)) {
+      seen.add(html);
+      parts.push(html);
+    }
+  });
+  return parts.join("");
+}
+
+function renderScopeDisplayEntry(entry, { showInclusionBadges = false } = {}) {
+  if (entry.kind === "imaging-folder") {
+    const type = escapeHtml(libraryTypeLabel("imaging"));
+    const title = escapeHtml(truncate(entry.folderName, 72));
+    const countLabel = `${entry.count} slice${entry.count === 1 ? "" : "s"}`;
+    const badges =
+      showInclusionBadges && entry.docIds?.length
+        ? renderScopeFolderInclusionBadges(entry.docIds)
+        : "";
+    return `<li class="scope-doc-item scope-doc-folder">
+      <span class="scope-doc-item-main"><span class="badge badge-sm">${type}</span> <strong>${title}</strong> <span class="muted small">(${countLabel})</span></span>
+      ${badges ? `<span class="scope-doc-item-badges">${badges}</span>` : ""}
+    </li>`;
+  }
+
+  const doc = entry.doc;
+  const title = escapeHtml(truncate(documentDisplayTitle(doc), 72));
+  const type = escapeHtml(libraryTypeLabel(doc.source_type));
+  const badges = showInclusionBadges ? renderDocInclusionBadges(doc.id) : "";
+  return `<li class="scope-doc-item">
+    <span class="scope-doc-item-main"><span class="badge badge-sm">${type}</span> <strong>${title}</strong></span>
+    ${badges ? `<span class="scope-doc-item-badges">${badges}</span>` : ""}
+  </li>`;
+}
+
+function renderScopeDocumentListItems(docIds, { showInclusionBadges = false, limit = null } = {}) {
+  const entries = buildScopeDisplayEntries(docIds);
+  const shown = limit ? entries.slice(0, limit) : entries;
+  const more = limit && entries.length > limit ? entries.length - limit : 0;
+  const items = shown.map((entry) => renderScopeDisplayEntry(entry, { showInclusionBadges })).join("");
   return `${items}${more ? `<li class="muted small scope-doc-more">…and ${more} more</li>` : ""}`;
 }
 
@@ -1833,7 +1931,7 @@ function renderSidebarScopeSection() {
         <h4>In this assessment (${count})</h4>
         <button type="button" class="btn ghost btn-sm" id="btn-view-assessment-scope">Adjust</button>
       </div>
-      <p class="sidebar-panel-note muted small">Library records sent to the LLM for this summary.</p>
+      <p class="sidebar-panel-note muted small">Library records sent to the LLM for this summary. Imaging folders are summarized; individual slices appear when used in vision analysis or cited in text.</p>
       <ul class="scope-doc-list scope-doc-list-compact">${listHtml}</ul>
       ${pendingHtml}
     </section>`;
@@ -1977,7 +2075,6 @@ function renderAssessmentScopeCard() {
     const nextList = next.count
       ? `<ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(nextIds, {
           showInclusionBadges: true,
-          limit: usingAll && next.count > 12 ? 12 : null,
         })}</ul>`
       : "";
     nextEl.innerHTML = `
@@ -2019,8 +2116,12 @@ function renderAssessmentScopeCard() {
     }
   }
   if (hasAssessment && usingAll && total > 20) {
+    const imagingCount = state.libraryCounts?.imaging || next.byType?.imaging || 0;
+    const imagingNote = imagingCount
+      ? ` (${imagingCount} imaging slices grouped by upload folder in the list below)`
+      : "";
     warnings.push(
-      `All ${total} library items will be sent. Large imaging-only files may add little text — prefer selecting PDFs and clinical reports when possible.`
+      `All ${total} library items will be sent${imagingNote}. Large imaging-only files may add little text — prefer selecting PDFs and clinical reports when possible.`
     );
   }
 
