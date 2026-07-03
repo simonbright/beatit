@@ -1082,8 +1082,119 @@ textarea { resize: vertical; min-height: 100px; }
 
 .assessment-scope-doc-list {
   margin: 0.35rem 0 0;
-  padding-left: 1.1rem;
+  padding-left: 0;
+  list-style: none;
+}
+
+.scope-doc-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.scope-doc-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
   font-size: 0.88rem;
+}
+
+.scope-doc-item-main {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.scope-doc-item-badges,
+.doc-inclusion-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.doc-inclusion-badges {
+  margin: 0.35rem 0 0.15rem 1.85rem;
+}
+
+.doc-status-badge {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.doc-status-in-assessment {
+  color: #0369a1;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+}
+
+.doc-status-cited {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.1);
+  border: 1px solid rgba(124, 58, 237, 0.28);
+}
+
+.doc-status-selected {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.doc-status-excluded {
+  color: var(--muted);
+  background: var(--surface-solid);
+  border: 1px dashed var(--border);
+}
+
+.assessment-included-docs {
+  margin-top: 0.85rem;
+}
+
+.assessment-included-title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.assessment-included-note {
+  margin: 0.35rem 0 0;
+}
+
+.assessment-pending-scope {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px dashed var(--border);
+}
+
+.assessment-pending-heading {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.source-card-unknown-title {
+  color: #92400e;
+}
+
+.badge-sm {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
 }
 
 .assessment-scope-warning {
@@ -1154,6 +1265,119 @@ textarea { resize: vertical; min-height: 100px; }
 .imaging-workflow-summary {
   margin: 0.65rem 0 0;
   line-height: 1.45;
+}
+
+.imaging-analysis-card {
+  margin-bottom: 1rem;
+}
+
+.imaging-analysis-intro {
+  margin: 0.35rem 0 1rem;
+}
+
+.imaging-analysis-steps {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.imaging-analysis-step {
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.imaging-analysis-step:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.imaging-analysis-step h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
+}
+
+.imaging-slice-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.imaging-slice-picker {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.65rem;
+  background: var(--surface-2);
+}
+
+.imaging-slice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.imaging-slice-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.imaging-slice-picker-note {
+  margin: 0 0 0.5rem;
+}
+
+.imaging-vision-reports-list {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.65rem;
+}
+
+.imaging-report-item {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.imaging-report-item.imaging-report-pending {
+  border-style: dashed;
+}
+
+.imaging-report-heading {
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.imaging-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.btn-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.btn-link:hover {
+  color: var(--accent-2);
+}
+
+.imaging-slice-warn {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .imaging-filter-actions {
@@ -1255,7 +1479,7 @@ textarea { resize: vertical; min-height: 100px; }
 
 .answer-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: 1rem;
   align-items: start;
 }
@@ -1332,6 +1556,80 @@ textarea { resize: vertical; min-height: 100px; }
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.sources-sidebar-inner {
+  overflow-y: auto;
+  padding: 0.35rem 0 0.5rem;
+}
+
+.sidebar-panel {
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-panel:last-child {
+  border-bottom: none;
+}
+
+.sidebar-panel h4 {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.sidebar-panel-header {
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.sidebar-panel-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.sidebar-subheading {
+  margin: 0.65rem 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidebar-pending-scope {
+  margin-top: 0.35rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed var(--border);
+}
+
+.scope-doc-list-compact {
+  gap: 0.35rem;
+}
+
+.scope-doc-list-compact .scope-doc-item {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+.scope-doc-list-compact .doc-status-badge {
+  font-size: 0.68rem;
+}
+
+.executive-summary-notice {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.executive-summary-notice.warn {
+  border-color: color-mix(in srgb, var(--warning, #c89200) 35%, var(--border));
+  background: color-mix(in srgb, var(--warning, #c89200) 10%, transparent);
 }
 
 .sources-sidebar-header {

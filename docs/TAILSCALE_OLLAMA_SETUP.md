@@ -90,7 +90,10 @@ ollama pull qwen2.5:7b-instruct
 # Optional: faster/smaller for quick summaries
 ollama pull llama3.2:3b
 
-# Optional later: vision for selected CT slices (slow on CPU — use sparingly)
+# Vision for Imaging tab (recommended — works without mllama)
+ollama pull moondream
+
+# Optional heavier alternative if your Ollama build supports mllama:
 # ollama pull llama3.2-vision:11b
 ```
 
@@ -131,6 +134,7 @@ LLM_PROVIDER=auto
 # Tailscale VM
 OLLAMA_BASE_URL=http://100.92.208.65:11434
 OLLAMA_MODEL=qwen2.5:7b-instruct
+OLLAMA_VISION_MODEL=moondream
 
 # Fallback when VM is off (and for comparison)
 OPENROUTER_API_KEY=sk-or-v1-...
@@ -182,7 +186,7 @@ The VM is **not** reachable from Render unless you add Tailscale to Render (adva
 
 ## Next (this branch)
 
-- [ ] Vision API for selected DICOM slices → `llama3.2-vision` on same VM  
+- [x] Vision API for selected DICOM slices → `moondream` on same VM  
 - [ ] Settings UI: show Ollama URL + available models from `/api/tags`  
 - [ ] Optional: bump VM RAM on host if imaging workloads grow  
 

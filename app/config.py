@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
-    ollama_vision_model: str = "llama3.2-vision:11b"
+    ollama_vision_model: str = "moondream"
     # Seconds to wait for an Ollama generation. CPU-only models can be slow,
     # so default generously (30 min). Tune via OLLAMA_GENERATE_TIMEOUT.
     ollama_generate_timeout: float = 1800.0

@@ -42,6 +42,25 @@ def _paren_to_source_tag(match: re.Match, titles: list[str]) -> str:
     return match.group(0)
 
 
+def wrap_bare_source_tags(text: str) -> str:
+    """Convert legacy SOURCE: lines missing brackets into [SOURCE: …] tags."""
+    if not text:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        if inner.lower().startswith("source:"):
+            return match.group(0)
+        return f"[SOURCE: {inner}]"
+
+    return re.sub(
+        r"(?<!\[)\bSOURCE:\s*((?:Document\s+\"[^\"]+\"|Unknown[^\n\[]*|Web[^\n\[]*))\s*(?!\])",
+        repl,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def canonicalize_unknown_tags(text: str) -> str:
     if not text:
         return text
@@ -123,6 +142,7 @@ def enrich_with_sources(
     if not text:
         return text, "missing"
 
+    text = wrap_bare_source_tags(text)
     text = canonicalize_unknown_tags(text)
 
     if has_source_tags(text):

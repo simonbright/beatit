@@ -10,7 +10,7 @@ from app.services.openrouter_models import (
     DEPRECATED_OPENROUTER_MODELS,
 )
 from app.services.patient_context import DEFAULT_PATIENT_CONTEXT
-from app.services.assessment_parse import parse_assessment
+from app.services.assessment_parse import ensure_executive_summary, parse_assessment
 from app.services.source_catalog import SourceCatalog
 from app.services.source_references import build_reference_bundle
 from app.services.source_normalize import enrich_with_sources
@@ -863,7 +863,8 @@ class Database:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT id, title, source_type, source_uri, citation_display_name, created_at
+                SELECT id, title, source_type, source_uri, citation_display_name,
+                       metadata_json, created_at
                 FROM documents
                 ORDER BY created_at DESC
                 """
@@ -876,6 +877,7 @@ class Database:
                 "source_type": row["source_type"],
                 "source_uri": row["source_uri"],
                 "citation_display_name": row["citation_display_name"],
+                "metadata": json.loads(row["metadata_json"] or "{}"),
                 "created_at": row["created_at"],
             }
             for row in rows
@@ -1267,11 +1269,15 @@ class Database:
             )
 
         titles = await self._document_titles_for_ids(analysis["document_ids"])
+        summary_seed = ensure_executive_summary(
+            {"executive_summary": analysis.get("executive_summary") or ""},
+            analysis.get("response") or "",
+        )
         response, level = enrich_with_sources(
             filter_palliative_content(analysis["response"]), titles, annotate_staging=True
         )
         summary, _ = enrich_with_sources(
-            filter_palliative_content(analysis["executive_summary"]),
+            filter_palliative_content(summary_seed),
             titles,
             annotate_staging=False,
         )

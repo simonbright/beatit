@@ -368,9 +368,10 @@ function updateLlmStatusDisplay(data, pill, settingsConn) {
   if (active.ready) {
     if (pill) pill.classList.add("hidden");
     if (settingsConn) {
+      const ollama = llm.ollama || {};
       const via =
         active.provider === "ollama"
-          ? `Ollama VM · ${active.model || llm.ollama?.configured_model || "model"}`
+          ? `Ollama VM · text: ${active.model || ollama.configured_model || "model"} · vision: ${ollama.configured_vision_model || state.settings?.ollama_vision_model || "—"}`
           : `OpenRouter · ${active.model || model}`;
       const mode =
         provider === "auto" && active.provider === "ollama"
@@ -436,13 +437,18 @@ function renderSettingsOllamaInfo(settings, llmHealth) {
     return;
   }
   const base = settings?.ollama_base_url || "—";
-  const model = settings?.ollama_model || "—";
+  const textModel = settings?.ollama_model || "—";
+  const visionModel = settings?.ollama_vision_model || "—";
   const ollama = llmHealth?.ollama || {};
   const models = (ollama.available_models || []).slice(0, 8);
   const modelList = models.length ? models.join(", ") : "none reported";
+  const textOk = ollama.model_available ? "available" : "missing on VM";
+  const visionOk = ollama.vision_model_available ? "available" : "missing on VM";
   el.classList.remove("hidden");
   el.innerHTML = `
-    <p><strong>Provider:</strong> ${escapeHtml(provider)} · <strong>Ollama URL:</strong> ${escapeHtml(base)} · <strong>Model:</strong> ${escapeHtml(model)}</p>
+    <p><strong>Provider:</strong> ${escapeHtml(provider)} · <strong>Ollama URL:</strong> ${escapeHtml(base)}</p>
+    <p><strong>Text model</strong> (Home baseline &amp; custom tasks): ${escapeHtml(textModel)} · ${escapeHtml(textOk)}</p>
+    <p><strong>Vision model</strong> (Imaging tab): ${escapeHtml(visionModel)} · ${escapeHtml(visionOk)}</p>
     <p>VM models: ${escapeHtml(modelList)}${(ollama.available_models || []).length > 8 ? " …" : ""}</p>
     <p>Setup guide: <code>docs/TAILSCALE_OLLAMA_SETUP.md</code> · test: <code>./scripts/check_ollama.sh</code></p>`;
 }
@@ -874,6 +880,7 @@ function switchTab(name, options = {}) {
   if (name === "library" && !options.skipLibraryLoad) {
     loadDocuments().catch((e) => toast(e.message, "error"));
   }
+  if (name === "imaging") loadImagingPanel();
   if (name === "history") loadHistory();
   if (name === "analyze") loadLatestAssessment();
   if (name === "custom-tasks") loadCustomTasks();
@@ -1466,7 +1473,12 @@ async function loadSettings() {
   const current = $("#settings-current");
   if (current) {
     const modelId = state.settings.openrouter_model || data.default_model;
-    current.textContent = `Selected model: ${modelId}`;
+    const provider = state.settings.llm_provider || "openrouter";
+    if (provider === "auto") {
+      current.textContent = `OpenRouter fallback model: ${modelId}`;
+    } else {
+      current.textContent = `Selected model: ${modelId}`;
+    }
   }
 
   const llmHealth = data.llm;
@@ -1604,6 +1616,7 @@ const VALID_TABS = new Set([
   "custom-tasks",
   "ingest",
   "library",
+  "imaging",
   "history",
   "howto",
   "settings",
@@ -1715,6 +1728,221 @@ function scopeSummaryFromIds(ids) {
   return { count: ids.length, byType, docs };
 }
 
+function documentDisplayTitle(doc) {
+  if (!doc) return "Unknown document";
+  return doc.source_info?.display_name || doc.citation_display_name || doc.title || "Untitled";
+}
+
+function getCitedDocumentIds() {
+  const cited = new Set();
+  const refs = state.latestAnalysis?.references || [];
+  refs.forEach((ref) => {
+    if (ref.document_id) cited.add(ref.document_id);
+  });
+  return cited;
+}
+
+function getAssessmentInclusion(docId) {
+  const lastIds = new Set(state.latestAnalysis?.document_ids || []);
+  const citedIds = getCitedDocumentIds();
+  const nextIds = new Set(plannedAssessmentIds());
+  const explicitSelection = state.selectedIds.size > 0;
+  return {
+    inLastAssessment: lastIds.has(docId),
+    citedInAssessment: citedIds.has(docId),
+    inNextScope: nextIds.has(docId),
+    explicitSelection,
+  };
+}
+
+function renderDocInclusionBadges(docId) {
+  const inc = getAssessmentInclusion(docId);
+  const badges = [];
+  if (inc.inLastAssessment) {
+    badges.push(
+      '<span class="doc-status-badge doc-status-in-assessment" title="Included in the current executive summary">In assessment</span>'
+    );
+  }
+  if (inc.citedInAssessment) {
+    badges.push(
+      '<span class="doc-status-badge doc-status-cited" title="Cited inline in the assessment text">Cited</span>'
+    );
+  }
+  if (inc.explicitSelection && inc.inNextScope && !inc.inLastAssessment) {
+    badges.push(
+      '<span class="doc-status-badge doc-status-selected" title="Selected for the next baseline run">Selected — pending run</span>'
+    );
+  } else if (inc.explicitSelection && inc.inNextScope) {
+    badges.push(
+      '<span class="doc-status-badge doc-status-selected" title="Selected for the next baseline run">Selected for next run</span>'
+    );
+  } else if (inc.explicitSelection && !inc.inNextScope) {
+    badges.push(
+      '<span class="doc-status-badge doc-status-excluded" title="Excluded from the next baseline run">Excluded</span>'
+    );
+  }
+  return badges.join("");
+}
+
+function orderedDocsFromIds(ids) {
+  const byId = new Map(state.documentIndex.map((doc) => [doc.id, doc]));
+  return ids
+    .map((id) => byId.get(id) || findDocumentById(id))
+    .filter(Boolean);
+}
+
+function renderScopeDocumentListItems(docIds, { showInclusionBadges = false, limit = null } = {}) {
+  const ordered = orderedDocsFromIds(docIds);
+  const shown = limit ? ordered.slice(0, limit) : ordered;
+  const more = limit && ordered.length > limit ? ordered.length - limit : 0;
+  const items = shown
+    .map((doc) => {
+      const title = escapeHtml(truncate(documentDisplayTitle(doc), 72));
+      const type = escapeHtml(libraryTypeLabel(doc.source_type));
+      const badges = showInclusionBadges ? renderDocInclusionBadges(doc.id) : "";
+      return `<li class="scope-doc-item">
+        <span class="scope-doc-item-main"><span class="badge badge-sm">${type}</span> <strong>${title}</strong></span>
+        ${badges ? `<span class="scope-doc-item-badges">${badges}</span>` : ""}
+      </li>`;
+    })
+    .join("");
+  return `${items}${more ? `<li class="muted small scope-doc-more">…and ${more} more</li>` : ""}`;
+}
+
+function renderSidebarScopeSection() {
+  const analysis = state.latestAnalysis;
+  if (!analysis?.document_ids?.length) return "";
+
+  const count = analysis.document_ids.length;
+  const listHtml = renderScopeDocumentListItems(analysis.document_ids, { showInclusionBadges: true });
+  const nextIds = plannedAssessmentIds();
+  const lastSet = new Set(analysis.document_ids);
+  const pendingIds = nextIds.filter((id) => !lastSet.has(id));
+  const pendingHtml = pendingIds.length
+    ? `<div class="sidebar-pending-scope">
+        <p class="sidebar-subheading">Pending next run</p>
+        <ul class="scope-doc-list scope-doc-list-compact">${renderScopeDocumentListItems(pendingIds, {
+          showInclusionBadges: true,
+        })}</ul>
+      </div>`
+    : "";
+
+  return `
+    <section class="sidebar-panel sidebar-scope-panel">
+      <div class="sidebar-panel-header row-between wrap">
+        <h4>In this assessment (${count})</h4>
+        <button type="button" class="btn ghost btn-sm" id="btn-view-assessment-scope">Adjust</button>
+      </div>
+      <p class="sidebar-panel-note muted small">Library records sent to the LLM for this summary.</p>
+      <ul class="scope-doc-list scope-doc-list-compact">${listHtml}</ul>
+      ${pendingHtml}
+    </section>`;
+}
+
+function renderSidebarCitationsSection(appendix, idPrefix) {
+  const enriched = sortSourcesForSidebar(enrichReferenceList(appendix));
+  if (!enriched.length) {
+    return `
+      <section class="sidebar-panel sidebar-citations-panel">
+        <h4>Cited in text (0)</h4>
+        <p class="sidebar-panel-note muted small">No inline citations in the assessment text yet. Documents above may still have been included in scope.</p>
+      </section>`;
+  }
+
+  const count = enriched.length;
+  const hasMore = count > SOURCES_SIDEBAR_PREVIEW;
+  const cards = enriched
+    .map((ref, index) =>
+      renderSourceSidebarCard(ref, idPrefix, {
+        collapsed: hasMore && index >= SOURCES_SIDEBAR_PREVIEW,
+      })
+    )
+    .join("");
+
+  return `
+    <section class="sidebar-panel sidebar-citations-panel">
+      <h4>Cited in text (${count})</h4>
+      <p class="sidebar-panel-note muted small">Inline tags from the assessment — often fewer than documents in scope.</p>
+      <div class="sources-sidebar-list">${cards}</div>
+      ${
+        hasMore
+          ? `<button type="button" class="btn ghost sources-show-all" data-action="expand-sources">Show all citations</button>`
+          : ""
+      }
+    </section>`;
+}
+
+function renderHomeResultsSidebar(analysis) {
+  const wrap = $("#home-sources-sidebar");
+  const inner = $("#home-sources-sidebar-inner");
+  if (!wrap || !inner) return;
+
+  if (!analysis) {
+    wrap.classList.add("hidden");
+    inner.innerHTML = "";
+    return;
+  }
+
+  const scopeHtml = renderSidebarScopeSection();
+  const citationsHtml = renderSidebarCitationsSection(analysis.references || [], analysis.id);
+  if (!scopeHtml && !citationsHtml) {
+    wrap.classList.add("hidden");
+    inner.innerHTML = "";
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+  wrap.classList.remove("is-expanded");
+  inner.innerHTML = `${scopeHtml}${citationsHtml}`;
+}
+
+function substantiveSummaryLength(text) {
+  if (!text) return 0;
+  return String(text)
+    .replace(/\[SOURCE:\s*[^\]]+\]/gi, "")
+    .replace(/SOURCE:\s*Document\s+"[^"]+"/gi, "")
+    .replace(/\[(\d+)\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim().length;
+}
+
+function effectiveExecutiveSummaryDisplay(analysis) {
+  const summary = analysis.executive_summary_display || analysis.executive_summary || "";
+  const response = analysis.response_display || analysis.response || "";
+  if (substantiveSummaryLength(summary) >= 80) return { text: summary, usedFallback: false };
+  if (substantiveSummaryLength(response) > substantiveSummaryLength(summary)) {
+    return { text: response, usedFallback: true };
+  }
+  return { text: summary, usedFallback: false };
+}
+
+function renderExecutiveSummaryNotice(analysis, usedFallback) {
+  const el = $("#executive-summary-notice");
+  if (!el) return;
+  if (!analysis) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  const summary = analysis.executive_summary_display || analysis.executive_summary || "";
+  if (usedFallback) {
+    el.classList.remove("hidden");
+    el.className = "executive-summary-notice warn";
+    el.innerHTML =
+      '<span class="notice-title">Summary was too short.</span> Showing content from the full assessment below. Re-run baseline to regenerate a proper executive summary.';
+    return;
+  }
+  if (substantiveSummaryLength(summary) < 80 && substantiveSummaryLength(analysis.response || "") >= 80) {
+    el.classList.remove("hidden");
+    el.className = "executive-summary-notice warn";
+    el.innerHTML =
+      '<span class="notice-title">Summary looks incomplete.</span> Expand <strong>Full assessment</strong> below or re-run baseline for a fuller summary.';
+    return;
+  }
+  el.classList.add("hidden");
+  el.innerHTML = "";
+}
+
 function formatScopeBreakdown(byType) {
   return Object.entries(byType)
     .sort((a, b) => libraryTypeLabel(a[0]).localeCompare(libraryTypeLabel(b[0])))
@@ -1746,10 +1974,17 @@ function renderAssessmentScopeCard() {
   if (nextEl) {
     const mode = usingAll ? "All stored documents" : `${next.count} selected documents`;
     const breakdown = formatScopeBreakdown(next.byType);
+    const nextList = next.count
+      ? `<ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(nextIds, {
+          showInclusionBadges: true,
+          limit: usingAll && next.count > 12 ? 12 : null,
+        })}</ul>`
+      : "";
     nextEl.innerHTML = `
       <p class="assessment-scope-heading">Next assessment</p>
       <p class="assessment-scope-value"><strong>${escapeHtml(mode)}</strong>${total ? ` <span class="muted">(${total} in library)</span>` : ""}</p>
       ${breakdown ? `<p class="muted small">${escapeHtml(breakdown)}</p>` : ""}
+      ${nextList}
       ${!usingAll && next.count < total ? `<p class="muted small">Unselected documents will not be sent to the LLM.</p>` : ""}`;
   }
 
@@ -1757,17 +1992,12 @@ function renderAssessmentScopeCard() {
     if (last && hasAssessment) {
       lastEl.classList.remove("hidden");
       const breakdown = formatScopeBreakdown(last.byType);
-      const sampleTitles = last.docs.slice(0, 5).map((doc) => escapeHtml(truncate(doc.title, 60)));
-      const more =
-        last.docs.length > 5
-          ? `<li class="muted small">…and ${last.docs.length - 5} more</li>`
-          : "";
       lastEl.innerHTML = `
         <p class="assessment-scope-heading">Last assessment used</p>
         <p class="assessment-scope-value"><strong>${last.count} document${last.count === 1 ? "" : "s"}</strong> · ${escapeHtml(formatTimestamp(state.latestAnalysis.created_at))}</p>
         ${breakdown ? `<p class="muted small">${escapeHtml(breakdown)}</p>` : ""}
         ${state.latestAnalysis.assessment_guidance ? `<p class="muted small assessment-scope-guidance-note"><strong>Guidance:</strong> ${escapeHtml(truncate(state.latestAnalysis.assessment_guidance, 240))}</p>` : ""}
-        ${sampleTitles.length ? `<ul class="assessment-scope-doc-list">${sampleTitles.map((t) => `<li>${t}</li>`).join("")}${more}</ul>` : ""}`;
+        <ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(lastIds, { showInclusionBadges: true })}</ul>`;
     } else {
       lastEl.classList.add("hidden");
       lastEl.innerHTML = "";
@@ -1813,6 +2043,8 @@ function renderAssessmentScopeCard() {
     baselineBtn.textContent = reassessLabel;
     baselineBtn.disabled = state.analysisRunning || !total;
   }
+
+  renderHomeResultsSidebar(state.latestAnalysis);
 }
 
 function applyLastAssessmentScope() {
@@ -1991,15 +2223,22 @@ function renderLibrarySelectionControls() {
   const total = state.documentIndex.length || Object.values(counts).reduce((a, b) => a + b, 0);
 
   if (summary) {
+    let line = "";
     if (!total) {
-      summary.textContent = "No documents stored yet.";
+      line = "No documents stored yet.";
     } else if (selected === 0) {
-      summary.textContent = `No selection — assessments use all ${total} document${total === 1 ? "" : "s"}.`;
+      line = `No selection — assessments use all ${total} document${total === 1 ? "" : "s"}.`;
     } else if (selected === total) {
-      summary.textContent = `All ${selected} documents selected for assessment.`;
+      line = `All ${selected} documents selected for assessment.`;
     } else {
-      summary.textContent = `${selected} of ${total} selected for assessment.`;
+      line = `${selected} of ${total} selected for assessment.`;
     }
+    if (total && state.latestAnalysis) {
+      line += " Badges show in-assessment, cited, and next-run status.";
+    } else if (total && selected > 0) {
+      line += " Selected items show a pending badge until you re-run baseline.";
+    }
+    summary.textContent = line;
   }
 
   if (selectShownBtn) {
@@ -2068,6 +2307,7 @@ function renderDocuments() {
         ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}" title="${escapeHtml(info.type_display || "")}">${escapeHtml(info.shorthand)}</span>`
         : "";
       const displayName = info.display_name || doc.title;
+      const inclusionBadges = renderDocInclusionBadges(doc.id);
       return `
         <article class="doc-item ${selected ? "selected" : ""}" data-id="${doc.id}">
           <div class="doc-item-heading">
@@ -2077,6 +2317,7 @@ function renderDocuments() {
             ${sourceBadge}
             <strong>${escapeHtml(displayName)}</strong>
           </div>
+          ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
           ${displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
           <div class="doc-meta">
             <span class="badge">${escapeHtml(doc.source_type)}</span>
@@ -2138,10 +2379,165 @@ function renderLibraryPagination() {
 }
 
 function updateImagingFilterVisibility() {
-  const card = $("#imaging-filter-card");
+  const libraryHint = $("#imaging-filter-card");
   const count = state.libraryCounts?.imaging || 0;
-  if (!card) return;
-  card.classList.toggle("hidden", count === 0);
+  if (libraryHint) {
+    libraryHint.classList.toggle("hidden", count === 0);
+  }
+}
+
+function isVisionReportDocument(doc) {
+  if (!doc) return false;
+  if (doc.metadata?.vision_read) return true;
+  return String(doc.title || "").startsWith("Vision read —");
+}
+
+function listVisionReportDocuments() {
+  return state.documentIndex
+    .filter((doc) => isVisionReportDocument(doc))
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
+function isExplicitAssessmentSelection() {
+  return state.selectedIds.size > 0;
+}
+
+function isDocumentInNextAssessmentScope(docId) {
+  if (!isExplicitAssessmentSelection()) return true;
+  return state.selectedIds.has(docId);
+}
+
+function setVisionReportPendingInclusion(docId) {
+  const known = existingDocumentIdSet();
+  const lastIds = (state.latestAnalysis?.document_ids || []).filter((id) => known.has(id));
+  if (lastIds.length) {
+    state.selectedIds = new Set(lastIds.filter((id) => id !== docId));
+  } else if (isExplicitAssessmentSelection()) {
+    state.selectedIds.delete(docId);
+  } else {
+    state.selectedIds = new Set(
+      state.documentIndex.map((doc) => doc.id).filter((id) => id !== docId)
+    );
+  }
+  saveSelectionToSession();
+}
+
+function includeDocumentInOverallAssessment(docId) {
+  if (!existingDocumentIdSet().has(docId)) {
+    return toast("Document not found", "error");
+  }
+  if (!isExplicitAssessmentSelection()) {
+    applyScopeFromLastAssessmentPlus([docId]);
+  } else {
+    state.selectedIds.add(docId);
+    saveSelectionToSession();
+  }
+  updateSelectedLabel();
+  renderVisionReportsPanel();
+  renderAssessmentScopeCard();
+  renderHomeResultsSidebar(state.latestAnalysis);
+  if (state.documents.length) renderDocuments();
+  toast("Included in overall assessment scope");
+}
+
+function excludeDocumentFromOverallAssessment(docId) {
+  setVisionReportPendingInclusion(docId);
+  updateSelectedLabel();
+  renderVisionReportsPanel();
+  renderAssessmentScopeCard();
+  renderHomeResultsSidebar(state.latestAnalysis);
+  if (state.documents.length) renderDocuments();
+  toast("Excluded from overall assessment scope");
+}
+
+function renderVisionReportsPanel() {
+  const list = $("#imaging-vision-reports-list");
+  if (!list) return;
+  const reports = listVisionReportDocuments();
+  if (!reports.length) {
+    list.innerHTML = "<p class=\"muted\">No imaging analysis reports yet. Run step 2 above.</p>";
+    return;
+  }
+
+  list.innerHTML = reports
+    .map((doc) => {
+      const meta = doc.metadata || {};
+      const sliceCount = meta.vision_source_slice_ids?.length || meta.slice_count || "?";
+      const included = isDocumentInNextAssessmentScope(doc.id);
+      const inLast = getAssessmentInclusion(doc.id).inLastAssessment;
+      const statusClass = included ? "imaging-report-included" : "imaging-report-pending";
+      const statusLabel = included
+        ? inLast
+          ? "In current assessment"
+          : "Included for next run"
+        : "Not in overall assessment";
+      return `
+        <article class="imaging-report-item ${statusClass}" data-id="${doc.id}">
+          <div class="imaging-report-heading row-between wrap">
+            <strong>${escapeHtml(doc.title)}</strong>
+            <span class="doc-status-badge ${included ? "doc-status-selected" : "doc-status-excluded"}">${escapeHtml(statusLabel)}</span>
+          </div>
+          <p class="muted small">${sliceCount} slice${sliceCount === 1 ? "" : "s"} · ${formatDate(doc.created_at)}${meta.vision_model ? ` · ${escapeHtml(meta.vision_model)}` : ""}</p>
+          <div class="imaging-report-actions">
+            <button type="button" class="btn ghost btn-sm btn-view" data-id="${doc.id}">View report</button>
+            ${
+              included
+                ? `<button type="button" class="btn ghost btn-sm btn-imaging-exclude" data-id="${doc.id}">Exclude from overall assessment</button>`
+                : `<button type="button" class="btn secondary btn-sm btn-imaging-include" data-id="${doc.id}">Include in overall assessment</button>`
+            }
+          </div>
+        </article>`;
+    })
+    .join("");
+}
+
+function renderImagingSlicePicker() {
+  const el = $("#imaging-slice-picker");
+  if (!el) return;
+  const match = state.imagingMatch;
+  const preview = match?.preview || [];
+  const selected = new Set(imagingWorkflowIds());
+
+  if (!preview.length) {
+    el.innerHTML = '<p class="muted">Set filters to choose slices.</p>';
+    return;
+  }
+
+  const total = match?.total || preview.length;
+  const header =
+    total > preview.length
+      ? `<p class="imaging-slice-picker-note">Showing ${preview.length} of ${total} matches — use Sample 3 evenly for a spread across the full set.</p>`
+      : "";
+
+  el.innerHTML = `${header}<ul class="imaging-slice-list">${preview
+    .map((row) => {
+      const id = row.id;
+      const checked = selected.has(id) ? " checked" : "";
+      const disabled =
+        !checked && selected.size >= IMAGING_VISION_SLICE_LIMIT ? " disabled" : "";
+      const label = escapeHtml(row.title || row.id);
+      const meta = [row.anatomy_level, row.series_kind, row.convolution_kernel]
+        .filter(Boolean)
+        .map((part) => escapeHtml(part))
+        .join(" · ");
+      const nonDiagnostic =
+        row.series_kind && NON_DIAGNOSTIC_SERIES_KINDS.has(row.series_kind)
+          ? ' <span class="imaging-slice-warn">(poor for AI read)</span>'
+          : "";
+      return `<li><label class="imaging-slice-option"><input type="checkbox" class="imaging-slice-check" data-id="${escapeHtml(id)}"${checked}${disabled}><span><strong>${label}</strong>${meta ? `<span class="muted"> · ${meta}</span>` : ""}${nonDiagnostic}</span></label></li>`;
+    })
+    .join("")}</ul>`;
+}
+
+async function loadImagingPanel() {
+  await loadDocumentIndex();
+  await loadImagingFacets();
+  if (Object.keys(state.imagingFilters || {}).length) {
+    await refreshImagingMatch();
+  }
+  renderImagingSlicePicker();
+  renderImagingWorkflowSummary();
+  renderVisionReportsPanel();
 }
 
 function imagingWorkflowIds() {
@@ -2153,36 +2549,80 @@ function setImagingWorkflowIds(ids) {
   renderImagingWorkflowSummary();
 }
 
+const NON_DIAGNOSTIC_SERIES_KINDS = new Set([
+  "Scout",
+  "Axial MIP",
+  "Coronal MIP",
+  "MIP",
+  "Dose report",
+  "Administrative",
+]);
+
+function diagnosticSliceIds(ids) {
+  if (!ids.length) return ids;
+  const preview = state.imagingMatch?.preview || [];
+  const kindById = new Map(preview.map((row) => [row.id, row.series_kind]));
+  const filtered = ids.filter((id) => {
+    const kind = kindById.get(id);
+    return !kind || !NON_DIAGNOSTIC_SERIES_KINDS.has(kind);
+  });
+  return filtered.length ? filtered : ids;
+}
+
 function sampleIdsEvenly(ids, count) {
   if (!ids.length) return [];
-  const limit = Math.max(1, Math.min(count, ids.length, IMAGING_VISION_SLICE_LIMIT));
-  if (ids.length <= limit) return [...ids];
-  if (limit === 1) return [ids[Math.floor(ids.length / 2)]];
-  const step = (ids.length - 1) / (limit - 1);
+  const pool = diagnosticSliceIds(ids);
+  const limit = Math.max(1, Math.min(count, pool.length, IMAGING_VISION_SLICE_LIMIT));
+  if (pool.length <= limit) return [...pool];
+  if (limit === 1) return [pool[Math.floor(pool.length / 2)]];
+  const step = (pool.length - 1) / (limit - 1);
   const picked = new Set();
   for (let i = 0; i < limit; i += 1) {
     picked.add(Math.round(i * step));
   }
-  return [...picked].sort((a, b) => a - b).map((index) => ids[index]);
+  return [...picked].sort((a, b) => a - b).map((index) => pool[index]);
 }
 
 function renderImagingWorkflowSummary() {
   const el = $("#imaging-workflow-summary");
   if (!el) return;
   const ids = imagingWorkflowIds();
-  if (!ids.length && !state.lastVisionDocumentId) {
-    el.textContent = "Set filters above, then Analyze with vision (uses up to 3 matching slices).";
+  if (!ids.length) {
+    el.textContent = "Select slices above, or click Sample 3 evenly after filtering.";
     return;
   }
+  el.innerHTML = `<strong>${ids.length}</strong> slice${ids.length === 1 ? "" : "s"} ready for imaging analysis (max ${IMAGING_VISION_SLICE_LIMIT}).`;
+}
 
-  const parts = [];
-  if (ids.length) {
-    parts.push(`<strong>${ids.length}</strong> slice${ids.length === 1 ? "" : "s"} selected for vision.`);
+function sampleImagingSlicesEvenly() {
+  const matched = imagingMatchIds();
+  if (!matched.length) {
+    return toast("Set filters and wait for matches first", "error");
   }
-  if (state.lastVisionDocumentId) {
-    parts.push("Vision report saved — re-run baseline on Home to integrate it.");
+  setImagingWorkflowIds(sampleIdsEvenly(matched, IMAGING_VISION_SLICE_LIMIT));
+  renderImagingSlicePicker();
+  renderImagingWorkflowSummary();
+}
+
+function clearImagingSliceSelection() {
+  setImagingWorkflowIds([]);
+  renderImagingSlicePicker();
+  renderImagingWorkflowSummary();
+}
+
+function toggleImagingSliceSelection(docId, checked) {
+  const ids = new Set(imagingWorkflowIds());
+  if (checked) {
+    if (ids.size >= IMAGING_VISION_SLICE_LIMIT) {
+      return toast(`Select at most ${IMAGING_VISION_SLICE_LIMIT} slices`, "error");
+    }
+    ids.add(docId);
+  } else {
+    ids.delete(docId);
   }
-  el.innerHTML = parts.join(" ");
+  setImagingWorkflowIds([...ids]);
+  renderImagingSlicePicker();
+  renderImagingWorkflowSummary();
 }
 
 function visionTaskDetail(job) {
@@ -2201,7 +2641,7 @@ function beginVisionBackgroundTask(jobId) {
   upsertBackgroundTask({
     id: taskId,
     kind: "vision",
-    label: "CT vision analysis",
+    label: "Imaging analysis",
     startedAt: new Date(),
     detail: "Starting…",
     cancelable: true,
@@ -2269,7 +2709,7 @@ async function analyzeImagingWorkflowVision() {
 
   if (
     !confirm(
-      `Send ${ids.length} CT slice${ids.length === 1 ? "" : "s"} to the vision model?${filterNote}\n\nCreates a text report and adds it to your last assessment scope. May take several minutes.`
+      `Run imaging analysis on ${ids.length} DICOM slice${ids.length === 1 ? "" : "s"}?${filterNote}\n\nCreates a separate text report. It will NOT be added to the overall assessment until you choose to include it. May take several minutes.`
     )
   ) {
     return;
@@ -2291,30 +2731,16 @@ async function analyzeImagingWorkflowVision() {
 
     state.lastVisionDocumentId = result.document_id;
     await loadDocumentIndex();
-    const { added } = applyScopeFromLastAssessmentPlus([result.document_id]);
-    await loadDocuments({ page: 1, sourceType: state.libraryFilter || "" });
+    setVisionReportPendingInclusion(result.document_id);
+    renderVisionReportsPanel();
     renderAssessmentScopeCard();
     updateSelectedLabel();
     renderImagingWorkflowSummary();
-    switchTab("analyze");
-    scrollToAssessmentScope();
+    if (state.documents.length) renderDocuments();
 
-    const scopeNote = added
-      ? `${state.selectedIds.size} documents selected (last assessment + vision report).`
-      : `Vision report saved. ${state.selectedIds.size} document${state.selectedIds.size === 1 ? "" : "s"} selected.`;
-    toast(`Vision read complete. ${scopeNote}`);
-
-    const guidance = getAssessmentGuidanceInput();
-    const rerunMsg =
-      "Vision read saved.\n\n" +
-      `${scopeNote}\n\n` +
-      "Re-run baseline now? This will build on your current assessment and integrate the vision findings.";
-    if (!confirm(rerunMsg)) {
-      toast("Scope updated — click Re-run baseline assessment when ready.");
-      return;
-    }
-
-    await runAnalysis({ baseline: true, assessmentGuidance: guidance });
+    toast(
+      "Imaging analysis complete. Review the report below, then include it in the overall assessment when ready."
+    );
   } catch (err) {
     toast(err.message, "error");
   } finally {
@@ -2335,24 +2761,6 @@ function applyScopeFromLastAssessmentPlus(extraIds) {
   state.selectedIds = combined;
   saveSelectionToSession();
   return { added: lastIds.length > 0 };
-}
-
-function addImagingVisionReportToAssessment() {
-  const docId = state.lastVisionDocumentId;
-  if (!docId) {
-    return toast("Run Analyze with vision first to create a report", "error");
-  }
-  const { added } = applyScopeFromLastAssessmentPlus([docId]);
-  renderDocuments();
-  updateSelectedLabel();
-  renderAssessmentScopeCard();
-  toast(
-    added
-      ? `Vision report added to your last assessment's documents (${state.selectedIds.size} total)`
-      : "Vision report added to assessment scope"
-  );
-  switchTab("analyze");
-  scrollToAssessmentScope();
 }
 
 function getImagingFilterQueryParams() {
@@ -2430,7 +2838,8 @@ function renderImagingMatchSummary() {
   const filterParts = Object.entries(match.filters || {}).map(([, value]) => `${value}`);
   summary.innerHTML = `<strong>${match.total}</strong> slice${match.total === 1 ? "" : "s"} match${
     filterParts.length ? `: ${escapeHtml(filterParts.join(" · "))}` : ""
-  } · vision uses up to ${IMAGING_VISION_SLICE_LIMIT}`;
+  } · up to ${IMAGING_VISION_SLICE_LIMIT} per analysis`;
+  renderImagingSlicePicker();
 }
 
 async function loadImagingFacets() {
@@ -2465,6 +2874,7 @@ async function refreshImagingMatch() {
   const params = getImagingFilterQueryParams();
   state.imagingMatch = await api(`/api/documents/imaging/match?${params}`);
   renderImagingMatchSummary();
+  renderImagingSlicePicker();
 }
 
 function readImagingFiltersFromUi() {
@@ -2481,6 +2891,7 @@ async function onImagingFilterChange() {
   readImagingFiltersFromUi();
   state.imagingWorkflowIds = [];
   await refreshImagingMatch();
+  renderImagingSlicePicker();
   renderImagingWorkflowSummary();
 }
 
@@ -2490,6 +2901,7 @@ function clearImagingFilters() {
   state.imagingWorkflowIds = [];
   renderImagingFilterFields();
   renderImagingMatchSummary();
+  renderImagingSlicePicker();
   renderImagingWorkflowSummary();
 }
 
@@ -2520,11 +2932,20 @@ function imagingMatchIds() {
   return state.imagingMatch?.document_ids || [];
 }
 
-function scrollToImagingFilter() {
-  $("#imaging-filter-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+function scrollToImagingPanel() {
+  $("#panel-imaging")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function goToImagingPanel() {
+  switchTab("imaging");
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function goToLibraryForImagingFilter() {
+  goToImagingPanel();
+}
+
+function goToLibraryImagingType() {
   switchTab("library", { skipLibraryLoad: true });
   (async () => {
     const typeFilter = $("#library-type-filter");
@@ -2532,8 +2953,7 @@ function goToLibraryForImagingFilter() {
       typeFilter.value = "imaging";
     }
     await loadDocuments({ page: 1, sourceType: "imaging" });
-    await loadImagingFacets();
-    scrollToImagingFilter();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   })().catch((e) => toast(e.message, "error"));
 }
 
@@ -2543,13 +2963,46 @@ function initImagingFilterPanel() {
       onImagingFilterChange().catch((e) => toast(e.message, "error"));
     }
   });
+  $("#imaging-slice-picker")?.addEventListener("change", (event) => {
+    const input = event.target.closest(".imaging-slice-check");
+    if (!input) return;
+    toggleImagingSliceSelection(input.dataset.id, input.checked);
+  });
+  $("#imaging-vision-reports-list")?.addEventListener("click", (event) => {
+    const viewBtn = event.target.closest(".btn-view");
+    if (viewBtn?.dataset?.id) {
+      viewDocument(viewBtn.dataset.id).catch((e) => toast(e.message, "error"));
+      return;
+    }
+    const includeBtn = event.target.closest(".btn-imaging-include");
+    if (includeBtn?.dataset?.id) {
+      includeDocumentInOverallAssessment(includeBtn.dataset.id);
+      return;
+    }
+    const excludeBtn = event.target.closest(".btn-imaging-exclude");
+    if (excludeBtn?.dataset?.id) {
+      excludeDocumentFromOverallAssessment(excludeBtn.dataset.id);
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-nav-imaging]")) {
+      event.preventDefault();
+      goToImagingPanel();
+    }
+    if (event.target.closest("[data-nav-library-imaging]")) {
+      event.preventDefault();
+      goToLibraryImagingType();
+    }
+  });
   safeOn("#btn-imaging-filter-clear", "click", () => clearImagingFilters());
+  safeOn("#btn-imaging-sample-slices", "click", () => sampleImagingSlicesEvenly());
+  safeOn("#btn-imaging-clear-slices", "click", () => clearImagingSliceSelection());
   safeOn("#btn-imaging-analyze-vision", "click", () =>
     analyzeImagingWorkflowVision().catch((e) => toast(e.message, "error"))
   );
-  safeOn("#btn-imaging-add-workflow", "click", () => addImagingVisionReportToAssessment());
-  safeOn("#btn-scope-imaging", "click", () => goToLibraryForImagingFilter());
+  safeOn("#btn-scope-imaging", "click", () => goToImagingPanel());
   renderImagingWorkflowSummary();
+  renderVisionReportsPanel();
 }
 
 async function loadDocumentIndex() {
@@ -2566,6 +3019,10 @@ async function loadDocumentIndex() {
   updateImagingFilterVisibility();
   await loadImagingFacets().catch(() => {});
   renderImagingWorkflowSummary();
+  renderVisionReportsPanel();
+  if ($("#panel-imaging")?.classList.contains("active")) {
+    renderImagingSlicePicker();
+  }
 }
 
 async function refreshLibrary(options = {}) {
@@ -2726,8 +3183,8 @@ function describeSourceTagInner(inner) {
     return {
       css_class: "source-unknown",
       shorthand: labels.unknown?.shorthand || "?",
-      display_label: labels.unknown?.display || "Not documented",
-      type_display: labels.unknown?.display || "Not documented",
+      display_label: labels.unknown?.display || "Not in your library",
+      type_display: labels.unknown?.display || "Not in your library",
     };
   }
   if (lower.startsWith("document")) {
@@ -2750,7 +3207,7 @@ function describeSourceTagInner(inner) {
 
 function sourceCitationTitle(meta, inner) {
   if (meta.css_class === "source-unknown") {
-    return "Not supported by stored documents — do not treat as verified fact";
+    return "Not backed by a stored library record — do not treat as verified fact";
   }
   if (meta.type_display) return meta.type_display;
   return meta.display_label || inner || "Source";
@@ -2791,6 +3248,7 @@ function findRefNumByRawLabel(label, registry = state.referenceRegistry) {
 const CITE_PILL_GENERIC_LABELS = new Set([
   "ai inference",
   "not documented",
+  "not in your library",
   "not verified",
   "patient context",
   "clinical record",
@@ -2933,6 +3391,10 @@ function sourceCardUrlLine(ref) {
 }
 
 function sourceCardTitleHtml(ref) {
+  const type = ref.type || "";
+  if (type === "unknown" || ref.css_class?.includes("unknown")) {
+    return `<span class="source-card-unknown-title">Not in your library</span>`;
+  }
   const title = ref.display_label || ref.label || `Source ${ref.num}`;
   const safeTitle = escapeHtml(truncate(title, 120));
   if (ref.source_uri) {
@@ -2956,7 +3418,7 @@ function sourceCardSnippet(ref) {
     return "General medical knowledge — not from your library. Verify independently.";
   }
   if (type === "unknown") {
-    return "Not in stored records. Verify on ClinicalTrials.gov or with your care team.";
+    return "This claim is not backed by any stored record in your library. Treat it as unverified.";
   }
   if (type === "patient_context") {
     return "From Settings → Patient context (not verified clinical record).";
@@ -3017,7 +3479,7 @@ function renderSourcesSidebar({ wrap, inner, appendix, idPrefix = "ref" }) {
         ${favicons}
         <h4>${countLabel}</h4>
       </div>
-      <p class="sources-sidebar-sub muted small">Links and records cited in this answer</p>
+      <p class="sources-sidebar-sub muted small">Inline citations from the assessment text — not the same as assessment scope</p>
     </div>
     <div class="sources-sidebar-list">
       ${enriched
@@ -3038,6 +3500,10 @@ function renderSourcesSidebar({ wrap, inner, appendix, idPrefix = "ref" }) {
 function formatNumberedReferences(text, registry = state.referenceRegistry, idPrefix = "ref") {
   if (!text) return "";
   let escaped = escapeHtml(text);
+  escaped = escaped.replace(
+    /(?<!\[)\bSOURCE:\s*((?:Document\s+"[^"]+"|Unknown[^\n\[]*|Web[^\n\[]*))/gi,
+    (_, inner) => `[SOURCE: ${inner.trim()}]`
+  );
   escaped = escaped.replace(/\[SOURCE:\s*([^\]]+)\]/gi, (_, inner) => {
     const num = findRefNumByRawLabel(inner, registry);
     if (num != null) return `[${num}]`;
@@ -3135,6 +3601,11 @@ function renderReferencesAppendix(
 
 function initReferenceNavigation() {
   document.addEventListener("click", (event) => {
+    if (event.target.closest("#btn-view-assessment-scope")) {
+      scrollToAssessmentScope();
+      return;
+    }
+
     const expandBtn = event.target.closest("[data-action=expand-sources]");
     if (expandBtn) {
       const sidebar = expandBtn.closest(".sources-sidebar");
@@ -3677,25 +4148,22 @@ function renderLatestAssessment(analysis) {
     setSectionLastUpdated($("#open-items-time"), null);
     legendWrap?.removeAttribute("open");
     fullCard?.classList.add("hidden");
-    renderSourcesSidebar({
-      wrap: $("#home-sources-sidebar"),
-      inner: $("#home-sources-sidebar-inner"),
-      appendix: [],
-      idPrefix: "home",
-    });
+    renderHomeResultsSidebar(null);
     state.referenceRegistry = {};
     execTextEl.innerHTML = "";
     if (fullBody) fullBody.innerHTML = "";
     renderOpenItemsTable([]);
     selectOpenItem(null);
     renderSourceAttributionNotice(null);
+    renderExecutiveSummaryNotice(null, false);
     renderHomeState(false);
     renderAssessmentScopeCard();
     return;
   }
 
   const refPrefix = analysis.id;
-  const summaryDisplay = analysis.executive_summary_display || analysis.executive_summary || "";
+  const summaryPick = effectiveExecutiveSummaryDisplay(analysis);
+  const summaryDisplay = summaryPick.text;
   const responseDisplay = analysis.response_display || analysis.response || "";
   const updatedAt = analysis.created_at;
 
@@ -3710,6 +4178,7 @@ function renderLatestAssessment(analysis) {
 
   renderHomeState(true);
   renderSourceAttributionNotice(analysis);
+  renderExecutiveSummaryNotice(analysis, summaryPick.usedFallback);
 
   if (summaryDisplay) {
     execTextEl.innerHTML = `<div class="numbered-text">${formatNumberedReferences(summaryDisplay, state.referenceRegistry, refPrefix)}</div>`;
@@ -3718,7 +4187,7 @@ function renderLatestAssessment(analysis) {
   }
 
   if (fullCard && fullBody) {
-    if (responseDisplay) {
+    if (responseDisplay && !summaryPick.usedFallback) {
       fullCard.classList.remove("hidden");
       fullBody.innerHTML = formatNumberedReferences(responseDisplay, state.referenceRegistry, refPrefix);
     } else {
@@ -3727,15 +4196,11 @@ function renderLatestAssessment(analysis) {
     }
   }
 
-  renderSourcesSidebar({
-    wrap: $("#home-sources-sidebar"),
-    inner: $("#home-sources-sidebar-inner"),
-    appendix: analysis.references || [],
-    idPrefix: refPrefix,
-  });
+  renderHomeResultsSidebar(analysis);
 
   renderOpenItemsTable(analysis.open_items || []);
   renderAssessmentScopeCard();
+  if (state.documents.length) renderDocuments();
 }
 
 async function loadLatestAssessment() {

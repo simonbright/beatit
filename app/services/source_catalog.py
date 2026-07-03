@@ -80,10 +80,10 @@ DEFAULT_SOURCE_TYPES: dict[str, dict[str, str]] = {
         "description": "Interpretation — not verified",
     },
     "unknown": {
-        "display": "Not documented",
+        "display": "Not in your library",
         "shorthand": "?",
         "css_class": "source-unknown",
-        "description": "Not supported by stored records — do not treat as fact",
+        "description": "Claim not backed by a stored record — do not treat as fact",
     },
 }
 

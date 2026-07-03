@@ -306,6 +306,7 @@ async def get_app_settings():
             "openrouter_model": model,
             "ollama_base_url": settings.ollama_base_url,
             "ollama_model": settings.ollama_model,
+            "ollama_vision_model": settings.ollama_vision_model,
             "patient_context": patient_context,
             "source_labels": _source_labels_payload(catalog),
         },

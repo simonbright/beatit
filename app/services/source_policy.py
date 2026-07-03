@@ -29,7 +29,7 @@ STAGING RULES (critical):
 
 RESPONSE_STRUCTURE_WITH_SOURCES = """
 Structure your response with these sections:
-1. Executive summary (every sentence tagged with a SOURCE)
+1. Executive summary — at least 4 complete sentences covering diagnosis, key findings, staging status, and immediate priorities. Every sentence must include clinical content AND a [SOURCE: …] tag. Never output only a source tag line.
 2. What we know — hard data only, each bullet tagged [SOURCE: Document "..."]
 3. What we do not know / uncertainties — tag [SOURCE: Unknown]
 4. Critical gaps to close (prioritized numbered list)

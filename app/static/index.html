@@ -61,6 +61,7 @@
         <button class="tab" data-tab="custom-tasks" role="tab">Custom Tasks</button>
         <button class="tab" data-tab="ingest" role="tab">Add data</button>
         <button class="tab" data-tab="library" role="tab">Library</button>
+        <button class="tab" data-tab="imaging" role="tab">Imaging</button>
         <button class="tab" data-tab="history" role="tab">History</button>
         <button class="tab" data-tab="howto" role="tab">How to</button>
         <button class="tab" data-tab="settings" role="tab">Settings</button>
@@ -93,6 +94,7 @@
               <h3 class="answer-section-label">Executive summary</h3>
               <p class="section-updated muted small hidden">Last updated <time id="executive-summary-time"></time></p>
               <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
+              <div id="executive-summary-notice" class="executive-summary-notice hidden" role="status"></div>
               <div id="executive-summary-text" class="executive-summary-text"></div>
             </div>
 
@@ -103,7 +105,7 @@
             </div>
           </div>
 
-          <aside class="sources-sidebar hidden" id="home-sources-sidebar" aria-label="Sources">
+          <aside class="sources-sidebar hidden" id="home-sources-sidebar" aria-label="Assessment documents and citations">
             <div id="home-sources-sidebar-inner" class="sources-sidebar-inner"></div>
           </aside>
         </div>
@@ -116,9 +118,9 @@
               <li><span class="source-tag source-diagnostic">Diag</span> Diagnostic test — imaging and pathology</li>
               <li><span class="source-tag source-context">Ctx</span> Patient context — from settings, not verified</li>
               <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
-              <li><span class="source-tag source-unknown">?</span> Not documented — not in stored records</li>
+              <li><span class="source-tag source-unknown">?</span> Not in your library — claim not backed by a stored record</li>
             </ul>
-            <p class="source-legend-note">Inline pills link to sites when a URL is available, or to the sources panel for library records. Document and web sources open originals when available.</p>
+            <p class="source-legend-note">Citation tags appear in the assessment text. The side panel lists which library files were included and which were cited inline.</p>
           </div>
         </details>
 
@@ -254,7 +256,7 @@
             <div class="assessment-scope-actions">
               <button type="button" class="btn secondary btn-sm" id="btn-scope-select-all">Select all</button>
               <button type="button" class="btn ghost btn-sm" id="btn-scope-clear">Clear selection</button>
-              <button type="button" class="btn ghost btn-sm" id="btn-scope-imaging">Imaging workflow…</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-scope-imaging">Imaging analysis…</button>
               <button type="button" class="btn ghost btn-sm hidden" id="btn-scope-match-last">Match last assessment</button>
             </div>
           </div>
@@ -478,23 +480,11 @@
         </div>
 
         <div id="imaging-filter-card" class="imaging-filter-card hidden">
-          <div class="row-between wrap">
-            <h4>Imaging workflow</h4>
-            <button type="button" class="btn ghost" id="btn-imaging-filter-clear">Clear filters</button>
-          </div>
-          <p class="muted small imaging-workflow-intro">Use the filters below to match CT slices, then run vision analysis. The vision report is added to your assessment scope; re-running baseline <strong>builds on</strong> your current assessment rather than starting over.</p>
-          <p id="imaging-filter-reindex-note" class="imaging-filter-reindex-note hidden"></p>
-          <div id="imaging-filter-fields" class="imaging-filter-fields"></div>
-          <p id="imaging-filter-match-summary" class="imaging-filter-match-summary muted small">Set filters to see matching slices.</p>
-          <div class="imaging-filter-actions">
-            <button type="button" class="btn primary" id="btn-imaging-analyze-vision">Analyze with vision</button>
-            <button type="button" class="btn ghost" id="btn-imaging-add-workflow">Add report to last assessment</button>
-          </div>
-          <p id="imaging-workflow-summary" class="imaging-workflow-summary muted small"></p>
+          <p class="muted small">DICOM slices live in the Library. Use the <button type="button" class="btn-link" data-nav-imaging>Imaging</button> tab to filter slices and run a separate vision analysis.</p>
         </div>
 
         <div class="library-selection-bar" id="library-selection-bar">
-          <p id="library-selection-summary" class="library-selection-summary muted small"></p>
+            <p id="library-selection-summary" class="library-selection-summary muted small"></p>
           <div class="library-selection-actions">
             <button type="button" class="btn ghost" id="btn-select-all-shown">Select all shown</button>
             <button type="button" class="btn ghost hidden" id="btn-scope-match-last-lib">Match last assessment</button>
@@ -506,6 +496,50 @@
           <button type="button" class="btn secondary" id="btn-library-prev">Previous</button>
           <span id="library-page-info" class="library-page-info muted small"></span>
           <button type="button" class="btn secondary" id="btn-library-next">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- IMAGING ANALYSIS -->
+    <section id="panel-imaging" class="panel">
+      <div class="card imaging-analysis-card">
+        <div class="row-between wrap">
+          <h3>Imaging analysis</h3>
+          <button type="button" class="btn ghost btn-sm" data-nav-library-imaging>View in Library</button>
+        </div>
+        <p class="muted small imaging-analysis-intro">Separate from the overall baseline on Home. Upload DICOM to the Library, filter slices here, run vision analysis, review the report, then choose whether to include it in the overall assessment.</p>
+
+        <div class="imaging-analysis-steps">
+          <div class="imaging-analysis-step">
+            <h4>1. Filter slices</h4>
+            <p id="imaging-filter-reindex-note" class="imaging-filter-reindex-note hidden"></p>
+            <div class="row-between wrap">
+              <span class="muted small">Narrow to the study, series, kernel, or level you want.</span>
+              <button type="button" class="btn ghost btn-sm" id="btn-imaging-filter-clear">Clear filters</button>
+            </div>
+            <div id="imaging-filter-fields" class="imaging-filter-fields"></div>
+            <p id="imaging-filter-match-summary" class="imaging-filter-match-summary muted small">Set filters to see matching slices.</p>
+          </div>
+
+          <div class="imaging-analysis-step">
+            <h4>2. Choose slices for analysis</h4>
+            <p class="muted small">Select up to <strong>3</strong> DICOM slices (vision model limit). Prefer <strong>Axial</strong> diagnostic series — Scout and MIP often produce useless output. Use sample for an even spread.</p>
+            <div class="imaging-slice-picker-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-imaging-sample-slices">Sample 3 evenly</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-imaging-clear-slices">Clear selection</button>
+            </div>
+            <div id="imaging-slice-picker" class="imaging-slice-picker muted small">Set filters to choose slices.</div>
+            <p id="imaging-workflow-summary" class="imaging-workflow-summary muted small"></p>
+            <button type="button" class="btn primary" id="btn-imaging-analyze-vision">Run imaging analysis</button>
+          </div>
+
+          <div class="imaging-analysis-step">
+            <h4>3. Review reports &amp; include in overall assessment</h4>
+            <p class="muted small">Each run creates a text report in the Library. Include it in the Home baseline only when you are ready.</p>
+            <div id="imaging-vision-reports-list" class="imaging-vision-reports-list">
+              <p class="muted">No imaging analysis reports yet.</p>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -632,7 +666,7 @@
             <li><span class="source-tag source-diagnostic">Diag</span> Imaging or pathology</li>
             <li><span class="source-tag source-context">Ctx</span> Patient context from Settings</li>
             <li><span class="source-tag source-inference">AI</span> AI inference — verify independently</li>
-            <li><span class="source-tag source-unknown">?</span> Not documented in stored records</li>
+            <li><span class="source-tag source-unknown">?</span> Not in your library — not backed by a stored record</li>
           </ul>
           <p class="muted small">Superscript numbers link to reference lists. Customize badge labels under Settings → Source labels.</p>
         </div>
@@ -684,11 +718,11 @@
 
       <div class="card settings-card">
         <h3>LLM settings</h3>
-        <p class="muted">OpenRouter model for cloud synthesis (Render and fallback). When <code>LLM_PROVIDER=auto</code>, BeatIt uses your Tailscale Ollama VM when it is reachable.</p>
+        <p class="muted">Baseline and custom tasks use the <strong>text</strong> Ollama model when the VM is reachable (<code>LLM_PROVIDER=auto</code>). The <strong>Imaging</strong> tab uses a separate vision model. OpenRouter is the cloud fallback (and default on Render).</p>
 
         <div id="settings-ollama-info" class="settings-ollama-info muted small hidden"></div>
 
-        <label for="settings-model">OpenRouter model
+        <label for="settings-model">OpenRouter fallback model
           <select id="settings-model"></select>
         </label>
         <p id="settings-model-desc" class="muted small settings-model-desc"></p>

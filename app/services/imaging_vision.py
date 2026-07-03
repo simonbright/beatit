@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,14 +21,101 @@ Describe what is visible on this slice for a clinical summary:
 - Relevant normal findings when helpful for context
 
 Be factual and cautious. Say when findings are uncertain or windowing limits interpretation.
-Do not invent measurements or diagnoses not supported by the image."""
+Do not invent measurements or diagnoses not supported by the image.
+Write in complete sentences — not coordinates, bounding boxes, or numbers only."""
+
+MOONDREAM_SLICE_PROMPT = """Caption this CT slice for an oncology clinician.
+
+Question: What organs are visible, and are there any obvious masses, fluid collections, or enlarged lymph nodes? If the slice is a scout/localizer/MIP or too low quality to assess, say that plainly.
+
+Answer in at least 2 complete sentences of plain English. Do NOT return coordinates, bounding boxes, numeric arrays, or a single number."""
+
+MOONDREAM_RETRY_PROMPT = """Describe this medical CT image in plain English for a doctor. Write 2-4 sentences about visible anatomy and any obvious abnormality. Do not output coordinates or bracketed number lists."""
 
 VISION_SYSTEM = (
     "You assist oncology case review by describing medical CT slice images. "
-    "Use plain clinical language. Do not claim definitive diagnosis."
+    "Use plain clinical language. Do not claim definitive diagnosis. "
+    "Never respond with only numbers, coordinates, or arrays."
 )
 
 MAX_VISION_SLICES = 10
+
+NON_DIAGNOSTIC_SERIES_KINDS = frozenset(
+    {
+        "Scout",
+        "Axial MIP",
+        "Coronal MIP",
+        "MIP",
+        "Dose report",
+        "Administrative",
+    }
+)
+
+_NUMERIC_GARBAGE = re.compile(
+    r"^[\d\s\.\-\[\],]+$|^\[\s*[\d\.,\s]+\s*\]$"
+)
+
+
+def is_moondream_model(model_name: str | None) -> bool:
+    return "moondream" in (model_name or "").lower()
+
+
+def validate_vision_impression(text: str, *, model_name: str | None = None) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("Vision model returned an empty response.")
+    if _NUMERIC_GARBAGE.match(cleaned):
+        raise ValueError(_vision_quality_error(model_name))
+    letters = sum(ch.isalpha() for ch in cleaned)
+    if letters < 20 or len(cleaned.split()) < 6:
+        raise ValueError(_vision_quality_error(model_name))
+    return cleaned
+
+
+def _vision_quality_error(model_name: str | None) -> str:
+    if is_moondream_model(model_name):
+        return (
+            "Moondream returned coordinates/numbers instead of a clinical description. "
+            "It is unreliable on CT slices — especially Scout, MIP, and coronal reformats. "
+            "Prefer axial diagnostic series, or set OLLAMA_VISION_MODEL=llama3.2-vision:11b "
+            "after updating Ollama on the VM."
+        )
+    return (
+        "Vision model returned unusable output (too short or numeric only). "
+        "Try different axial slices or another vision model."
+    )
+
+
+async def _describe_slice_impression(
+    client: OllamaVisionClient,
+    *,
+    image_b64: str,
+    prompt: str,
+    row: dict[str, Any],
+) -> str:
+    series_kind = row.get("series_kind") or ""
+    if series_kind in NON_DIAGNOSTIC_SERIES_KINDS:
+        prompt = (
+            f"{prompt}\n\nNote: this slice is tagged as {series_kind}. "
+            "If it is a scout/localizer/MIP, say it is not suitable for detailed read."
+        )
+
+    impression = await client.describe_image(
+        image_b64=image_b64,
+        prompt=prompt,
+        system=VISION_SYSTEM,
+    )
+    try:
+        return validate_vision_impression(impression, model_name=client.model_name)
+    except ValueError:
+        if not is_moondream_model(client.model_name):
+            raise
+        retry = await client.describe_image(
+            image_b64=image_b64,
+            prompt=MOONDREAM_RETRY_PROMPT,
+            system=None,
+        )
+        return validate_vision_impression(retry, model_name=client.model_name)
 
 
 async def _vision_client_ready(client: OllamaVisionClient) -> None:
@@ -137,14 +225,15 @@ async def analyze_imaging_slices(
             )
 
         prompt = (
-            f"{VISION_SLICE_PROMPT}\n\n"
-            f"Slice metadata: {_slice_label(row)}\n"
+            (MOONDREAM_SLICE_PROMPT if is_moondream_model(client.model_name) else VISION_SLICE_PROMPT)
+            + f"\n\nSlice metadata: {_slice_label(row)}\n"
             f"Window/kernel: {row.get('window_summary') or row.get('convolution_kernel') or 'unknown'}"
         )
-        impression = await client.describe_image(
+        impression = await _describe_slice_impression(
+            client,
             image_b64=image_b64,
             prompt=prompt,
-            system=VISION_SYSTEM,
+            row=row,
         )
 
         sections.append(
@@ -178,6 +267,7 @@ async def analyze_imaging_slices(
             "",
             "These impressions were generated from pixel data sent to a local vision model.",
             "Use alongside the official radiology report; this is not a substitute for formal read.",
+            "Tip: select axial diagnostic slices — Scout, MIP, and coronal reformats often produce poor AI reads.",
             "",
             *sections,
         ]

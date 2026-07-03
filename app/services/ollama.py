@@ -54,9 +54,13 @@ class OllamaClient:
                 "connected": True,
                 "base_url": self.base_url,
                 "configured_model": self.model,
+                "configured_vision_model": settings.ollama_vision_model,
                 "available_models": models,
                 "model_available": any(
                     self.model in (name or "") for name in models
+                ),
+                "vision_model_available": any(
+                    settings.ollama_vision_model in (name or "") for name in models
                 ),
             }
 
@@ -112,6 +116,12 @@ class OllamaVisionClient(OllamaClient):
         system: str | None = None,
         temperature: float = 0.2,
     ) -> str:
+        if "moondream" in self.model.lower():
+            # Moondream via Ollama ignores system role; keep one user turn.
+            if system:
+                prompt = f"{system}\n\n{prompt}"
+            system = None
+
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})

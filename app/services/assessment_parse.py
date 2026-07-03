@@ -51,6 +51,57 @@ def _bullet_lines(section_text: str) -> list[str]:
     return items
 
 
+_SOURCE_TAG_ONLY = re.compile(
+    r"^(\[SOURCE:\s*.+\]|SOURCE:\s*Document\s+\"[^\"]+\"|\[SOURCE:\s*Unknown\])\s*$",
+    re.IGNORECASE,
+)
+
+
+def _substantive_length(text: str) -> int:
+    if not text:
+        return 0
+    cleaned = re.sub(r"\[SOURCE:\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"SOURCE:\s*Document\s+\"[^\"]+\"", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"SOURCE:\s*Unknown[^\n]*", "", cleaned, flags=re.IGNORECASE)
+    return len(re.sub(r"\s+", " ", cleaned).strip())
+
+
+def ensure_executive_summary(parsed: dict[str, Any], response: str) -> str:
+    """Use a substantive executive summary, falling back to the full response when needed."""
+    summary = (parsed.get("executive_summary") or "").strip()
+    full = (response or "").strip()
+
+    if _substantive_length(summary) >= 80:
+        return summary
+
+    what_we_know = extract_section(full, ["what we know", "2 what we know"]).strip()
+    if what_we_know and _substantive_length(what_we_know) > _substantive_length(summary):
+        return what_we_know[:2000]
+
+    if not summary and full:
+        summary = full.strip().split("\n\n")[0][:1200]
+
+    if _substantive_length(summary) >= 80:
+        return summary
+
+    chunks: list[str] = []
+    for block in re.split(r"\n\s*\n", full):
+        block = block.strip()
+        if not block or block.startswith("#"):
+            continue
+        if _SOURCE_TAG_ONLY.match(block):
+            continue
+        if _substantive_length(block) < 40:
+            continue
+        chunks.append(block)
+        if sum(_substantive_length(c) for c in chunks) >= 120:
+            break
+    if chunks:
+        return "\n\n".join(chunks)[:2000]
+
+    return summary
+
+
 def parse_assessment(response: str) -> dict[str, Any]:
     executive_summary = extract_section(
         response,
@@ -89,10 +140,12 @@ def parse_assessment(response: str) -> dict[str, Any]:
     if not executive_summary and response.strip():
         executive_summary = response.strip().split("\n\n")[0][:1200]
 
-    return {
+    parsed = {
         "executive_summary": executive_summary,
         "open_items": open_items,
     }
+    parsed["executive_summary"] = ensure_executive_summary(parsed, response)
+    return parsed
 
 
 def open_items_to_json(items: list[dict[str, str]]) -> str:

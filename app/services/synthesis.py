@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.services.assessment_parse import open_items_to_json, parse_assessment
+from app.services.assessment_parse import ensure_executive_summary, open_items_to_json, parse_assessment
 from app.services.llm import LLMClient
 from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_content
 from app.services.source_policy import (
@@ -220,6 +220,7 @@ Use clear ### headings for each section."""
             response, doc_titles, annotate_staging=True
         )
         parsed = parse_assessment(response)
+        parsed["executive_summary"] = ensure_executive_summary(parsed, response)
         executive_summary, _ = enrich_with_sources(
             parsed["executive_summary"], doc_titles, annotate_staging=False
         )
@@ -322,6 +323,7 @@ Use clear ### headings for each section."""
             response, doc_titles, annotate_staging=True
         )
         parsed = parse_assessment(response)
+        parsed["executive_summary"] = ensure_executive_summary(parsed, response)
         executive_summary, _ = enrich_with_sources(
             parsed["executive_summary"], doc_titles, annotate_staging=False
         )
