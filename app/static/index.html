@@ -127,7 +127,7 @@
         <div class="card open-items-card" id="open-items-card">
           <h3>Open items</h3>
           <p class="section-updated muted small hidden">Last updated <time id="open-items-time"></time></p>
-          <p class="muted small open-items-hint">Prioritized items still to resolve. If a gap looks wrong, check assessment scope in <strong>Run further analysis</strong> below — then re-run baseline. Click Explore on a row to investigate.</p>
+          <p class="muted small open-items-hint">Prioritized gaps to resolve. Wrong gap? Add the missing report under <strong>Update analysis</strong> below, then re-run. Click Explore to investigate.</p>
           <div class="table-wrap">
             <table class="open-items-table" id="open-items-table">
               <thead>
@@ -157,10 +157,10 @@
           <div class="open-item-meta" id="open-item-meta"></div>
 
           <div id="open-item-scope-hint" class="open-item-scope-hint hidden">
-            <p class="muted small">If this gap looks wrong, a report may have been left out of the last assessment. Adjust scope or add guidance below, then re-run baseline.</p>
+            <p class="muted small">If this gap looks wrong, a report may have been left out of the last run. Adjust scope or add guidance below, then update analysis.</p>
             <div class="open-item-scope-actions">
               <button type="button" class="btn secondary btn-sm" id="btn-open-item-adjust-scope">Adjust assessment scope</button>
-              <button type="button" class="btn primary btn-sm" id="btn-open-item-reassess">Re-run baseline</button>
+              <button type="button" class="btn primary btn-sm" id="btn-open-item-reassess">Update analysis</button>
             </div>
           </div>
 
@@ -214,52 +214,66 @@
 
       <details class="card analyze-actions-card" id="analyze-actions-card" open>
         <summary class="analyze-actions-summary">
-          <span class="analyze-actions-summary-title">Run further analysis</span>
-          <span class="muted small analyze-actions-summary-hint">Baseline, summarize, custom question, and document scope</span>
+          <span class="analyze-actions-summary-title" id="analysis-panel-title">Run analysis</span>
+          <span class="muted small analyze-actions-summary-hint" id="analysis-panel-hint">Choose sources, then synthesize your library into an assessment</span>
         </summary>
         <div class="analyze-actions-body">
-          <div class="analyze-actions">
-            <button class="btn primary" id="btn-baseline">Run baseline assessment</button>
-            <button class="btn secondary" id="btn-summarize">Summarize all documents</button>
-          </div>
+          <p class="analysis-run-lead muted small" id="analysis-run-lead">
+            BeatIt reads your selected documents and produces an executive summary, full assessment, and open items to resolve.
+          </p>
 
-          <label>Your question (optional)
-            <textarea id="analyze-query" rows="3" placeholder="Ask a specific question…"></textarea>
-          </label>
-
-          <div class="row-between wrap">
-            <span class="muted small" id="selected-count">Using all documents</span>
-            <button class="btn primary" id="btn-analyze">Run custom analysis</button>
-          </div>
-
-          <div id="analyze-running-banner" class="analysis-running-banner hidden" role="status" aria-live="polite">
-            Analysis in progress — results will update above when finished.
-          </div>
-          <div id="analyze-loading" class="loading hidden">Running analysis in the background… this may take several minutes.</div>
-          <p class="muted small custom-analysis-note">Custom questions run as <strong>drafts</strong> in the Custom Tasks tab until you add them to the medical record.</p>
-
-          <div class="assessment-scope-section" id="assessment-scope-card">
-            <div class="row-between wrap">
-              <h4 class="assessment-scope-title">Assessment scope</h4>
-              <button type="button" class="btn ghost btn-sm" id="btn-scope-library">Choose in Library</button>
+          <div class="analysis-run-step assessment-scope-section" id="assessment-scope-card">
+            <div class="analysis-run-step-head row-between wrap">
+              <div>
+                <h4 class="analysis-run-step-title">1. Sources</h4>
+                <p class="muted small" id="analysis-scope-summary">Using all documents</p>
+              </div>
+              <button type="button" class="btn secondary btn-sm" id="btn-scope-library">Choose in Library</button>
             </div>
-            <p class="muted small">Control which stored documents are sent to the LLM. Imaging folders are listed by name — individual slices appear only when used in vision analysis or cited in text.</p>
             <div id="assessment-scope-next" class="assessment-scope-block"></div>
-            <div id="assessment-scope-last" class="assessment-scope-block hidden"></div>
             <div id="assessment-scope-warning" class="assessment-scope-warning hidden"></div>
+            <div class="assessment-scope-actions">
+              <button type="button" class="btn ghost btn-sm" id="btn-scope-select-all">Select all</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-scope-clear">Clear selection</button>
+              <button type="button" class="btn ghost btn-sm hidden" id="btn-scope-match-last">Use same sources as last run</button>
+            </div>
+          </div>
+
+          <details class="analysis-run-step analysis-guidance-details" id="analysis-guidance-details">
+            <summary class="analysis-run-step-title">2. Guidance <span class="muted">(optional)</span></summary>
             <div class="assessment-guidance-section">
-              <label class="assessment-guidance-form" for="assessment-guidance">Assessment guidance <span class="muted">(optional)</span>
-                <textarea id="assessment-guidance" rows="3" placeholder="e.g. Pay close attention to the ABC pathology report and the Facebook video transcript. Do not flag liver mets as unconfirmed if the CT report documents them."></textarea>
+              <label class="assessment-guidance-form" for="assessment-guidance">Tell the model what to prioritize
+                <textarea id="assessment-guidance" rows="3" placeholder="e.g. Focus on the pathology report and CT. Do not flag liver mets as unknown if the CT report documents them."></textarea>
               </label>
               <div class="assessment-guidance-presets" id="assessment-guidance-presets"></div>
             </div>
-            <div class="assessment-scope-actions">
-              <button type="button" class="btn secondary btn-sm" id="btn-scope-select-all">Select all</button>
-              <button type="button" class="btn ghost btn-sm" id="btn-scope-clear">Clear selection</button>
-              <button type="button" class="btn ghost btn-sm" id="btn-scope-imaging">Imaging analysis…</button>
-              <button type="button" class="btn ghost btn-sm hidden" id="btn-scope-match-last">Match last assessment</button>
+          </details>
+
+          <div class="analysis-run-step analysis-run-primary">
+            <h4 class="analysis-run-step-title">3. Run</h4>
+            <button class="btn primary btn-analysis-primary" id="btn-baseline">Run analysis</button>
+            <div id="analyze-running-banner" class="analysis-running-banner hidden" role="status" aria-live="polite">
+              Analysis in progress — results will appear above when finished.
             </div>
+            <div id="analyze-loading" class="loading hidden">Running analysis in the background… this may take several minutes.</div>
           </div>
+
+          <details class="analysis-more-options">
+            <summary class="muted small">More options</summary>
+            <div class="analysis-more-options-body">
+              <p class="muted small">Summarize documents, ask a one-off question, or run imaging vision separately.</p>
+              <div class="analyze-actions">
+                <button class="btn secondary" id="btn-summarize">Summarize documents</button>
+                <button type="button" class="btn ghost btn-sm" id="btn-scope-imaging">Imaging vision analysis…</button>
+              </div>
+              <label class="analysis-custom-query-label">Custom question <span class="muted">(saved as draft in Custom Tasks)</span>
+                <textarea id="analyze-query" rows="3" placeholder="e.g. List clinical trials relevant to this case…"></textarea>
+              </label>
+              <button class="btn secondary" id="btn-analyze">Run custom question</button>
+            </div>
+          </details>
+
+          <div id="assessment-scope-last" class="assessment-scope-block hidden" hidden></div>
         </div>
       </details>
     </section>
@@ -468,7 +482,7 @@
           <h3>Stored documents</h3>
           <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
         </div>
-        <p class="muted small">Check items to include in assessments, or leave none selected to use everything. Filter by type — DICOM / imaging is grouped by upload folder and study date. Run baseline assessment from here once your selection is ready.</p>
+        <p class="muted small">Check items to include in assessments, or leave none selected to use everything. Filter by type — DICOM / imaging is grouped by upload folder and study date. Run analysis from here once your selection is ready.</p>
         <div class="library-toolbar">
           <label class="library-filter-label" for="library-type-filter">
             Type
@@ -486,9 +500,9 @@
         <div class="library-selection-bar" id="library-selection-bar">
             <p id="library-selection-summary" class="library-selection-summary muted small"></p>
           <div class="library-selection-actions">
-            <button type="button" class="btn primary" id="btn-library-baseline">Run baseline assessment</button>
+            <button type="button" class="btn primary" id="btn-library-baseline">Run analysis</button>
             <button type="button" class="btn ghost" id="btn-select-all-shown">Select all shown</button>
-            <button type="button" class="btn ghost hidden" id="btn-scope-match-last-lib">Match last assessment</button>
+            <button type="button" class="btn ghost hidden" id="btn-scope-match-last-lib">Use same sources as last run</button>
             <button type="button" class="btn ghost" id="btn-clear-selection">Clear selection</button>
           </div>
         </div>
@@ -508,7 +522,7 @@
           <h3>Imaging analysis</h3>
           <button type="button" class="btn ghost btn-sm" data-nav-library-imaging>View in Library</button>
         </div>
-        <p class="muted small imaging-analysis-intro">Separate from the overall baseline on Home. Upload DICOM to the Library, filter slices here, run vision analysis, review the report, then choose whether to include it in the overall assessment.</p>
+        <p class="muted small imaging-analysis-intro">Separate from the overall analysis on Home. Upload DICOM to the Library, filter slices here, run vision analysis, review the report, then choose whether to include it in the overall assessment.</p>
 
         <div class="imaging-analysis-steps">
           <div class="imaging-analysis-step">
@@ -536,7 +550,7 @@
 
           <div class="imaging-analysis-step">
             <h4>3. Review reports &amp; include in overall assessment</h4>
-            <p class="muted small">Each run creates a text report in the Library. Include it in the Home baseline only when you are ready.</p>
+            <p class="muted small">Each run creates a text report in the Library. Include it in the Home analysis only when you are ready.</p>
             <div id="imaging-vision-reports-list" class="imaging-vision-reports-list">
               <p class="muted">No imaging analysis reports yet.</p>
             </div>
@@ -576,7 +590,7 @@
           </button>
           <button type="button" class="workflow-step" data-howto-nav="analyze">
             <span class="workflow-step-num">Step 3</span>
-            <span class="workflow-step-label">Run baseline</span>
+            <span class="workflow-step-label">Run analysis</span>
             <span class="workflow-step-hint">Executive summary, full assessment, open items</span>
           </button>
         </div>
@@ -585,7 +599,7 @@
       <details class="card howto-section" open>
         <summary class="howto-section-summary">Home — your medical record</summary>
         <div class="howto-section-body">
-          <p>The Home tab is the official case view. After a baseline assessment you get:</p>
+          <p>The Home tab is the official case view. After you run analysis you get:</p>
           <ul>
             <li><strong>Executive summary</strong> — short overview with source citations.</li>
             <li><strong>Full assessment</strong> — detailed synthesis from your documents.</li>
@@ -618,7 +632,7 @@
         <div class="howto-section-body">
           <p>Custom analyses (trial lists, regimen comparisons, focused questions) run as <strong>drafts</strong> first. They do not change Home until you promote them.</p>
           <ul>
-            <li>Run a task from the Custom Tasks tab or from <strong>Run further analysis</strong> on Home.</li>
+            <li>Run a task from the Custom Tasks tab or from <strong>More options</strong> on Home.</li>
             <li>Add optional <strong>notes</strong> at the bottom of a draft. Use <strong>PDF</strong> or <strong>Share</strong> to send to collaborators.</li>
             <li>List items show <strong>Sources</strong> — library documents link to originals; otherwise it says when nothing is stored.</li>
             <li>When finished, review the draft and tap <strong>Add to medical record</strong> or <strong>Discard draft</strong>.</li>

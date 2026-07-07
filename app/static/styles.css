@@ -1105,10 +1105,88 @@ textarea { resize: vertical; min-height: 100px; }
   border-color: var(--accent);
 }
 
-.assessment-scope-section {
-  margin-top: 1.25rem;
-  padding-top: 1.1rem;
+.analysis-run-lead {
+  margin: 0 0 1rem;
+  line-height: 1.45;
+}
+
+.analysis-run-step {
+  margin-top: 1rem;
+  padding-top: 1rem;
   border-top: 1px solid var(--border);
+}
+
+.analysis-run-step:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.analysis-run-step-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.analysis-run-step-head {
+  margin-bottom: 0.65rem;
+}
+
+.analysis-run-primary {
+  padding-bottom: 0.25rem;
+}
+
+.btn-analysis-primary {
+  font-size: 1rem;
+  padding: 0.65rem 1.25rem;
+}
+
+.analysis-guidance-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.analysis-guidance-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-guidance-details .assessment-guidance-section {
+  margin-top: 0.65rem;
+  padding-top: 0;
+  border-top: none;
+}
+
+.analysis-more-options {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px dashed var(--border);
+}
+
+.analysis-more-options > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.analysis-more-options-body {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.analysis-custom-query-label {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.analysis-custom-query-label textarea {
+  margin-top: 0.35rem;
+}
+
+.assessment-scope-section {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .assessment-scope-title {
@@ -1210,6 +1288,12 @@ textarea { resize: vertical; min-height: 100px; }
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
+.doc-status-new {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+
 .doc-status-excluded {
   color: var(--muted);
   background: var(--surface-solid);
@@ -1233,6 +1317,60 @@ textarea { resize: vertical; min-height: 100px; }
   margin-top: 0.85rem;
   padding-top: 0.85rem;
   border-top: 1px dashed var(--border);
+}
+
+.assessment-pending-scope-prominent {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: var(--radius);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.sidebar-pending-scope-prominent {
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: var(--radius);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.assessment-pending-note {
+  margin: 0.2rem 0 0.55rem;
+}
+
+.assessment-scope-new-summary {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  font-size: 0.88rem;
+}
+
+.assessment-carried-scope {
+  margin-top: 0.75rem;
+}
+
+.assessment-carried-summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.scope-doc-list-muted .scope-doc-item {
+  opacity: 0.92;
+}
+
+.scope-doc-item-new {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.doc-item-new {
+  border-color: rgba(16, 185, 129, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.12);
 }
 
 .assessment-pending-heading {

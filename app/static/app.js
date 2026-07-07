@@ -447,7 +447,7 @@ function renderSettingsOllamaInfo(settings, llmHealth) {
   el.classList.remove("hidden");
   el.innerHTML = `
     <p><strong>Provider:</strong> ${escapeHtml(provider)} · <strong>Ollama URL:</strong> ${escapeHtml(base)}</p>
-    <p><strong>Text model</strong> (Home baseline &amp; custom tasks): ${escapeHtml(textModel)} · ${escapeHtml(textOk)}</p>
+    <p><strong>Text model</strong> (Home analysis &amp; custom tasks): ${escapeHtml(textModel)} · ${escapeHtml(textOk)}</p>
     <p><strong>Vision model</strong> (Imaging tab): ${escapeHtml(visionModel)} · ${escapeHtml(visionOk)}</p>
     <p>VM models: ${escapeHtml(modelList)}${(ollama.available_models || []).length > 8 ? " …" : ""}</p>
     <p>Setup guide: <code>docs/TAILSCALE_OLLAMA_SETUP.md</code> · test: <code>./scripts/check_ollama.sh</code></p>`;
@@ -762,7 +762,58 @@ function renderHomeState(hasAssessment) {
   } else if (!hasAssessment) {
     setAnalyzeActionsExpanded(true);
   }
+  renderAnalysisRunChrome();
   updateHomeToolbar();
+}
+
+function renderAnalysisScopeSummary() {
+  const el = $("#analysis-scope-summary");
+  if (!el) return;
+  const total = state.documentIndex.length;
+  const nextIds = plannedAssessmentIds();
+  const next = scopeSummaryFromIds(nextIds);
+  const usingAll = state.selectedIds.size === 0;
+  if (!total) {
+    el.textContent = "Add documents in Library first.";
+    return;
+  }
+  const breakdown = formatScopeBreakdown(next.byType);
+  if (usingAll) {
+    el.textContent = breakdown
+      ? `All ${total} library documents · ${breakdown}`
+      : `All ${total} library documents`;
+  } else {
+    el.textContent = breakdown ? `${next.count} selected · ${breakdown}` : `${next.count} selected`;
+  }
+}
+
+function renderAnalysisRunChrome() {
+  const hasAssessment = Boolean(state.latestAnalysis);
+  const total = state.documentIndex.length;
+  const title = hasAssessment ? "Update analysis" : "Run analysis";
+  const hint = hasAssessment
+    ? "Change sources or guidance, then re-run to refresh your assessment"
+    : "Choose sources, then synthesize your library into an assessment";
+  const lead = hasAssessment
+    ? "Re-run when you've added reports or changed which documents are in scope."
+    : "BeatIt reads your selected documents and produces an executive summary, full assessment, and open items to resolve.";
+  const btnLabel = hasAssessment ? "Update analysis" : "Run analysis";
+
+  const titleEl = $("#analysis-panel-title");
+  const hintEl = $("#analysis-panel-hint");
+  const leadEl = $("#analysis-run-lead");
+  if (titleEl) titleEl.textContent = title;
+  if (hintEl) hintEl.textContent = hint;
+  if (leadEl) leadEl.textContent = lead;
+
+  ["#btn-baseline", "#btn-library-baseline"].forEach((sel) => {
+    const btn = $(sel);
+    if (!btn) return;
+    btn.textContent = btnLabel;
+    btn.disabled = state.analysisRunning || !total;
+  });
+
+  renderAnalysisScopeSummary();
 }
 
 function initHowToNavigation() {
@@ -1729,12 +1780,8 @@ function libraryTotalPages() {
 }
 
 function updateSelectedLabel() {
-  const el = $("#selected-count");
   const customScope = $("#custom-task-doc-scope");
   const label = selectionScopeLabel();
-  if (el) {
-    el.textContent = label;
-  }
   if (customScope) {
     customScope.textContent = label;
   }
@@ -1819,9 +1866,33 @@ function getAssessmentInclusion(docId) {
   };
 }
 
+function isNewForNextAssessment(docId) {
+  const lastIds = state.latestAnalysis?.document_ids || [];
+  if (!lastIds.length) return false;
+  return plannedAssessmentIds().includes(docId) && !lastIds.includes(docId);
+}
+
+function partitionNextScopeIds(nextIds, lastIds = []) {
+  const lastSet = new Set(lastIds);
+  const newIds = [];
+  const carriedIds = [];
+  orderedDocsFromIds(nextIds).forEach((doc) => {
+    if (lastSet.has(doc.id)) carriedIds.push(doc.id);
+    else newIds.push(doc.id);
+  });
+  return { newIds, carriedIds };
+}
+
 function renderDocInclusionBadges(docId) {
   const inc = getAssessmentInclusion(docId);
   const badges = [];
+  const isNew = isNewForNextAssessment(docId);
+
+  if (isNew) {
+    badges.push(
+      '<span class="doc-status-badge doc-status-new" title="Not in the current assessment — will be included on the next analysis run">New for next run</span>'
+    );
+  }
   if (inc.inLastAssessment) {
     badges.push(
       '<span class="doc-status-badge doc-status-in-assessment" title="Included in the current executive summary">In assessment</span>'
@@ -1832,17 +1903,13 @@ function renderDocInclusionBadges(docId) {
       '<span class="doc-status-badge doc-status-cited" title="Cited inline in the assessment text">Cited</span>'
     );
   }
-  if (inc.explicitSelection && inc.inNextScope && !inc.inLastAssessment) {
+  if (inc.explicitSelection && inc.inNextScope && !inc.inLastAssessment && !isNew) {
     badges.push(
-      '<span class="doc-status-badge doc-status-selected" title="Selected for the next baseline run">Selected — pending run</span>'
-    );
-  } else if (inc.explicitSelection && inc.inNextScope) {
-    badges.push(
-      '<span class="doc-status-badge doc-status-selected" title="Selected for the next baseline run">Selected for next run</span>'
+      '<span class="doc-status-badge doc-status-selected" title="Selected for the next analysis run">Selected for next run</span>'
     );
   } else if (inc.explicitSelection && !inc.inNextScope) {
     badges.push(
-      '<span class="doc-status-badge doc-status-excluded" title="Excluded from the next baseline run">Excluded</span>'
+      '<span class="doc-status-badge doc-status-excluded" title="Excluded from the next analysis run">Excluded</span>'
     );
   }
   return badges.join("");
@@ -1957,7 +2024,8 @@ function renderScopeDisplayEntry(entry, { showInclusionBadges = false } = {}) {
   const title = escapeHtml(truncate(documentDisplayTitle(doc), 72));
   const type = escapeHtml(libraryTypeLabel(doc.source_type));
   const badges = showInclusionBadges ? renderDocInclusionBadges(doc.id) : "";
-  return `<li class="scope-doc-item">
+  const highlightClass = showInclusionBadges && isNewForNextAssessment(doc.id) ? " scope-doc-item-new" : "";
+  return `<li class="scope-doc-item${highlightClass}">
     <span class="scope-doc-item-main"><span class="badge badge-sm">${type}</span> <strong>${title}</strong></span>
     ${badges ? `<span class="scope-doc-item-badges">${badges}</span>` : ""}
   </li>`;
@@ -1971,33 +2039,83 @@ function renderScopeDocumentListItems(docIds, { showInclusionBadges = false, lim
   return `${items}${more ? `<li class="muted small scope-doc-more">…and ${more} more</li>` : ""}`;
 }
 
+function renderNextAssessmentScopeLists(nextIds, lastIds = []) {
+  if (!nextIds.length) return "";
+
+  const hasPrior = lastIds.length > 0 && state.latestAnalysis;
+  if (!hasPrior) {
+    return `<ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(nextIds, {
+      showInclusionBadges: true,
+    })}</ul>`;
+  }
+
+  const { newIds, carriedIds } = partitionNextScopeIds(nextIds, lastIds);
+  const parts = [];
+
+  if (newIds.length) {
+    const breakdown = formatScopeBreakdown(scopeSummaryFromIds(newIds).byType);
+    parts.push(`
+      <div class="assessment-pending-scope assessment-pending-scope-prominent">
+        <p class="assessment-pending-heading">New for next run (${newIds.length})</p>
+        <p class="muted small assessment-pending-note">Not in the current assessment — these will be sent when you update analysis.</p>
+        ${breakdown ? `<p class="muted small">${escapeHtml(breakdown)}</p>` : ""}
+        <ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(newIds, {
+          showInclusionBadges: true,
+        })}</ul>
+      </div>`);
+  } else if (state.selectedIds.size) {
+    parts.push(
+      `<p class="muted small assessment-pending-note">No new documents — next run uses the same selection as the current assessment.</p>`
+    );
+  }
+
+  if (carriedIds.length) {
+    parts.push(`
+      <details class="assessment-carried-scope"${newIds.length ? "" : " open"}>
+        <summary class="assessment-carried-summary">Already in current assessment (${carriedIds.length})</summary>
+        <ul class="scope-doc-list assessment-scope-doc-list scope-doc-list-muted">${renderScopeDocumentListItems(
+          carriedIds,
+          { showInclusionBadges: true }
+        )}</ul>
+      </details>`);
+  }
+
+  return parts.join("");
+}
+
 function renderSidebarScopeSection() {
   const analysis = state.latestAnalysis;
   if (!analysis?.document_ids?.length) return "";
 
-  const count = analysis.document_ids.length;
-  const listHtml = renderScopeDocumentListItems(analysis.document_ids, { showInclusionBadges: true });
+  const lastIds = analysis.document_ids;
   const nextIds = plannedAssessmentIds();
-  const lastSet = new Set(analysis.document_ids);
-  const pendingIds = nextIds.filter((id) => !lastSet.has(id));
-  const pendingHtml = pendingIds.length
-    ? `<div class="sidebar-pending-scope">
-        <p class="sidebar-subheading">Pending next run</p>
-        <ul class="scope-doc-list scope-doc-list-compact">${renderScopeDocumentListItems(pendingIds, {
+  const { newIds } = partitionNextScopeIds(nextIds, lastIds);
+  const pendingHtml = newIds.length
+    ? `<div class="sidebar-pending-scope sidebar-pending-scope-prominent">
+        <p class="sidebar-subheading">New for next run (${newIds.length})</p>
+        <p class="sidebar-panel-note muted small">Not in this assessment yet — will be sent on the next analysis run.</p>
+        <ul class="scope-doc-list scope-doc-list-compact">${renderScopeDocumentListItems(newIds, {
           showInclusionBadges: true,
         })}</ul>
       </div>`
     : "";
 
+  const currentHtml = `<div class="sidebar-current-scope">
+        <p class="sidebar-subheading">In this assessment (${lastIds.length})</p>
+        <ul class="scope-doc-list scope-doc-list-compact">${renderScopeDocumentListItems(lastIds, {
+          showInclusionBadges: true,
+        })}</ul>
+      </div>`;
+
   return `
     <section class="sidebar-panel sidebar-scope-panel">
       <div class="sidebar-panel-header row-between wrap">
-        <h4>In this assessment (${count})</h4>
+        <h4>Assessment scope</h4>
         <button type="button" class="btn ghost btn-sm" id="btn-view-assessment-scope">Adjust</button>
       </div>
-      <p class="sidebar-panel-note muted small">Library records sent to the LLM for this summary. Imaging folders are summarized; individual slices appear when used in vision analysis or cited in text.</p>
-      <ul class="scope-doc-list scope-doc-list-compact">${listHtml}</ul>
+      <p class="sidebar-panel-note muted small">Imaging folders are summarized; individual slices appear when used in vision analysis or cited in text.</p>
       ${pendingHtml}
+      ${currentHtml}
     </section>`;
 }
 
@@ -2091,14 +2209,14 @@ function renderExecutiveSummaryNotice(analysis, usedFallback) {
     el.classList.remove("hidden");
     el.className = "executive-summary-notice warn";
     el.innerHTML =
-      '<span class="notice-title">Summary was too short.</span> Showing content from the full assessment below. Re-run baseline to regenerate a proper executive summary.';
+      '<span class="notice-title">Summary was too short.</span> Showing content from the full assessment below. Update analysis to regenerate a proper executive summary.';
     return;
   }
   if (substantiveSummaryLength(summary) < 80 && substantiveSummaryLength(analysis.response || "") >= 80) {
     el.classList.remove("hidden");
     el.className = "executive-summary-notice warn";
     el.innerHTML =
-      '<span class="notice-title">Summary looks incomplete.</span> Expand <strong>Full assessment</strong> below or re-run baseline for a fuller summary.';
+      '<span class="notice-title">Summary looks incomplete.</span> Expand <strong>Full assessment</strong> below or update analysis for a fuller summary.';
     return;
   }
   el.classList.add("hidden");
@@ -2123,7 +2241,6 @@ function renderAssessmentScopeCard() {
   const nextIds = plannedAssessmentIds();
   const next = scopeSummaryFromIds(nextIds);
   const lastIds = state.latestAnalysis?.document_ids || [];
-  const last = lastIds.length ? scopeSummaryFromIds(lastIds) : null;
   const hasAssessment = Boolean(state.latestAnalysis);
   const usingAll = state.selectedIds.size === 0;
 
@@ -2131,38 +2248,31 @@ function renderAssessmentScopeCard() {
   const lastEl = $("#assessment-scope-last");
   const warnEl = $("#assessment-scope-warning");
   const matchBtn = $("#btn-scope-match-last");
-  const baselineBtn = $("#btn-baseline");
 
   if (nextEl) {
-    const mode = usingAll ? "All stored documents" : `${next.count} selected documents`;
-    const breakdown = formatScopeBreakdown(next.byType);
-    const nextList = next.count
-      ? `<ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(nextIds, {
-          showInclusionBadges: true,
-        })}</ul>`
-      : "";
-    nextEl.innerHTML = `
-      <p class="assessment-scope-heading">Next assessment</p>
-      <p class="assessment-scope-value"><strong>${escapeHtml(mode)}</strong>${total ? ` <span class="muted">(${total} in library)</span>` : ""}</p>
-      ${breakdown ? `<p class="muted small">${escapeHtml(breakdown)}</p>` : ""}
-      ${nextList}
-      ${!usingAll && next.count < total ? `<p class="muted small">Unselected documents will not be sent to the LLM.</p>` : ""}`;
+    const { newIds } = hasAssessment ? partitionNextScopeIds(nextIds, lastIds) : { newIds: [] };
+    const newSummary =
+      hasAssessment && newIds.length
+        ? `<p class="assessment-scope-new-summary"><strong>${newIds.length} new</strong> for next run · ${Math.max(
+            0,
+            next.count - newIds.length
+          )} already in current assessment</p>`
+        : "";
+    const nextList = next.count ? renderNextAssessmentScopeLists(nextIds, lastIds) : "";
+    const parts = [];
+    if (newSummary) parts.push(newSummary);
+    if (nextList) parts.push(nextList);
+    if (!usingAll && next.count < total) {
+      parts.push(`<p class="muted small">Unselected documents will not be sent to the LLM.</p>`);
+    }
+    nextEl.innerHTML =
+      parts.join("") ||
+      (total ? `<p class="muted small">All library documents will be included.</p>` : "");
   }
 
   if (lastEl) {
-    if (last && hasAssessment) {
-      lastEl.classList.remove("hidden");
-      const breakdown = formatScopeBreakdown(last.byType);
-      lastEl.innerHTML = `
-        <p class="assessment-scope-heading">Last assessment used</p>
-        <p class="assessment-scope-value"><strong>${last.count} document${last.count === 1 ? "" : "s"}</strong> · ${escapeHtml(formatTimestamp(state.latestAnalysis.created_at))}</p>
-        ${breakdown ? `<p class="muted small">${escapeHtml(breakdown)}</p>` : ""}
-        ${state.latestAnalysis.assessment_guidance ? `<p class="muted small assessment-scope-guidance-note"><strong>Guidance:</strong> ${escapeHtml(truncate(state.latestAnalysis.assessment_guidance, 240))}</p>` : ""}
-        <ul class="scope-doc-list assessment-scope-doc-list">${renderScopeDocumentListItems(lastIds, { showInclusionBadges: true })}</ul>`;
-    } else {
-      lastEl.classList.add("hidden");
-      lastEl.innerHTML = "";
-    }
+    lastEl.classList.add("hidden");
+    lastEl.innerHTML = "";
   }
 
   const warnings = [];
@@ -2203,12 +2313,7 @@ function renderAssessmentScopeCard() {
 
   matchBtn?.classList.toggle("hidden", !lastIds.length);
 
-  const reassessLabel = hasAssessment ? "Re-run baseline assessment" : "Run baseline assessment";
-  if (baselineBtn) {
-    baselineBtn.textContent = reassessLabel;
-    baselineBtn.disabled = state.analysisRunning || !total;
-  }
-
+  renderAnalysisRunChrome();
   renderHomeResultsSidebar(state.latestAnalysis);
 }
 
@@ -2233,7 +2338,7 @@ function scrollToAssessmentScope() {
 function goToLibraryForScope() {
   switchTab("library");
   window.scrollTo({ top: 0, behavior: "smooth" });
-  toast("Select documents with checkboxes, then run baseline assessment from here or Home");
+  toast("Select documents with checkboxes, then run analysis from here or Home");
 }
 
 const ASSESSMENT_GUIDANCE_PRESETS = [
@@ -2304,18 +2409,18 @@ async function confirmAndRunBaseline() {
   const breakdown = formatScopeBreakdown(next.byType);
   const guidance = getAssessmentGuidanceInput();
   const hasAssessment = Boolean(state.latestAnalysis);
-  let msg = hasAssessment
-    ? `Re-run baseline assessment using ${mode}?`
-    : `Run baseline assessment using ${mode}?`;
+  let msg = hasAssessment ? `Update analysis using ${mode}?` : `Run analysis using ${mode}?`;
   if (breakdown) msg += `\n\nIncludes: ${breakdown}`;
   if (guidance) msg += `\n\nGuidance:\n${truncate(guidance, 500)}`;
-  if (hasAssessment) msg += "\n\nBuilds on your current assessment and integrates the selected documents.";
+  if (hasAssessment) msg += "\n\nIntegrates new sources with your current assessment.";
   if (!confirm(msg)) return;
   await runAnalysis({ baseline: true, assessmentGuidance: guidance });
 }
 
 function reassessFromOpenItem() {
   scrollToAssessmentScope();
+  const guidanceDetails = $("#analysis-guidance-details");
+  if (guidanceDetails) guidanceDetails.setAttribute("open", "");
   const item = state.selectedOpenItem;
   if (item && !getAssessmentGuidanceInput()) {
     setAssessmentGuidanceInput(
@@ -2401,7 +2506,7 @@ function renderLibrarySelectionControls() {
     if (total && state.latestAnalysis) {
       line += " Badges show in-assessment, cited, and next-run status.";
     } else if (total && selected > 0) {
-      line += " Selected items show a pending badge until you re-run baseline.";
+      line += " Selected items show a pending badge until you update analysis.";
     }
     summary.textContent = line;
   }
@@ -2423,11 +2528,10 @@ function renderLibrarySelectionControls() {
 
   const libraryBaselineBtn = $("#btn-library-baseline");
   if (libraryBaselineBtn) {
-    const total = state.documentIndex.length || Object.values(counts).reduce((a, b) => a + b, 0);
-    libraryBaselineBtn.disabled = state.analysisRunning || !total;
-    const hasAssessment = Boolean(state.latestAnalysis);
-    libraryBaselineBtn.textContent = hasAssessment ? "Re-run baseline assessment" : "Run baseline assessment";
+    const totalDocs = state.documentIndex.length || Object.values(counts).reduce((a, b) => a + b, 0);
+    libraryBaselineBtn.disabled = state.analysisRunning || !totalDocs;
   }
+  renderAnalysisRunChrome();
 }
 
 function renderDocuments() {
@@ -3002,8 +3106,9 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
     : "";
   const displayName = info.display_name || doc.title;
   const inclusionBadges = renderDocInclusionBadges(doc.id);
+  const newClass = isNewForNextAssessment(doc.id) ? " doc-item-new" : "";
   return `
-    <article class="doc-item ${selected ? "selected" : ""}${compact ? " doc-item-compact" : ""}" data-id="${doc.id}">
+    <article class="doc-item ${selected ? "selected" : ""}${compact ? " doc-item-compact" : ""}${newClass}" data-id="${doc.id}">
       <div class="doc-item-heading">
         <label class="doc-select-check" title="Include in assessment">
           <input type="checkbox" class="doc-select-input" data-id="${doc.id}"${selected ? " checked" : ""}>
@@ -4452,11 +4557,11 @@ function renderSourceAttributionNotice(analysis) {
     html =
       '<span class="notice-title">Partial source attribution.</span> ' +
       "Informal citations were converted to [SOURCE: …] tags. " +
-      "Re-run baseline assessment for fully LLM-generated tags.";
+      "Re-run analysis for fully LLM-generated tags.";
   } else {
     html =
       '<span class="notice-title">Source tags missing.</span> ' +
-      "Expand Run further analysis and run baseline assessment to regenerate with source attribution.";
+      "Expand Update analysis below and re-run to regenerate with source attribution.";
   }
 
   el.classList.remove("hidden");
@@ -5322,7 +5427,7 @@ safeOn("#btn-summarize", "click", () => runAnalysis({ summarize: true }));
 
 safeOn("#btn-analyze", "click", () => {
   const query = $("#analyze-query").value.trim();
-  if (!query) return toast("Enter a question, or use Run baseline assessment", "error");
+  if (!query) return toast("Enter a question, or use Run analysis", "error");
   runAnalysis({ query });
 });
 
