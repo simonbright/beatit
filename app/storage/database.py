@@ -88,6 +88,7 @@ class Database:
             await self._migrate_open_items_table(db)
             await self._migrate_analysis_jobs_table(db)
             await self._migrate_audit_events_table(db)
+            await self._migrate_chat_tables(db)
 
         await self._migrate_stale_openrouter_model()
 
@@ -519,6 +520,42 @@ class Database:
         if "requested_by" not in columns:
             await db.execute("ALTER TABLE analysis_jobs ADD COLUMN requested_by TEXT")
             await db.commit()
+
+    async def _migrate_chat_tables(self, db: aiosqlite.Connection) -> None:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                focus TEXT NOT NULL DEFAULT 'options',
+                document_ids_json TEXT DEFAULT '[]',
+                include_latest_assessment INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                model TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated ON chat_sessions(updated_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at ASC)"
+        )
+        await db.commit()
 
     async def _migrate_audit_events_table(self, db: aiosqlite.Connection) -> None:
         await db.execute(
@@ -1357,6 +1394,195 @@ class Database:
             "updated_at": row.get("updated_at") or row["created_at"],
             "refinement_count": int(row.get("refinement_count") or 0),
             "assessment_guidance": row.get("assessment_guidance"),
+        }
+
+    async def create_chat_session(
+        self,
+        *,
+        title: str = "AI Chat",
+        focus: str = "options",
+        document_ids: list[str] | None = None,
+        include_latest_assessment: bool = True,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        session_id = str(uuid4())
+        now = _now_iso()
+        row = {
+            "id": session_id,
+            "title": (title or "AI Chat").strip()[:200],
+            "focus": (focus or "options").strip()[:80],
+            "document_ids_json": json.dumps(document_ids or []),
+            "include_latest_assessment": 1 if include_latest_assessment else 0,
+            "created_by": created_by,
+            "created_at": now,
+            "updated_at": now,
+        }
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO chat_sessions
+                (id, title, focus, document_ids_json, include_latest_assessment, created_by, created_at, updated_at)
+                VALUES (:id, :title, :focus, :document_ids_json, :include_latest_assessment, :created_by, :created_at, :updated_at)
+                """,
+                row,
+            )
+            await db.commit()
+        return self._chat_session_row(row)
+
+    async def list_chat_sessions(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 200))
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT s.*,
+                       (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
+                FROM chat_sessions s
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return [self._chat_session_row(dict(row)) for row in rows]
+
+    async def get_chat_session(self, session_id: str) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT s.*,
+                       (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
+                FROM chat_sessions s
+                WHERE s.id = ?
+                """,
+                (session_id,),
+            )
+            row = await cursor.fetchone()
+        return self._chat_session_row(dict(row)) if row else None
+
+    async def update_chat_session(
+        self,
+        session_id: str,
+        *,
+        title: str | None = None,
+        document_ids: list[str] | None = None,
+        include_latest_assessment: bool | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_chat_session(session_id)
+        if not existing:
+            return None
+        now = _now_iso()
+        next_title = existing["title"] if title is None else title.strip()[:200]
+        next_ids = existing["document_ids"] if document_ids is None else document_ids
+        next_include = (
+            existing["include_latest_assessment"]
+            if include_latest_assessment is None
+            else include_latest_assessment
+        )
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE chat_sessions
+                SET title = ?, document_ids_json = ?, include_latest_assessment = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_title,
+                    json.dumps(next_ids or []),
+                    1 if next_include else 0,
+                    now,
+                    session_id,
+                ),
+            )
+            await db.commit()
+        return await self.get_chat_session(session_id)
+
+    async def touch_chat_session(self, session_id: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+                (_now_iso(), session_id),
+            )
+            await db.commit()
+
+    async def delete_chat_session(self, session_id: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+            cursor = await db.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def list_chat_messages(self, session_id: str) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM chat_messages
+                WHERE session_id = ?
+                ORDER BY created_at ASC
+                """,
+                (session_id,),
+            )
+            rows = await cursor.fetchall()
+        return [self._chat_message_row(dict(row)) for row in rows]
+
+    async def insert_chat_message(
+        self,
+        *,
+        session_id: str,
+        role: str,
+        content: str,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        message_id = str(uuid4())
+        now = _now_iso()
+        row = {
+            "id": message_id,
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "model": model,
+            "created_at": now,
+        }
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO chat_messages (id, session_id, role, content, model, created_at)
+                VALUES (:id, :session_id, :role, :content, :model, :created_at)
+                """,
+                row,
+            )
+            await db.execute(
+                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+                (now, session_id),
+            )
+            await db.commit()
+        return self._chat_message_row(row)
+
+    @staticmethod
+    def _chat_session_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "focus": row.get("focus") or "options",
+            "document_ids": json.loads(row.get("document_ids_json") or "[]"),
+            "include_latest_assessment": bool(row.get("include_latest_assessment", 1)),
+            "created_by": row.get("created_by"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "message_count": int(row.get("message_count") or 0),
+        }
+
+    @staticmethod
+    def _chat_message_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "role": row["role"],
+            "content": row["content"],
+            "model": row.get("model"),
+            "created_at": row["created_at"],
         }
 
     async def insert_audit_event(

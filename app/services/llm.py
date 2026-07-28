@@ -1,4 +1,5 @@
 from typing import Any, Protocol
+from collections.abc import AsyncIterator
 
 from app.config import settings
 from app.services.ollama import OllamaClient
@@ -17,6 +18,18 @@ class LLMBackend(Protocol):
         system: str | None = None,
         temperature: float = 0.3,
     ) -> str: ...
+    async def chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> str: ...
+    def stream_chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]: ...
 
 
 class LLMClient:
@@ -138,3 +151,22 @@ class LLMClient:
             system=system,
             temperature=temperature,
         )
+
+    async def chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> str:
+        backend = await self._resolve_backend()
+        return await backend.chat(messages=messages, temperature=temperature)
+
+    async def stream_chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        backend = await self._resolve_backend()
+        async for token in backend.stream_chat(messages=messages, temperature=temperature):
+            yield token

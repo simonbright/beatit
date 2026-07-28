@@ -1,12 +1,12 @@
-from pathlib import Path
-from typing import Any
-import json
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from collections.abc import AsyncIterator
 
 from app.ingest.text import ingest_text
 from app.ingest.url import ingest_url
@@ -25,6 +25,7 @@ from app.services.analysis_jobs import (
     get_job_payload,
 )
 from app.services.synthesis import SynthesisService
+from app.services.options_chat import OPTIONS_STARTER_PROMPTS, OptionsChatService
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
 from app.services.dicom_preview import is_dicom_document, render_dicom_preview_png
 from app.services.investigation import InvestigationService
@@ -123,6 +124,17 @@ class AnalyzeRequest(BaseModel):
     assessment_guidance: str | None = Field(default=None, max_length=5000)
 
 
+class OptionsChatSessionRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    document_ids: list[str] | None = None
+    include_latest_assessment: bool = True
+
+
+class OptionsChatMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+    stream: bool = True
+
+
 class ImagingVisionRequest(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=10)
 
@@ -207,6 +219,10 @@ async def _get_services():
     synthesis = SynthesisService(store, db, llm)
     investigation = InvestigationService(store, db, llm)
     return db, store, llm, synthesis, investigation
+
+
+def _options_chat_service(db: Database, store: DocumentStore, llm: LLMClient) -> OptionsChatService:
+    return OptionsChatService(store, db, llm)
 
 
 def _actor(request: Request | None) -> str | None:
@@ -1129,6 +1145,112 @@ async def cancel_analysis_job_route(job_id: str, request: Request):
         },
     )
     return {"job": payload}
+
+
+@router.get("/options-chat/starters")
+async def options_chat_starters():
+    return {"starters": OPTIONS_STARTER_PROMPTS}
+
+
+@router.get("/options-chat/sessions")
+async def list_options_chat_sessions(limit: int = 50):
+    db, _, _, _, _ = await _get_services()
+    return {"sessions": await db.list_chat_sessions(limit=limit)}
+
+
+@router.post("/options-chat/sessions")
+async def create_options_chat_session(body: OptionsChatSessionRequest, request: Request):
+    db, store, llm, _, _ = await _get_services()
+    chat = _options_chat_service(db, store, llm)
+    session = await chat.create_session(
+        document_ids=body.document_ids,
+        include_latest_assessment=body.include_latest_assessment,
+        title=body.title,
+        created_by=_actor(request),
+    )
+    await _audit(
+        db,
+        request,
+        ANALYSIS_REQUESTED,
+        resource_type="chat_session",
+        resource_id=session["id"],
+        metadata={
+            "job_type": "options_chat",
+            "document_count": len(body.document_ids or []),
+            "include_latest_assessment": body.include_latest_assessment,
+        },
+    )
+    return {"session": session, "messages": []}
+
+
+@router.get("/options-chat/sessions/{session_id}")
+async def get_options_chat_session(session_id: str):
+    db, store, llm, _, _ = await _get_services()
+    chat = _options_chat_service(db, store, llm)
+    bundle = await chat.get_session_bundle(session_id)
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return bundle
+
+
+@router.delete("/options-chat/sessions/{session_id}")
+async def delete_options_chat_session(session_id: str, request: Request):
+    db, _, _, _, _ = await _get_services()
+    deleted = await db.delete_chat_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    await _audit(
+        db,
+        request,
+        ANALYSIS_DRAFT_DISCARDED,
+        resource_type="chat_session",
+        resource_id=session_id,
+        metadata={"job_type": "options_chat"},
+    )
+    return {"deleted": True}
+
+
+@router.post("/options-chat/sessions/{session_id}/messages")
+async def post_options_chat_message(
+    session_id: str,
+    body: OptionsChatMessageRequest,
+    request: Request,
+):
+    db, store, llm, _, _ = await _get_services()
+    chat = _options_chat_service(db, store, llm)
+    existing = await db.get_chat_session(session_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    if body.stream:
+        events = await chat.send_message(session_id, body.content, stream=True)
+
+        async def event_stream() -> AsyncIterator[bytes]:
+            try:
+                async for event in events:  # type: ignore[union-attr]
+                    yield f"data: {json.dumps(event)}\n\n".encode("utf-8")
+            except Exception as exc:
+                payload = {"type": "error", "error": str(exc)}
+                yield f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        result = await chat.send_message(session_id, body.content, stream=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Chat failed: {exc}") from exc
+
+    return result
 
 
 @router.get("/custom-tasks")

@@ -1,4 +1,6 @@
 from typing import Any
+from collections.abc import AsyncIterator
+import json
 
 import httpx
 
@@ -71,28 +73,82 @@ class OllamaClient:
         system: str | None = None,
         temperature: float = 0.3,
     ) -> str:
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return await self.chat(messages=messages, temperature=temperature)
+
+    async def chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> str:
         payload: dict[str, Any] = {
             "model": self.model,
-            "prompt": prompt,
+            "messages": messages,
             "stream": False,
             "options": {"temperature": temperature},
         }
-        if system:
-            payload["system"] = system
-
         timeout = httpx.Timeout(
             settings.ollama_generate_timeout,
             connect=10.0,
         )
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
-                f"{self.base_url}/api/generate",
+                f"{self.base_url}/api/chat",
                 json=payload,
             )
             if not response.is_success:
                 raise RuntimeError(ollama_error_message(response))
             data = response.json()
-            return data.get("response", "").strip()
+            message = data.get("message") or {}
+            return str(message.get("content") or "").strip()
+
+    async def stream_chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": {"temperature": temperature},
+        }
+        timeout = httpx.Timeout(
+            settings.ollama_generate_timeout,
+            connect=10.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    raise RuntimeError(
+                        f"Ollama request failed ({response.status_code}): "
+                        f"{body.decode(errors='ignore')[:400]}"
+                    )
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if data.get("error"):
+                        raise RuntimeError(str(data["error"]))
+                    message = data.get("message") or {}
+                    token = message.get("content") or ""
+                    if token:
+                        yield token
+                    if data.get("done"):
+                        break
 
 
 class OllamaVisionClient(OllamaClient):

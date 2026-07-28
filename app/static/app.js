@@ -13,6 +13,11 @@ const state = {
   selectedOpenItemId: null,
   selectedOpenItem: null,
   analysisRunning: false,
+  optionsChatSessions: [],
+  optionsChatSessionId: null,
+  optionsChatMessages: [],
+  optionsChatStarters: [],
+  optionsChatSending: false,
   analysisJobId: null,
   auditEvents: [],
   auditOffset: 0,
@@ -930,6 +935,7 @@ function switchTab(name, options = {}) {
   if (name === "imaging") loadImagingPanel();
   if (name === "history") loadHistory();
   if (name === "analyze") loadLatestAssessment();
+  if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") loadCustomTasks();
   if (name === "settings") loadSettings();
   updateHomeToolbar();
@@ -1184,6 +1190,10 @@ function renderCustomTaskDetail(analysis) {
     answerEl.innerHTML = answerParts.length
       ? answerParts.join('<hr class="answer-divider">')
       : '<p class="muted">No response returned.</p>';
+    const appendix = analysis.references || [];
+    if (appendix.length) {
+      answerEl.innerHTML += renderInlineReferenceAppendix(appendix, refPrefix);
+    }
   }
 
   renderSourcesSidebar({
@@ -1728,6 +1738,7 @@ const ASSESSMENT_GUIDANCE_STORAGE_KEY = "beatit-assessment-guidance";
 const TAB_STORAGE_KEY = "beatit-active-tab";
 const VALID_TABS = new Set([
   "analyze",
+  "options-chat",
   "custom-tasks",
   "ingest",
   "library",
@@ -3628,11 +3639,20 @@ function describeSourceTagInner(inner) {
     const titleMatch = inner.match(/^document\s+"([^"]+)"/i);
     const title = titleMatch?.[1] || inner;
     const doc = findDocumentByTitle(title);
-    if (doc?.source_info) return doc.source_info;
+    if (doc?.source_info) {
+      const info = doc.source_info;
+      return {
+        ...info,
+        display_label: info.display_label || info.display_name || title,
+        document_id: info.document_id || doc.id,
+        type_display: info.type_display || info.display || "",
+      };
+    }
     return {
       css_class: "source-document",
       shorthand: labels.document?.shorthand || "Doc",
       display_label: title,
+      type_display: labels.document?.display || "Clinical record",
     };
   }
   return {
@@ -3655,13 +3675,82 @@ function renderInlineSourceCitation(meta, inner) {
   return `<span class="source-cite-inline ${meta.css_class || "source-inference"}" title="${escapeHtml(title)}">${renderSourceBadge(meta)}</span>`;
 }
 
-function formatWithSources(text) {
+function formatWithSources(text, idPrefix = null) {
   if (!text) return "";
-  const escaped = escapeHtml(text);
-  const withTags = escaped.replace(/\[SOURCE:\s*([^\]]+)\]/gi, (_, inner) =>
-    renderInlineSourceCitation(describeSourceTagInner(inner), inner)
-  );
-  return formatMarkdownEmphasis(withTags).replace(/\n/g, "<br>");
+  const { html, appendix, prefix } = formatTextWithBottomReferences(text, idPrefix);
+  return html + renderInlineReferenceAppendix(appendix, prefix);
+}
+
+function buildClientReferenceRegistry(text) {
+  const labels = [];
+  const seen = new Set();
+  const re = /\[SOURCE:\s*([^\]]+)\]/gi;
+  let match;
+  while ((match = re.exec(text || ""))) {
+    const label = match[1].trim();
+    const key = label.toLowerCase();
+    if (!label || seen.has(key)) continue;
+    seen.add(key);
+    labels.push(label);
+  }
+  const registry = {};
+  const appendix = labels.map((label, index) => {
+    const num = index + 1;
+    const meta = describeSourceTagInner(label);
+    const titleMatch = label.match(/^document\s+"([^"]+)"/i);
+    const doc = titleMatch ? findDocumentByTitle(titleMatch[1]) : null;
+    const entry = enrichReference({
+      num,
+      label: meta.display_label || label,
+      raw_label: label,
+      display_label: meta.display_label || label,
+      css_class: meta.css_class,
+      shorthand: meta.shorthand,
+      type: meta.type || meta.css_class?.replace(/^source-/, "") || "document",
+      type_display: meta.type_display || "",
+      document_id: meta.document_id || doc?.id || null,
+    });
+    registry[num] = entry;
+    registry[String(num)] = entry;
+    return entry;
+  });
+  return { registry, appendix };
+}
+
+function formatTextWithBottomReferences(text, idPrefix = null) {
+  const prefix = idPrefix || `local-${Math.abs(hashString(text || "") % 1e9)}`;
+  const { registry, appendix } = buildClientReferenceRegistry(text);
+  if (!appendix.length) {
+    return {
+      html: formatMarkdownEmphasis(escapeHtml(text || "")).replace(/\n/g, "<br>"),
+      appendix: [],
+      prefix,
+    };
+  }
+  return {
+    html: formatNumberedReferences(text, registry, prefix),
+    appendix,
+    prefix,
+  };
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
+}
+
+function renderInlineReferenceAppendix(appendix, idPrefix = "ref") {
+  if (!appendix?.length) return "";
+  return `<div class="message-references">
+    <p class="message-references-heading">References</p>
+    <ol class="references-appendix-list">${appendix
+      .map((ref) => renderReferenceEntry(ref, idPrefix, { anchor: true }))
+      .join("")}</ol>
+  </div>`;
 }
 
 function refEntryId(idPrefix, num) {
@@ -3717,6 +3806,19 @@ function citePillLabel(ref) {
     return truncate(label || "Web source", 36);
   }
   return truncate(label || "Source", 36);
+}
+
+function citePillText(ref, num) {
+  const n = String(num ?? ref?.num ?? "?");
+  const type = ref?.type || "";
+  const css = ref?.css_class || "";
+  if (type === "unknown" || css.includes("unknown")) return `[${n}]`;
+  if (type === "inference" || css.includes("inference")) return `[${n}]`;
+  if (type === "patient_context" || css.includes("context")) return `[${n}]`;
+  // Number first so multiple Docs stay distinct even when titles are long.
+  const short = citePillLabel(ref);
+  if (!short || short === "Source") return `[${n}]`;
+  return `[${n}] ${short}`;
 }
 
 const SOURCES_SIDEBAR_PREVIEW = 6;
@@ -3952,15 +4054,12 @@ function formatNumberedReferences(text, registry = state.referenceRegistry, idPr
       const hash = refEntryHash(idPrefix, num);
       const fullTitle = ref?.display_label || ref?.label || `Reference ${num}`;
       if (!ref) {
-        return `<a href="${hash}" class="cite-pill ref-cite-link" title="${escapeHtml(fullTitle)}">Source</a>`;
+        return `<a href="${hash}" class="cite-pill ref-cite-link" title="${escapeHtml(fullTitle)}">[${escapeHtml(num)}]</a>`;
       }
       const cls = ref.css_class || sourceTagClass(ref.raw_label || ref.label || "");
       const docAttr = ref.document_id ? ` data-doc-id="${escapeHtml(ref.document_id)}"` : "";
-      const href = ref.source_uri || hash;
-      const externalAttr = ref.source_uri
-        ? ` target="_blank" rel="noopener noreferrer" data-external="1"`
-        : "";
-      return `<a href="${escapeHtml(href)}" class="cite-pill ref-cite-link ${cls}" title="${escapeHtml(fullTitle)}"${docAttr}${externalAttr}>${escapeHtml(citePillLabel(ref))}</a>`;
+      const href = hash;
+      return `<a href="${escapeHtml(href)}" class="cite-pill ref-cite-link ${cls}" title="${escapeHtml(fullTitle)}"${docAttr}>${escapeHtml(citePillText(ref, num))}</a>`;
     })
     .replace(/\n/g, "<br>");
 }
@@ -3986,13 +4085,21 @@ function renderReferenceActions(ref) {
 }
 
 function renderReferenceEntry(ref, idPrefix = "ref", { anchor = true } = {}) {
-  const label = ref.display_label || ref.label || "";
-  const actions = renderReferenceActions(ref);
-  const idAttr = anchor ? ` id="${escapeHtml(refEntryId(idPrefix, ref.num))}"` : "";
+  const enriched = enrichReference(ref);
+  const label = enriched.display_label || enriched.label || "";
+  const actions = renderReferenceActions(enriched);
+  const idAttr = anchor ? ` id="${escapeHtml(refEntryId(idPrefix, enriched.num))}"` : "";
+  const typeHint = enriched.type_display || enriched.type || "";
+  const typeLine = typeHint
+    ? `<span class="ref-type muted small">${escapeHtml(typeHint)}</span>`
+    : "";
   return `<li${idAttr} class="reference-entry">
-    ${renderSourceBadge(ref)}
-    <span class="ref-num">[${escapeHtml(String(ref.num))}]</span>
-    <span class="ref-label">${escapeHtml(label)}</span>
+    ${renderSourceBadge(enriched)}
+    <span class="ref-num">[${escapeHtml(String(enriched.num))}]</span>
+    <span class="ref-main">
+      <span class="ref-label">${escapeHtml(label)}</span>
+      ${typeLine}
+    </span>
     ${actions}
   </li>`;
 }
@@ -4051,7 +4158,7 @@ function initReferenceNavigation() {
       return;
     }
 
-    const docLink = event.target.closest(".ref-doc-link,[data-doc-id].ref-cite-link");
+    const docLink = event.target.closest(".ref-doc-link");
     if (docLink?.dataset?.docId) {
       event.preventDefault();
       viewDocument(docLink.dataset.docId);
@@ -4064,7 +4171,7 @@ function initReferenceNavigation() {
       }
       if (citeLink.hash) {
         const id = citeLink.hash.slice(1);
-        const panel = citeLink.closest(".panel.active, .custom-task-detail, .answer-layout");
+        const panel = citeLink.closest(".panel.active, .custom-task-detail, .answer-layout, .options-chat-bubble");
         const target =
           panel?.querySelector(`#${CSS.escape(id)}`) ||
           document.getElementById(id) ||
@@ -4074,7 +4181,12 @@ function initReferenceNavigation() {
           target.scrollIntoView({ behavior: "smooth", block: "start" });
           target.classList.add("ref-highlight");
           setTimeout(() => target.classList.remove("ref-highlight"), 1600);
+          return;
         }
+      }
+      if (citeLink.dataset?.docId) {
+        event.preventDefault();
+        viewDocument(citeLink.dataset.docId);
       }
     }
   });
@@ -4279,7 +4391,7 @@ function renderOpenItemPanel(item) {
   acceptedWrap?.classList.toggle("hidden", !hasAccepted);
 
   if (hasDraft && draftRaw) {
-    draftRaw.innerHTML = `<div class="sourced-text">${formatWithSources(item.investigation_draft_response)}</div>`;
+    draftRaw.innerHTML = `<div class="sourced-text">${formatWithSources(item.investigation_draft_response, `inv-draft-${item.id}`)}</div>`;
     if (draftMeta) {
       draftMeta.textContent = [
         item.investigation_draft_at
@@ -4297,7 +4409,7 @@ function renderOpenItemPanel(item) {
   }
 
   if (hasAccepted && acceptedBody) {
-    acceptedBody.innerHTML = formatWithSources(item.investigation_response);
+    acceptedBody.innerHTML = formatWithSources(item.investigation_response, `inv-${item.id}`);
     if (acceptedMeta) {
       acceptedMeta.textContent = item.investigation_at
         ? `Accepted ${formatTimestamp(item.investigation_at)}`
@@ -4589,6 +4701,7 @@ function renderLatestAssessment(analysis) {
     state.referenceRegistry = {};
     execTextEl.innerHTML = "";
     if (fullBody) fullBody.innerHTML = "";
+    renderReferencesAppendix(null);
     renderOpenItemsTable([]);
     selectOpenItem(null);
     renderSourceAttributionNotice(null);
@@ -4633,6 +4746,7 @@ function renderLatestAssessment(analysis) {
     }
   }
 
+  renderReferencesAppendix(analysis, { idPrefix: refPrefix });
   renderHomeResultsSidebar(analysis);
 
   renderOpenItemsTable(analysis.open_items || []);
@@ -5499,6 +5613,323 @@ $("#btn-add-comment")?.addEventListener("click", () =>
   addCommentToSelectedOpenItem()
 );
 $("#btn-close-open-item")?.addEventListener("click", () => selectOpenItem(null));
+
+function optionsChatScopeNote() {
+  const n = state.selectedIds.size;
+  const scope = n === 0 ? "Using all library documents" : `${n} selected documents`;
+  return `${scope} · includes current Home assessment`;
+}
+
+function renderOptionsChatSessions() {
+  const list = $("#options-chat-session-list");
+  if (!list) return;
+  const sessions = state.optionsChatSessions || [];
+  if (!sessions.length) {
+    list.innerHTML = `<p class="muted">No chats yet.</p>`;
+    return;
+  }
+  list.innerHTML = sessions
+    .map((session) => {
+      const active = session.id === state.optionsChatSessionId ? " active" : "";
+      const count = session.message_count || 0;
+      return `<button type="button" class="options-chat-session-item${active}" data-session-id="${escapeHtml(session.id)}">
+        <span class="options-chat-session-title">${escapeHtml(truncate(session.title || "AI Chat", 72))}</span>
+        <span class="options-chat-session-meta">${count} message${count === 1 ? "" : "s"} · ${escapeHtml(formatTimestamp(session.updated_at))}</span>
+      </button>`;
+    })
+    .join("");
+}
+
+function renderOptionsChatStarters() {
+  const el = $("#options-chat-starters");
+  if (!el) return;
+  const starters = state.optionsChatStarters || [];
+  el.innerHTML = starters
+    .map(
+      (text, index) =>
+        `<button type="button" class="btn secondary btn-sm options-chat-starter" data-starter-index="${index}">${escapeHtml(text)}</button>`
+    )
+    .join("");
+}
+
+function renderOptionsChatMessages() {
+  const wrap = $("#options-chat-messages");
+  const titleEl = $("#options-chat-title");
+  const scopeEl = $("#options-chat-scope-note");
+  const deleteBtn = $("#btn-options-chat-delete");
+  if (!wrap) return;
+
+  const session = (state.optionsChatSessions || []).find((s) => s.id === state.optionsChatSessionId);
+  if (titleEl) titleEl.textContent = session?.title || "AI Chat";
+  if (scopeEl) scopeEl.textContent = optionsChatScopeNote();
+  deleteBtn?.classList.toggle("hidden", !state.optionsChatSessionId);
+
+  const messages = state.optionsChatMessages || [];
+  if (!messages.length) {
+    const starters = (state.optionsChatStarters || [])
+      .map(
+        (text, index) =>
+          `<button type="button" class="btn secondary btn-sm options-chat-starter" data-starter-index="${index}">${escapeHtml(text)}</button>`
+      )
+      .join("");
+    wrap.innerHTML = `
+      <div class="options-chat-empty" id="options-chat-empty">
+        <p>Ask anything about options for this case. Start broad, then push deeper on the branch that matters.</p>
+        <div id="options-chat-starters" class="options-chat-starters">${starters}</div>
+      </div>`;
+    return;
+  }
+
+  wrap.innerHTML = messages
+    .map((msg) => {
+      const role = msg.role === "user" ? "user" : "assistant";
+      const label = role === "user" ? "You" : "AI Chat";
+      const body =
+        role === "assistant"
+          ? formatWithSources(msg.content || "", msg.id || null)
+          : escapeHtml(msg.content || "").replace(/\n/g, "<br>");
+      const streaming = msg.streaming ? " streaming" : "";
+      return `<article class="options-chat-bubble ${role}${streaming}">
+        <span class="options-chat-role">${label}</span>
+        <div class="options-chat-body">${body}</div>
+      </article>`;
+    })
+    .join("");
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+function setOptionsChatStatus(text) {
+  const el = $("#options-chat-status");
+  if (el) el.textContent = text || "";
+}
+
+function setOptionsChatSending(sending) {
+  state.optionsChatSending = sending;
+  const btn = $("#btn-options-chat-send");
+  const input = $("#options-chat-input");
+  if (btn) btn.disabled = sending;
+  if (input) input.disabled = sending;
+  setOptionsChatStatus(sending ? "Thinking…" : "");
+}
+
+async function loadOptionsChatPanel() {
+  try {
+    const [sessionsData, startersData] = await Promise.all([
+      api("/api/options-chat/sessions"),
+      api("/api/options-chat/starters"),
+    ]);
+    state.optionsChatSessions = sessionsData.sessions || [];
+    state.optionsChatStarters = startersData.starters || [];
+    renderOptionsChatSessions();
+    renderOptionsChatStarters();
+
+    if (state.optionsChatSessionId) {
+      await selectOptionsChatSession(state.optionsChatSessionId);
+    } else if (state.optionsChatSessions.length) {
+      await selectOptionsChatSession(state.optionsChatSessions[0].id);
+    } else {
+      state.optionsChatMessages = [];
+      renderOptionsChatMessages();
+    }
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+async function selectOptionsChatSession(sessionId) {
+  if (!sessionId) return;
+  const data = await api(`/api/options-chat/sessions/${sessionId}`);
+  state.optionsChatSessionId = data.session?.id || sessionId;
+  state.optionsChatMessages = data.messages || [];
+  const idx = state.optionsChatSessions.findIndex((s) => s.id === state.optionsChatSessionId);
+  if (idx >= 0) state.optionsChatSessions[idx] = data.session;
+  else if (data.session) state.optionsChatSessions.unshift(data.session);
+  renderOptionsChatSessions();
+  renderOptionsChatMessages();
+}
+
+async function createOptionsChatSession() {
+  const docIds = state.selectedIds.size ? [...state.selectedIds] : null;
+  const data = await api("/api/options-chat/sessions", {
+    method: "POST",
+    body: JSON.stringify({
+      document_ids: docIds,
+      include_latest_assessment: true,
+    }),
+  });
+  state.optionsChatSessions = [data.session, ...state.optionsChatSessions.filter((s) => s.id !== data.session.id)];
+  state.optionsChatSessionId = data.session.id;
+  state.optionsChatMessages = data.messages || [];
+  renderOptionsChatSessions();
+  renderOptionsChatMessages();
+  $("#options-chat-input")?.focus();
+  return data.session;
+}
+
+async function deleteOptionsChatSession() {
+  const id = state.optionsChatSessionId;
+  if (!id) return;
+  if (!confirm("Delete this AI Chat?")) return;
+  await api(`/api/options-chat/sessions/${id}`, { method: "DELETE" });
+  state.optionsChatSessions = state.optionsChatSessions.filter((s) => s.id !== id);
+  state.optionsChatSessionId = state.optionsChatSessions[0]?.id || null;
+  state.optionsChatMessages = [];
+  if (state.optionsChatSessionId) await selectOptionsChatSession(state.optionsChatSessionId);
+  else {
+    renderOptionsChatSessions();
+    renderOptionsChatMessages();
+  }
+  toast("Chat deleted");
+}
+
+async function ensureOptionsChatSession() {
+  if (state.optionsChatSessionId) return state.optionsChatSessionId;
+  const session = await createOptionsChatSession();
+  return session.id;
+}
+
+async function sendOptionsChatMessage(rawText) {
+  const content = (rawText || "").trim();
+  if (!content) return toast("Enter a message", "error");
+  if (state.optionsChatSending) return;
+
+  const sessionId = await ensureOptionsChatSession();
+  setOptionsChatSending(true);
+
+  const optimisticUser = {
+    id: `local-user-${Date.now()}`,
+    role: "user",
+    content,
+    created_at: new Date().toISOString(),
+  };
+  const streamingAssistant = {
+    id: `local-assistant-${Date.now()}`,
+    role: "assistant",
+    content: "",
+    streaming: true,
+    created_at: new Date().toISOString(),
+  };
+  state.optionsChatMessages = [...state.optionsChatMessages, optimisticUser, streamingAssistant];
+  renderOptionsChatMessages();
+  if ($("#options-chat-input")) $("#options-chat-input").value = "";
+
+  try {
+    const res = await fetch(`/api/options-chat/sessions/${sessionId}/messages`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ content, stream: true }),
+    });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      throw new Error("Please sign in");
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || data.message || `Chat failed (${res.status})`);
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("Streaming is not supported in this browser");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalAssistant = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+      for (const part of parts) {
+        const line = part
+          .split("\n")
+          .map((l) => l.trim())
+          .find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        let event;
+        try {
+          event = JSON.parse(line.slice(5).trim());
+        } catch {
+          continue;
+        }
+        if (event.type === "token") {
+          streamingAssistant.content += event.content || "";
+          renderOptionsChatMessages();
+        } else if (event.type === "done") {
+          finalAssistant = event.assistant_message;
+          if (event.session) {
+            const idx = state.optionsChatSessions.findIndex((s) => s.id === event.session.id);
+            if (idx >= 0) state.optionsChatSessions[idx] = event.session;
+            else state.optionsChatSessions.unshift(event.session);
+          }
+        } else if (event.type === "error") {
+          throw new Error(event.error || "Chat failed");
+        }
+      }
+    }
+
+    if (finalAssistant) {
+      state.optionsChatMessages = [
+        ...state.optionsChatMessages.filter((m) => m !== optimisticUser && m !== streamingAssistant),
+        { ...optimisticUser, id: finalAssistant.id ? `user-before-${finalAssistant.id}` : optimisticUser.id },
+        finalAssistant,
+      ];
+      // Reload authoritative history so user message id/title stay in sync.
+      await selectOptionsChatSession(sessionId);
+    } else if (streamingAssistant.content) {
+      streamingAssistant.streaming = false;
+      renderOptionsChatMessages();
+      await selectOptionsChatSession(sessionId);
+    } else {
+      throw new Error("No reply received");
+    }
+  } catch (err) {
+    state.optionsChatMessages = state.optionsChatMessages.filter(
+      (m) => m !== optimisticUser && m !== streamingAssistant
+    );
+    renderOptionsChatMessages();
+    if ($("#options-chat-input") && !$("#options-chat-input").value) {
+      $("#options-chat-input").value = content;
+    }
+    toast(err.message || "Chat failed", "error");
+  } finally {
+    setOptionsChatSending(false);
+    renderOptionsChatSessions();
+  }
+}
+
+$("#options-chat-session-list")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-session-id]");
+  if (!btn) return;
+  selectOptionsChatSession(btn.dataset.sessionId).catch((e) => toast(e.message, "error"));
+});
+
+$("#options-chat-messages")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-starter-index]");
+  if (!btn) return;
+  const text = state.optionsChatStarters[Number(btn.dataset.starterIndex)];
+  if (text) sendOptionsChatMessage(text).catch((e) => toast(e.message, "error"));
+});
+
+$("#options-chat-form")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendOptionsChatMessage($("#options-chat-input")?.value || "").catch((e) => toast(e.message, "error"));
+});
+
+$("#options-chat-input")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    sendOptionsChatMessage($("#options-chat-input")?.value || "").catch((e) => toast(e.message, "error"));
+  }
+});
+
+safeOn("#btn-options-chat-new", "click", () =>
+  createOptionsChatSession().catch((e) => toast(e.message, "error"))
+);
+safeOn("#btn-options-chat-delete", "click", () =>
+  deleteOptionsChatSession().catch((e) => toast(e.message, "error"))
+);
 
 async function initAuth() {
   try {

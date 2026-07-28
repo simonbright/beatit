@@ -58,6 +58,7 @@
     <nav class="header-nav" aria-label="Main navigation">
       <div class="tabs header-tabs" role="tablist">
         <button class="tab active" data-tab="analyze" role="tab" aria-selected="true">Home</button>
+        <button class="tab" data-tab="options-chat" role="tab">AI Chat</button>
         <button class="tab" data-tab="custom-tasks" role="tab">Custom Tasks</button>
         <button class="tab" data-tab="ingest" role="tab">Add data</button>
         <button class="tab" data-tab="library" role="tab">Library</button>
@@ -103,6 +104,12 @@
               <p class="section-updated muted small hidden">Last updated <time id="full-assessment-time"></time></p>
               <div id="full-assessment-body" class="sourced-text assessment-body-text numbered-text"></div>
             </div>
+
+            <div class="card references-appendix hidden" id="references-appendix">
+              <h3 class="references-appendix-heading">References</h3>
+              <p class="muted small">Inline citations map to the numbered list below. Each Doc entry is a distinct library file.</p>
+              <ol class="references-appendix-list" id="references-appendix-list"></ol>
+            </div>
           </div>
 
           <aside class="sources-sidebar hidden" id="home-sources-sidebar" aria-label="Assessment documents and citations">
@@ -120,7 +127,7 @@
               <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
               <li><span class="source-tag source-unknown">?</span> Not in your library — claim not backed by a stored record</li>
             </ul>
-            <p class="source-legend-note">Citation tags appear in the assessment text. The side panel lists which library files were included and which were cited inline.</p>
+            <p class="source-legend-note">Inline tags point to the numbered <strong>References</strong> list at the bottom — each Doc is a different library file, not a generic badge.</p>
           </div>
         </details>
 
@@ -276,6 +283,48 @@
           <div id="assessment-scope-last" class="assessment-scope-block hidden" hidden></div>
         </div>
       </details>
+    </section>
+
+    <!-- OPTIONS CHAT -->
+    <section id="panel-options-chat" class="panel">
+      <div class="options-chat-layout">
+        <aside class="card options-chat-sidebar" aria-label="Chat sessions">
+          <div class="row-between wrap options-chat-sidebar-head">
+            <h3>Sessions</h3>
+            <button type="button" class="btn primary btn-sm" id="btn-options-chat-new">New chat</button>
+          </div>
+          <p class="muted small">Deep, guided discussion of treatment options. Uses your library scope and the current Home assessment.</p>
+          <div id="options-chat-session-list" class="options-chat-session-list">
+            <p class="muted">No chats yet.</p>
+          </div>
+        </aside>
+
+        <div class="card options-chat-main">
+          <div class="options-chat-main-head row-between wrap">
+            <div>
+              <h3 id="options-chat-title">AI Chat</h3>
+              <p class="muted small" id="options-chat-scope-note">Using library selection · includes current assessment</p>
+            </div>
+            <button type="button" class="btn ghost btn-sm hidden" id="btn-options-chat-delete">Delete chat</button>
+          </div>
+
+          <div id="options-chat-messages" class="options-chat-messages" aria-live="polite">
+            <div class="options-chat-empty" id="options-chat-empty">
+              <p>Ask anything about options for this case. Start broad, then push deeper on the branch that matters.</p>
+              <div id="options-chat-starters" class="options-chat-starters"></div>
+            </div>
+          </div>
+
+          <form id="options-chat-form" class="options-chat-composer">
+            <label class="sr-only" for="options-chat-input">Message</label>
+            <textarea id="options-chat-input" rows="3" placeholder="Guide the analysis — e.g. dig into systemic options and what biomarkers would change the choice…"></textarea>
+            <div class="options-chat-composer-actions row-between wrap">
+              <span class="muted small" id="options-chat-status"></span>
+              <button type="submit" class="btn primary" id="btn-options-chat-send">Send</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </section>
 
     <!-- CUSTOM TASKS -->
@@ -623,6 +672,21 @@
           </ul>
           <div class="howto-go">
             <button type="button" class="btn secondary" data-howto-nav="open-items">Go to open items</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card howto-section">
+        <summary class="howto-section-summary">AI Chat — live guided analysis</summary>
+        <div class="howto-section-body">
+          <p>Use the <strong>AI Chat</strong> tab for deep, multi-turn discussion of treatment pathways. It reads your library selection and the current Home assessment, then lets you steer.</p>
+          <ul>
+            <li>Start with a broad compare, then ask to go deeper on one regimen, trial class, biomarker, or surgical decision.</li>
+            <li>Starter prompts are available for common deep dives.</li>
+            <li>Chat sessions are saved so you can continue later. This does not replace the Home assessment.</li>
+          </ul>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="options-chat">Go to AI Chat</button>
           </div>
         </div>
       </details>
