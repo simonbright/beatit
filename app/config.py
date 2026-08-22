@@ -23,9 +23,12 @@ class Settings(BaseSettings):
     # so default generously (30 min). Tune via OLLAMA_GENERATE_TIMEOUT.
     ollama_generate_timeout: float = 1800.0
 
-    # Secured access (required on Render — comma-separated usernames, one shared password)
+    # Secured access (required on Render — comma-separated usernames, shared password)
     auth_username: str = ""
     auth_password: str = ""
+    # Optional per-user passwords: email:password,email2:password2
+    # Overrides AUTH_PASSWORD for those usernames only.
+    auth_user_passwords: str = ""
     auth_secret: str = ""
     render: bool = False
     public_url: str = ""
@@ -39,8 +42,26 @@ class Settings(BaseSettings):
         return [u.strip() for u in self.auth_username.split(",") if u.strip()]
 
     @property
+    def auth_password_by_user(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for part in self.auth_user_passwords.split(","):
+            entry = part.strip()
+            if not entry or ":" not in entry:
+                continue
+            user, password = entry.split(":", 1)
+            user = user.strip()
+            password = password.strip()
+            if user and password:
+                mapping[user] = password
+        return mapping
+
+    def password_for(self, username: str) -> str:
+        username = username.strip()
+        return self.auth_password_by_user.get(username) or self.auth_password
+
+    @property
     def auth_enabled(self) -> bool:
-        return bool(self.auth_usernames and self.auth_password)
+        return bool(self.auth_usernames and (self.auth_password or self.auth_password_by_user))
 
     @property
     def documents_dir(self) -> Path:

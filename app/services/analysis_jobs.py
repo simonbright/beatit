@@ -62,7 +62,11 @@ async def _run_job(job_id: str) -> None:
                 analysis_type=job["job_type"],
                 created_by=job.get("requested_by"),
                 build_on_analysis_id=job.get("build_on_analysis_id"),
+                chat_observation_ids=job.get("chat_observation_ids") or None,
             )
+
+        if job.get("chat_observation_ids"):
+            await db.consume_chat_observations(job["chat_observation_ids"])
 
         await db.update_analysis_job(
             job_id,
@@ -141,6 +145,7 @@ async def enqueue_analysis_job(
     assessment_guidance: str | None = None,
     requested_by: str | None = None,
     build_on_analysis_id: str | None = None,
+    chat_observation_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     db = Database()
     active = await db.get_active_analysis_job()
@@ -155,6 +160,7 @@ async def enqueue_analysis_job(
         assessment_guidance=assessment_guidance,
         requested_by=requested_by,
         build_on_analysis_id=build_on_analysis_id,
+        chat_observation_ids=chat_observation_ids,
     )
     _spawn_job(job["id"])
     return job

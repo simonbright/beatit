@@ -6,6 +6,9 @@ from copy import deepcopy
 from typing import Any
 
 DOCUMENT_LABEL_RE = re.compile(r'^document\s+"([^"]+)"\s*$', re.IGNORECASE)
+CHAT_OBSERVATION_LABEL_RE = re.compile(
+    r'^chat\s+observation\s+"([^"]+)"\s*$', re.IGNORECASE
+)
 URL_IN_TEXT_RE = re.compile(r"""https?://[^\s\]\)"'<>]+""", re.IGNORECASE)
 NCT_ID_RE = re.compile(r"\b(NCT\d{8})\b", re.IGNORECASE)
 WEB_PREFIX_RE = re.compile(r"^web\s*[—:\-–]\s*", re.IGNORECASE)
@@ -43,6 +46,7 @@ SOURCE_TYPE_KEYS = (
     "document",
     "diagnostic",
     "web",
+    "chat_observation",
     "patient_context",
     "inference",
     "unknown",
@@ -66,6 +70,12 @@ DEFAULT_SOURCE_TYPES: dict[str, dict[str, str]] = {
         "shorthand": "Web",
         "css_class": "source-web",
         "description": "Content ingested from URLs or transcripts",
+    },
+    "chat_observation": {
+        "display": "Chat observation",
+        "shorthand": "Chat",
+        "css_class": "source-chat",
+        "description": "User-curated excerpt from AI Chat",
     },
     "patient_context": {
         "display": "Patient context",
@@ -91,6 +101,7 @@ DOCUMENT_SOURCE_TYPE_MAP: dict[str, str] = {
     "imaging": "diagnostic",
     "pdf": "document",
     "text": "document",
+    "chat_observation": "chat_observation",
     "url": "web",
     "youtube": "web",
     "facebook": "web",
@@ -195,6 +206,42 @@ class SourceCatalog:
 
         if lower.startswith("unknown"):
             return self._build_entry("unknown", label, display_label=self.type_info("unknown")["display"])
+
+        chat_title = None
+        chat_match = CHAT_OBSERVATION_LABEL_RE.match(label.strip())
+        if chat_match:
+            chat_title = chat_match.group(1).strip()
+        elif lower.startswith("chat observation"):
+            remainder = label.strip()[len("chat observation"):].strip().strip('"')
+            if remainder:
+                chat_title = remainder
+        if chat_title is not None:
+            doc = self.doc_index.get(chat_title.casefold())
+            if doc is None:
+                for stored in self.doc_index.values():
+                    names = {
+                        str(stored.get("title") or "").casefold(),
+                        str(stored.get("citation_display_name") or "").casefold(),
+                    }
+                    if chat_title.casefold() in names:
+                        doc = stored
+                        break
+            type_key = (
+                "chat_observation"
+                if doc and doc.get("source_type") == "chat_observation"
+                else "chat_observation"
+            )
+            display_name = (
+                (doc.get("citation_display_name") if doc else None) or chat_title
+            ).strip()
+            return self._build_entry(
+                type_key,
+                label,
+                display_label=display_name,
+                document_id=doc.get("id") if doc else None,
+                document_title=chat_title,
+                source_uri=doc.get("source_uri") if doc else None,
+            )
 
         title = parse_document_title(label)
         if title is not None:

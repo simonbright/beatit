@@ -37,13 +37,26 @@ def extract_section(response: str, header_keywords: list[str]) -> str:
 
 _EXECUTIVE_SUMMARY_HEADERS = ("executive summary", "1 executive summary")
 
+_SECTION_TITLE_PLAIN = re.compile(
+    r"^(?:"
+    r"what we know|what we do not know|uncertainties|"
+    r"critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|treatment options|"
+    r"next steps|open items|questions for(?:\s+the)?\s+oncology|"
+    r"disclaimer|full assessment|latest assessment"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def _section_header_name(line: str) -> str | None:
     stripped = line.strip()
     match = re.match(r"^(?:#{1,3}\s*|\d+\.\s+)(.+)$", stripped)
-    if not match:
-        return None
-    return _normalize_header(match.group(1))
+    if match:
+        return _normalize_header(match.group(1))
+    # Plain section labels without markdown markers
+    if _SECTION_TITLE_PLAIN.match(stripped) and len(stripped) < 80:
+        return _normalize_header(stripped)
+    return None
 
 
 def strip_executive_summary_section(response: str) -> str:
@@ -54,19 +67,26 @@ def strip_executive_summary_section(response: str) -> str:
     lines = response.splitlines()
     result: list[str] = []
     skipping = False
+    saw_exec_header = False
 
     for line in lines:
         header = _section_header_name(line)
         if header is not None:
             if any(keyword in header for keyword in _EXECUTIVE_SUMMARY_HEADERS):
                 skipping = True
+                saw_exec_header = True
                 continue
             skipping = False
 
         if not skipping:
             result.append(line)
 
-    return "\n".join(result).strip()
+    stripped = "\n".join(result).strip()
+    # If headers were nonstandard and stripping wiped the body, keep the original
+    # so PDF export still includes the full assessment.
+    if saw_exec_header and len(stripped) < max(200, int(len(response) * 0.15)):
+        return response.strip()
+    return stripped
 
 
 def _bullet_lines(section_text: str) -> list[str]:

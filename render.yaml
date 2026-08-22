@@ -21,6 +21,8 @@ services:
         sync: false
       - key: AUTH_PASSWORD
         sync: false
+      - key: AUTH_USER_PASSWORDS
+        sync: false
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL

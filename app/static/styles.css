@@ -3412,6 +3412,18 @@ textarea { resize: vertical; min-height: 100px; }
   color: #0369a1;
 }
 
+.source-chat,
+.source-tag-inline.source-chat,
+.ref-cite-link.source-chat {
+  background: rgba(16, 185, 129, 0.18);
+  color: #047857;
+}
+
+[data-theme="night"] .source-chat,
+[data-theme="night"] .source-tag-inline.source-chat {
+  color: #6ee7b7;
+}
+
 .ref-cite-link {
   display: inline-flex;
   align-items: center;
@@ -3765,6 +3777,87 @@ textarea { resize: vertical; min-height: 100px; }
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.chat-selection-toolbar {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated, #fff);
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+}
+
+.chat-selection-toolbar.hidden {
+  display: none;
+}
+
+.options-chat-observations-wrap {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.options-chat-observations-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+
+.options-chat-observations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.options-chat-observation-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface-elevated, #fff);
+}
+
+.options-chat-observation-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.options-chat-observation-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.options-chat-observation-excerpt {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin: 0.35rem 0 0;
+  line-height: 1.35;
+}
+
+.options-chat-observation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+
+.options-chat-bubble-head {
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.options-chat-pin-whole {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
 }
 
 .options-chat-layout {

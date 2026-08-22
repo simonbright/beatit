@@ -26,6 +26,11 @@ from app.services.analysis_jobs import (
 )
 from app.services.synthesis import SynthesisService
 from app.services.options_chat import OPTIONS_STARTER_PROMPTS, OptionsChatService
+from app.services.chat_observations import (
+    observation_library_document_ids,
+    resolve_observations_for_analysis,
+    save_observation_to_library,
+)
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
 from app.services.dicom_preview import is_dicom_document, render_dicom_preview_png
 from app.services.investigation import InvestigationService
@@ -122,6 +127,7 @@ class AnalyzeRequest(BaseModel):
     document_ids: list[str] | None = None
     include_baseline_assessment: bool = False
     assessment_guidance: str | None = Field(default=None, max_length=5000)
+    chat_observation_ids: list[str] | None = None
 
 
 class OptionsChatSessionRequest(BaseModel):
@@ -133,6 +139,19 @@ class OptionsChatSessionRequest(BaseModel):
 class OptionsChatMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     stream: bool = True
+
+
+class ChatObservationCreateRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    message_id: str | None = None
+    excerpt: str = Field(min_length=1, max_length=50000)
+    title: str | None = Field(default=None, max_length=200)
+    include_in_analysis: bool = True
+
+
+class ChatObservationUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    include_in_analysis: bool | None = None
 
 
 class ImagingVisionRequest(BaseModel):
@@ -1045,15 +1064,37 @@ async def analyze(body: AnalyzeRequest, request: Request):
         prior = await db.get_latest_analysis()
         if prior and prior.get("analysis_type") == "baseline":
             build_on_id = prior["id"]
+    chat_obs_ids = body.chat_observation_ids
+    if chat_obs_ids is None:
+        pending = await db.list_chat_observations(
+            include_in_analysis_only=True,
+            pending_only=True,
+        )
+        chat_obs_ids = [o["id"] for o in pending]
+    document_ids = body.document_ids
+    if chat_obs_ids:
+        obs_list = await resolve_observations_for_analysis(
+            db, observation_ids=chat_obs_ids
+        )
+        extra_doc_ids = await observation_library_document_ids(obs_list)
+        if extra_doc_ids:
+            merged = list(document_ids or [])
+            seen = set(merged)
+            for doc_id in extra_doc_ids:
+                if doc_id not in seen:
+                    merged.append(doc_id)
+                    seen.add(doc_id)
+            document_ids = merged if merged else document_ids
     try:
         job = await enqueue_analysis_job(
             job_type=job_type,
             query=body.query,
-            document_ids=body.document_ids,
+            document_ids=document_ids,
             include_baseline_assessment=body.include_baseline_assessment,
             assessment_guidance=body.assessment_guidance,
             requested_by=_actor(request),
             build_on_analysis_id=build_on_id,
+            chat_observation_ids=chat_obs_ids,
         )
     except ActiveAnalysisJobError as exc:
         raise HTTPException(
@@ -1250,6 +1291,85 @@ async def post_options_chat_message(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Chat failed: {exc}") from exc
 
+    return result
+
+
+@router.get("/options-chat/observations")
+async def list_chat_observations(
+    session_id: str | None = None,
+    pending_only: bool = False,
+):
+    db, _, _, _, _ = await _get_services()
+    observations = await db.list_chat_observations(
+        session_id=session_id,
+        pending_only=pending_only,
+    )
+    pending_count = await db.count_pending_chat_observations()
+    return {"observations": observations, "pending_count": pending_count}
+
+
+@router.post("/options-chat/observations")
+async def create_chat_observation(body: ChatObservationCreateRequest, request: Request):
+    db, _, _, _, _ = await _get_services()
+    try:
+        observation = await db.create_chat_observation(
+            session_id=body.session_id,
+            message_id=body.message_id,
+            excerpt=body.excerpt,
+            title=body.title,
+            include_in_analysis=body.include_in_analysis,
+            created_by=_actor(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"observation": observation}
+
+
+@router.patch("/options-chat/observations/{observation_id}")
+async def update_chat_observation(
+    observation_id: str,
+    body: ChatObservationUpdateRequest,
+):
+    db, _, _, _, _ = await _get_services()
+    updated = await db.update_chat_observation(
+        observation_id,
+        title=body.title,
+        include_in_analysis=body.include_in_analysis,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Observation not found")
+    return {"observation": updated}
+
+
+@router.delete("/options-chat/observations/{observation_id}")
+async def delete_chat_observation(observation_id: str):
+    db, _, _, _, _ = await _get_services()
+    deleted = await db.delete_chat_observation(observation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Observation not found")
+    return {"deleted": True}
+
+
+@router.post("/options-chat/observations/{observation_id}/save-to-library")
+async def save_chat_observation_to_library(observation_id: str, request: Request):
+    db, store, _, _, _ = await _get_services()
+    try:
+        result = await save_observation_to_library(store, db, observation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    doc = result["document"]
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "chat_observation_id": observation_id,
+        },
+    )
     return result
 
 

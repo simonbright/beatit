@@ -1,6 +1,7 @@
 SOURCE_ATTRIBUTION_RULES = """
 SOURCE ATTRIBUTION (mandatory — every clinical claim must be tagged):
 - [SOURCE: Document "<exact document title>"] — fact directly supported by stored document text (includes URL-ingested pages — the link is shown automatically)
+- [SOURCE: Chat observation "<exact observation title>"] — user-curated excerpt from AI Chat; may contain nested document or web tags inside the excerpt
 - [SOURCE: Web — https://example.org/page] — external web page where you found the fact (ClinicalTrials.gov, NCI, journal, guideline site). Use the full https URL.
 - [SOURCE: Web — NCT01234567] — clinical trial by NCT ID (links to ClinicalTrials.gov automatically)
 - [SOURCE: Patient context] — from configured patient context only (not verified clinical record)

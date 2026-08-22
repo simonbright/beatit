@@ -47,7 +47,9 @@ class OllamaClient:
         return self.model
 
     async def health(self) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Short connect timeout — firewall drops to the VM must not stall the UI.
+        timeout = httpx.Timeout(5.0, connect=2.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(f"{self.base_url}/api/tags")
             response.raise_for_status()
             data = response.json()

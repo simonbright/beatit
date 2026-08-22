@@ -234,6 +234,7 @@
               <div>
                 <h4 class="analysis-run-step-title">1. Sources</h4>
                 <p class="muted small" id="analysis-scope-summary">Using all documents</p>
+                <p class="muted small hidden" id="chat-observations-queue-note"></p>
               </div>
               <button type="button" class="btn secondary btn-sm" id="btn-scope-library">Choose in Library</button>
             </div>
@@ -296,6 +297,11 @@
           <p class="muted small">Deep, guided discussion of treatment options. Uses your library scope and the current Home assessment.</p>
           <div id="options-chat-session-list" class="options-chat-session-list">
             <p class="muted">No chats yet.</p>
+          </div>
+          <div class="options-chat-observations-wrap">
+            <h4 class="options-chat-observations-title">Pinned for analysis</h4>
+            <p class="muted small" id="options-chat-observations-hint">Select text in a reply to pin excerpts for your next assessment.</p>
+            <div id="options-chat-observations-list" class="options-chat-observations-list"></div>
           </div>
         </aside>
 
@@ -861,6 +867,13 @@
   </button>
 
   <div id="toast" class="toast hidden"></div>
+
+  <div id="chat-selection-toolbar" class="chat-selection-toolbar hidden" role="toolbar" aria-label="Chat excerpt actions">
+    <button type="button" class="btn btn-sm primary" data-action="pin-excerpt">Pin excerpt</button>
+    <button type="button" class="btn btn-sm secondary" data-action="save-excerpt-library">Save to library</button>
+    <button type="button" class="btn btn-sm ghost" data-action="copy-excerpt">Copy</button>
+    <button type="button" class="btn btn-sm ghost" data-action="send-excerpt-ingest">Add data</button>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

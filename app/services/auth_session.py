@@ -13,7 +13,11 @@ SESSION_DAYS = 7
 
 
 def _signing_key() -> bytes:
-    secret = settings.auth_secret or settings.auth_password
+    secret = (
+        settings.auth_secret
+        or settings.auth_password
+        or "|".join(sorted(f"{u}:{p}" for u, p in settings.auth_password_by_user.items()))
+    )
     return hashlib.sha256(f"beatit-session:{secret}".encode()).digest()
 
 
@@ -25,7 +29,10 @@ def verify_credentials(username: str, password: str) -> bool:
         secrets.compare_digest(username, allowed)
         for allowed in settings.auth_usernames
     )
-    pass_ok = secrets.compare_digest(password, settings.auth_password)
+    expected = settings.password_for(username)
+    if not expected:
+        return False
+    pass_ok = secrets.compare_digest(password, expected)
     return user_ok and pass_ok
 
 

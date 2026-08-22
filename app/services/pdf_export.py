@@ -339,11 +339,21 @@ def _write_section_with_references(
     section: dict[str, Any],
     *,
     as_of: str | None = None,
+    include_section_references: bool = False,
+    force_new_page: bool = False,
 ) -> None:
     body = section.get("body") or ""
     references = section.get("references") or []
 
+    if force_new_page and body.strip():
+        pdf.add_page()
+
     if not body.strip():
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.set_text_color(120, 120, 120)
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(14, 116, 144)
+        pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT", align="L")
         pdf.set_font("Helvetica", "I", 10)
         pdf.set_text_color(120, 120, 120)
         _pdf_multiline(pdf, "(No content)", h=5)
@@ -363,7 +373,8 @@ def _write_section_with_references(
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(0, 0, 0)
     _write_body_lines(pdf, body)
-    _write_references_block(pdf, references)
+    if include_section_references:
+        _write_references_block(pdf, references)
     pdf.ln(4)
 
 
@@ -376,18 +387,26 @@ def _write_appendix_references(
     if not appendix:
         return
 
-    pdf.ln(8)
-    if pdf.get_y() > pdf.h - pdf.b_margin - 36:
-        pdf.add_page()
+    pdf.add_page()
 
     pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(14, 116, 144)
     pdf.set_x(pdf.l_margin)
-    pdf.cell(0, 10, "Appendix: References", new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.cell(0, 10, "References", new_x="LMARGIN", new_y="NEXT", align="L")
     if as_of:
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(80, 80, 80)
         pdf.cell(0, 5, f"As of {_safe_text(as_of)}", new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(80, 80, 80)
+    _pdf_multiline(
+        pdf,
+        _safe_text(
+            "Inline citations [1], [2], ... map to this list. "
+            "Scope documents used in the assessment are included even when not cited inline."
+        ),
+        h=4,
+    )
     pdf.set_draw_color(14, 165, 233)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
     pdf.ln(4)
@@ -401,9 +420,100 @@ def _write_appendix_references(
         prefix = f"[{entry['num']}]"
         if shorthand:
             prefix = f"{prefix} [{shorthand}]"
+        cited = entry.get("cited")
+        note = ""
+        if cited is False:
+            note = " (in assessment scope - not cited inline)"
         pdf.set_x(pdf.l_margin)
-        _pdf_multiline(pdf, f"{prefix} {label}", h=5)
+        _pdf_multiline(pdf, _safe_text(f"{prefix} {label}{note}"), h=5)
         pdf.ln(1)
+
+
+def _normalize_ref_key(value: str | None) -> str:
+    return (value or "").strip().casefold()
+
+
+def _expand_appendix_with_scope_documents(
+    appendix: list[dict[str, Any]],
+    analysis: dict[str, Any],
+    catalog: SourceCatalog | None,
+) -> list[dict[str, Any]]:
+    """Ensure every assessment-scope document appears in the PDF reference list."""
+    expanded = [{**entry, "cited": True} for entry in (appendix or [])]
+    seen_ids: set[str] = {
+        str(entry.get("document_id"))
+        for entry in expanded
+        if entry.get("document_id")
+    }
+    seen_titles: set[str] = set()
+    for entry in expanded:
+        for key in (
+            entry.get("document_title"),
+            entry.get("display_label"),
+            entry.get("label"),
+        ):
+            norm = _normalize_ref_key(key)
+            if norm:
+                seen_titles.add(norm)
+
+    titles = analysis.get("document_titles") or []
+    doc_ids = analysis.get("document_ids") or []
+    # Prefer id+title pairs when lengths match; otherwise fall back to titles alone.
+    pairs: list[tuple[str | None, str]] = []
+    if doc_ids and titles and len(doc_ids) == len(titles):
+        pairs = list(zip(doc_ids, titles))
+    elif titles:
+        pairs = [(None, title) for title in titles]
+    elif doc_ids:
+        pairs = [(doc_id, str(doc_id)) for doc_id in doc_ids]
+
+    next_num = max((int(entry.get("num") or 0) for entry in expanded), default=0) + 1
+    for doc_id, title in pairs:
+        title = (title or "").strip()
+        if not title and not doc_id:
+            continue
+        title_key = _normalize_ref_key(title)
+        if (doc_id and str(doc_id) in seen_ids) or (title_key and title_key in seen_titles):
+            continue
+
+        raw_label = f'Document "{title}"' if title else f"Document {doc_id}"
+        if catalog:
+            entry = catalog.enrich_reference(raw_label, next_num)
+        else:
+            entry = {
+                "num": next_num,
+                "label": title or str(doc_id),
+                "display_label": title or str(doc_id),
+                "raw_label": raw_label,
+                "document_id": doc_id,
+                "shorthand": "Doc",
+                "type": "document",
+                "type_display": "Clinical record",
+                "css_class": "source-document",
+            }
+        if doc_id and not entry.get("document_id"):
+            entry["document_id"] = doc_id
+        entry["cited"] = False
+        expanded.append(entry)
+        next_num += 1
+        if doc_id:
+            seen_ids.add(str(doc_id))
+        if title_key:
+            seen_titles.add(title_key)
+
+    return expanded
+
+
+def _response_body_for_pdf(analysis: dict[str, Any]) -> str:
+    """Full assessment text for PDF, with executive summary removed when possible."""
+    response = (analysis.get("response") or "").strip()
+    if not response:
+        return ""
+    stripped = strip_executive_summary_section(response)
+    # Prefer stripped body when it still looks like a real assessment.
+    if len(stripped) >= max(200, int(len(response) * 0.15)):
+        return stripped
+    return response
 
 
 def build_assessment_pdf(
@@ -420,9 +530,10 @@ def build_assessment_pdf(
     if display_title and analysis.get("analysis_type") == "query":
         report_type = display_title
 
+    response_for_pdf = _response_body_for_pdf(analysis)
     ref_bundle = build_reference_bundle(
         executive_summary=analysis.get("executive_summary") or "",
-        response=strip_executive_summary_section(analysis.get("response") or ""),
+        response=response_for_pdf,
         patient_context=patient_context or "",
         catalog=catalog,
     )
@@ -444,20 +555,11 @@ def build_assessment_pdf(
     if analysis.get("created_by"):
         meta_bits.append(f"By: {analysis.get('created_by')}")
     pdf.cell(0, 5, _safe_text(" · ".join(meta_bits)), new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
-    _pdf_multiline(
-        pdf,
-        _safe_text(
-            "Decision-support only — not a substitute for in-person oncology care. "
-            "Bracketed numbers [1], [2], ... cite the reference lists below and in the appendix."
-        ),
-        h=4,
-    )
     pdf.ln(4)
 
     _write_collaboration_block(pdf, analysis)
 
-    response_title = "Latest Assessment"
+    response_title = "Full Assessment"
     if analysis.get("analysis_type") == "query":
         response_title = "Full response"
 
@@ -466,12 +568,15 @@ def build_assessment_pdf(
         "Executive Summary",
         ref_bundle["sections"]["executive_summary"],
         as_of=report_timestamp,
+        include_section_references=False,
     )
     _write_section_with_references(
         pdf,
         response_title,
         ref_bundle["sections"]["response"],
         as_of=report_timestamp,
+        include_section_references=False,
+        force_new_page=True,
     )
 
     patient_section = ref_bundle["sections"]["patient_context"]
@@ -482,9 +587,14 @@ def build_assessment_pdf(
             "Patient Context (Settings)",
             patient_section,
             as_of=report_timestamp,
+            include_section_references=False,
         )
 
-    _write_appendix_references(pdf, ref_bundle["appendix"], as_of=report_timestamp)
+    _write_appendix_references(
+        pdf,
+        _expand_appendix_with_scope_documents(ref_bundle["appendix"], analysis, catalog),
+        as_of=report_timestamp,
+    )
 
     buffer = BytesIO()
     pdf.output(buffer)

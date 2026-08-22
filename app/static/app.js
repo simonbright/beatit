@@ -18,6 +18,9 @@ const state = {
   optionsChatMessages: [],
   optionsChatStarters: [],
   optionsChatSending: false,
+  chatObservations: [],
+  chatObservationsPendingCount: 0,
+  chatSelectionContext: { excerpt: "", messageId: null },
   analysisJobId: null,
   auditEvents: [],
   auditOffset: 0,
@@ -695,6 +698,7 @@ function finishAnalysisRun(analysis) {
   switchTab("analyze");
   renderLatestAssessment(analysis);
   state.analyses = [analysis, ...state.analyses.filter((a) => a.id !== analysis.id)];
+  loadChatObservations().catch(() => {});
   toast(`Assessment saved · ${formatTimestamp(analysis.created_at)}`);
   scrollToAssessmentResults();
 }
@@ -819,6 +823,7 @@ function renderAnalysisRunChrome() {
   });
 
   renderAnalysisScopeSummary();
+  renderChatObservationsQueueNote();
 }
 
 function initHowToNavigation() {
@@ -934,7 +939,10 @@ function switchTab(name, options = {}) {
   }
   if (name === "imaging") loadImagingPanel();
   if (name === "history") loadHistory();
-  if (name === "analyze") loadLatestAssessment();
+  if (name === "analyze") {
+    loadLatestAssessment();
+    loadChatObservations().catch(() => {});
+  }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") loadCustomTasks();
   if (name === "settings") loadSettings();
@@ -4192,12 +4200,13 @@ function initReferenceNavigation() {
   });
 }
 
-const SOURCE_TYPE_ORDER = ["document", "diagnostic", "web", "patient_context", "inference", "unknown"];
+const SOURCE_TYPE_ORDER = ["document", "diagnostic", "web", "chat_observation", "patient_context", "inference", "unknown"];
 
 const SOURCE_TYPE_CSS = {
   document: "source-document",
   diagnostic: "source-diagnostic",
   web: "source-web",
+  chat_observation: "source-chat",
   patient_context: "source-context",
   inference: "source-inference",
   unknown: "source-unknown",
@@ -5071,7 +5080,12 @@ async function loadInitialData() {
   loadSelectionFromSession();
   loadAssessmentGuidanceFromSession();
   try {
-    await Promise.allSettled([loadDocumentIndex(), loadLatestAssessment(), loadCustomTasks()]);
+    await Promise.allSettled([
+      loadDocumentIndex(),
+      loadLatestAssessment(),
+      loadCustomTasks(),
+      loadChatObservations(),
+    ]);
   } finally {
     updateHomeToolbar();
   }
@@ -5614,6 +5628,134 @@ $("#btn-add-comment")?.addEventListener("click", () =>
 );
 $("#btn-close-open-item")?.addEventListener("click", () => selectOpenItem(null));
 
+function hideChatSelectionToolbar() {
+  const toolbar = $("#chat-selection-toolbar");
+  if (toolbar) toolbar.classList.add("hidden");
+  state.chatSelectionContext = { excerpt: "", messageId: null };
+}
+
+function showChatSelectionToolbar(x, y, excerpt, messageId) {
+  const toolbar = $("#chat-selection-toolbar");
+  const text = (excerpt || "").trim();
+  if (!toolbar || !text) {
+    hideChatSelectionToolbar();
+    return;
+  }
+  state.chatSelectionContext = { excerpt: text, messageId: messageId || null };
+  toolbar.classList.remove("hidden");
+  const left = Math.min(x, window.innerWidth - toolbar.offsetWidth - 12);
+  const top = Math.max(12, y - toolbar.offsetHeight - 10);
+  toolbar.style.left = `${left}px`;
+  toolbar.style.top = `${top}px`;
+}
+
+function renderChatObservationsQueueNote() {
+  const el = $("#chat-observations-queue-note");
+  if (!el) return;
+  const n = state.chatObservationsPendingCount || 0;
+  if (n > 0) {
+    el.textContent = `${n} chat observation${n === 1 ? "" : "s"} queued for the next analysis run.`;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function renderChatObservations() {
+  const list = $("#options-chat-observations-list");
+  if (!list) return;
+  const observations = state.chatObservations || [];
+  if (!observations.length) {
+    list.innerHTML = `<p class="muted small">No pinned excerpts yet.</p>`;
+    return;
+  }
+  list.innerHTML = observations
+    .map((obs) => {
+      const includeChecked = obs.include_in_analysis ? " checked" : "";
+      const saved = obs.document_id ? "Saved to library" : "Not in library";
+      return `<article class="options-chat-observation-item" data-observation-id="${escapeHtml(obs.id)}">
+        <div class="options-chat-observation-item-head">
+          <span class="options-chat-observation-title">${escapeHtml(truncate(obs.title || "Chat observation", 80))}</span>
+          <label class="small muted">
+            <input type="checkbox" class="chat-obs-include" data-id="${escapeHtml(obs.id)}"${includeChecked} />
+            Include
+          </label>
+        </div>
+        <p class="options-chat-observation-excerpt">${escapeHtml(truncate(obs.excerpt || "", 160))}</p>
+        <p class="muted small">${escapeHtml(saved)}</p>
+        <div class="options-chat-observation-actions">
+          ${
+            obs.document_id
+              ? ""
+              : `<button type="button" class="btn ghost btn-sm chat-obs-save-lib" data-id="${escapeHtml(obs.id)}">Save to library</button>`
+          }
+          <button type="button" class="btn ghost btn-sm chat-obs-delete" data-id="${escapeHtml(obs.id)}">Remove</button>
+        </div>
+      </article>`;
+    })
+    .join("");
+}
+
+async function loadChatObservations() {
+  const data = await api("/api/options-chat/observations");
+  state.chatObservations = data.observations || [];
+  state.chatObservationsPendingCount = data.pending_count || 0;
+  renderChatObservations();
+  renderChatObservationsQueueNote();
+}
+
+async function pinChatExcerpt(excerpt, messageId = null) {
+  const sessionId = state.optionsChatSessionId;
+  if (!sessionId) throw new Error("Start or select a chat first");
+  const text = (excerpt || "").trim();
+  if (!text) throw new Error("Nothing to pin");
+  const data = await api("/api/options-chat/observations", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: sessionId,
+      message_id: messageId,
+      excerpt: text,
+    }),
+  });
+  await loadChatObservations();
+  return data.observation;
+}
+
+async function saveChatObservationToLibrary(observationId) {
+  const result = await api(
+    `/api/options-chat/observations/${encodeURIComponent(observationId)}/save-to-library`,
+    { method: "POST" }
+  );
+  const docId = result.document?.id;
+  if (docId) {
+    toggleSelect(docId, true);
+    await loadDocumentIndex();
+  }
+  await loadChatObservations();
+  return result;
+}
+
+async function saveExcerptToLibrary(excerpt, messageId = null) {
+  const obs = await pinChatExcerpt(excerpt, messageId);
+  await saveChatObservationToLibrary(obs.id);
+  toast("Saved to library");
+}
+
+function sendExcerptToIngest(excerpt, titleHint = "") {
+  const text = (excerpt || "").trim();
+  if (!text) return;
+  switchTab("ingest");
+  const titleEl = $("#text-title");
+  const contentEl = $("#text-content");
+  if (titleEl && !titleEl.value.trim()) {
+    titleEl.value = titleHint || "Chat excerpt";
+  }
+  if (contentEl) contentEl.value = text;
+  contentEl?.focus();
+  toast("Paste into Add data — review title and save");
+}
+
 function optionsChatScopeNote() {
   const n = state.selectedIds.size;
   const scope = n === 0 ? "Using all library documents" : `${n} selected documents`;
@@ -5689,8 +5831,15 @@ function renderOptionsChatMessages() {
           ? formatWithSources(msg.content || "", msg.id || null)
           : escapeHtml(msg.content || "").replace(/\n/g, "<br>");
       const streaming = msg.streaming ? " streaming" : "";
-      return `<article class="options-chat-bubble ${role}${streaming}">
-        <span class="options-chat-role">${label}</span>
+      const pinBtn =
+        role === "assistant" && !msg.streaming && msg.id
+          ? `<button type="button" class="btn ghost btn-sm options-chat-pin-whole" data-message-id="${escapeHtml(msg.id)}" title="Pin whole reply">Pin reply</button>`
+          : "";
+      return `<article class="options-chat-bubble ${role}${streaming}" data-message-id="${escapeHtml(msg.id || "")}">
+        <div class="options-chat-bubble-head row-between wrap">
+          <span class="options-chat-role">${label}</span>
+          ${pinBtn}
+        </div>
         <div class="options-chat-body">${body}</div>
       </article>`;
     })
@@ -5720,6 +5869,7 @@ async function loadOptionsChatPanel() {
     ]);
     state.optionsChatSessions = sessionsData.sessions || [];
     state.optionsChatStarters = startersData.starters || [];
+    await loadChatObservations();
     renderOptionsChatSessions();
     renderOptionsChatStarters();
 
@@ -5906,10 +6056,107 @@ $("#options-chat-session-list")?.addEventListener("click", (event) => {
 });
 
 $("#options-chat-messages")?.addEventListener("click", (event) => {
+  const pinBtn = event.target.closest(".options-chat-pin-whole");
+  if (pinBtn?.dataset.messageId) {
+    const msg = (state.optionsChatMessages || []).find((m) => m.id === pinBtn.dataset.messageId);
+    if (msg?.content) {
+      pinChatExcerpt(msg.content, msg.id)
+        .then(() => toast("Pinned for next analysis"))
+        .catch((e) => toast(e.message, "error"));
+    }
+    return;
+  }
   const btn = event.target.closest("[data-starter-index]");
   if (!btn) return;
   const text = state.optionsChatStarters[Number(btn.dataset.starterIndex)];
   if (text) sendOptionsChatMessage(text).catch((e) => toast(e.message, "error"));
+});
+
+$("#options-chat-messages")?.addEventListener("mouseup", (event) => {
+  const sel = window.getSelection();
+  const text = sel?.toString().trim();
+  if (!text) {
+    hideChatSelectionToolbar();
+    return;
+  }
+  const bubble = event.target.closest(".options-chat-bubble");
+  const wrap = $("#options-chat-messages");
+  if (!bubble || !wrap?.contains(bubble)) {
+    hideChatSelectionToolbar();
+    return;
+  }
+  const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
+  if (!range || !bubble.contains(range.commonAncestorContainer)) {
+    hideChatSelectionToolbar();
+    return;
+  }
+  const rect = range.getBoundingClientRect();
+  showChatSelectionToolbar(rect.left, rect.top, text, bubble.dataset.messageId || null);
+});
+
+document.addEventListener("mousedown", (event) => {
+  const toolbar = $("#chat-selection-toolbar");
+  if (!toolbar || toolbar.classList.contains("hidden")) return;
+  if (toolbar.contains(event.target)) return;
+  if (event.target.closest(".options-chat-bubble")) return;
+  hideChatSelectionToolbar();
+});
+
+$("#chat-selection-toolbar")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-action]");
+  if (!btn) return;
+  const { excerpt, messageId } = state.chatSelectionContext;
+  const action = btn.dataset.action;
+  if (!excerpt) return;
+  if (action === "pin-excerpt") {
+    pinChatExcerpt(excerpt, messageId)
+      .then(() => toast("Pinned for next analysis"))
+      .catch((e) => toast(e.message, "error"));
+    hideChatSelectionToolbar();
+    return;
+  }
+  if (action === "save-excerpt-library") {
+    saveExcerptToLibrary(excerpt, messageId).catch((e) => toast(e.message, "error"));
+    hideChatSelectionToolbar();
+    return;
+  }
+  if (action === "copy-excerpt") {
+    navigator.clipboard?.writeText(excerpt).then(() => toast("Copied"));
+    hideChatSelectionToolbar();
+    return;
+  }
+  if (action === "send-excerpt-ingest") {
+    sendExcerptToIngest(excerpt, "Chat excerpt");
+    hideChatSelectionToolbar();
+  }
+});
+
+$("#options-chat-observations-list")?.addEventListener("click", (event) => {
+  const saveBtn = event.target.closest(".chat-obs-save-lib");
+  if (saveBtn?.dataset.id) {
+    saveChatObservationToLibrary(saveBtn.dataset.id)
+      .then(() => toast("Saved to library"))
+      .catch((e) => toast(e.message, "error"));
+    return;
+  }
+  const delBtn = event.target.closest(".chat-obs-delete");
+  if (delBtn?.dataset.id) {
+    api(`/api/options-chat/observations/${encodeURIComponent(delBtn.dataset.id)}`, { method: "DELETE" })
+      .then(() => loadChatObservations())
+      .then(() => toast("Removed"))
+      .catch((e) => toast(e.message, "error"));
+  }
+});
+
+$("#options-chat-observations-list")?.addEventListener("change", (event) => {
+  const input = event.target.closest(".chat-obs-include");
+  if (!input?.dataset.id) return;
+  api(`/api/options-chat/observations/${encodeURIComponent(input.dataset.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ include_in_analysis: input.checked }),
+  })
+    .then(() => loadChatObservations())
+    .catch((e) => toast(e.message, "error"));
 });
 
 $("#options-chat-form")?.addEventListener("submit", (event) => {

@@ -89,6 +89,7 @@ class Database:
             await self._migrate_analysis_jobs_table(db)
             await self._migrate_audit_events_table(db)
             await self._migrate_chat_tables(db)
+            await self._migrate_chat_observations_table(db)
 
         await self._migrate_stale_openrouter_model()
 
@@ -497,6 +498,16 @@ class Database:
         await db.commit()
         await self._migrate_analysis_jobs_requested_by(db)
         await self._migrate_analysis_jobs_refinement(db)
+        await self._migrate_analysis_jobs_chat_observations(db)
+
+    async def _migrate_analysis_jobs_chat_observations(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(analysis_jobs)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "chat_observation_ids_json" not in columns:
+            await db.execute(
+                "ALTER TABLE analysis_jobs ADD COLUMN chat_observation_ids_json TEXT DEFAULT '[]'"
+            )
+            await db.commit()
 
     async def _migrate_analysis_jobs_refinement(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(analysis_jobs)")
@@ -557,6 +568,32 @@ class Database:
         )
         await db.commit()
 
+    async def _migrate_chat_observations_table(self, db: aiosqlite.Connection) -> None:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_observations (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                message_id TEXT,
+                excerpt TEXT NOT NULL,
+                title TEXT NOT NULL,
+                include_in_analysis INTEGER NOT NULL DEFAULT 1,
+                document_id TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                consumed_at TEXT,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_observations_session ON chat_observations(session_id, created_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_observations_include ON chat_observations(include_in_analysis, consumed_at)"
+        )
+        await db.commit()
+
     async def _migrate_audit_events_table(self, db: aiosqlite.Connection) -> None:
         await db.execute(
             """
@@ -609,6 +646,7 @@ class Database:
         refinement_notes: str | None = None,
         assessment_guidance: str | None = None,
         build_on_analysis_id: str | None = None,
+        chat_observation_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         job_id = str(uuid4())
         now = _now_iso()
@@ -626,6 +664,7 @@ class Database:
             "refinement_notes": refinement_notes,
             "assessment_guidance": assessment_guidance,
             "build_on_analysis_id": build_on_analysis_id,
+            "chat_observation_ids_json": json.dumps(chat_observation_ids or []),
             "created_at": now,
             "started_at": None,
             "completed_at": None,
@@ -637,10 +676,12 @@ class Database:
                 (id, status, job_type, query, document_ids_json,
                  include_baseline_assessment, analysis_id, error, requested_by,
                  refine_analysis_id, refinement_notes, assessment_guidance, build_on_analysis_id,
+                 chat_observation_ids_json,
                  created_at, started_at, completed_at)
                 VALUES (:id, :status, :job_type, :query, :document_ids_json,
                         :include_baseline_assessment, :analysis_id, :error, :requested_by,
                         :refine_analysis_id, :refinement_notes, :assessment_guidance, :build_on_analysis_id,
+                        :chat_observation_ids_json,
                         :created_at, :started_at, :completed_at)
                 """,
                 row,
@@ -724,6 +765,7 @@ class Database:
             "refinement_notes": row.get("refinement_notes"),
             "assessment_guidance": row.get("assessment_guidance"),
             "build_on_analysis_id": row.get("build_on_analysis_id"),
+            "chat_observation_ids": json.loads(row.get("chat_observation_ids_json") or "[]"),
             "created_at": row["created_at"],
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
@@ -1572,6 +1614,195 @@ class Database:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "message_count": int(row.get("message_count") or 0),
+        }
+
+    async def create_chat_observation(
+        self,
+        *,
+        session_id: str,
+        message_id: str | None,
+        excerpt: str,
+        title: str | None = None,
+        include_in_analysis: bool = True,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        observation_id = str(uuid4())
+        now = _now_iso()
+        excerpt_text = excerpt.strip()
+        if not excerpt_text:
+            raise ValueError("Excerpt cannot be empty")
+        session = await self.get_chat_session(session_id)
+        if not session:
+            raise ValueError("Chat session not found")
+        obs_title = (title or "").strip()
+        if not obs_title:
+            session_label = (session.get("title") or "AI Chat").strip()[:80]
+            obs_title = f"Chat observation — {session_label}"
+        obs_title = obs_title[:200]
+        row = {
+            "id": observation_id,
+            "session_id": session_id,
+            "message_id": message_id,
+            "excerpt": excerpt_text,
+            "title": obs_title,
+            "include_in_analysis": 1 if include_in_analysis else 0,
+            "document_id": None,
+            "created_by": created_by,
+            "created_at": now,
+            "consumed_at": None,
+        }
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO chat_observations
+                (id, session_id, message_id, excerpt, title, include_in_analysis,
+                 document_id, created_by, created_at, consumed_at)
+                VALUES (:id, :session_id, :message_id, :excerpt, :title, :include_in_analysis,
+                        :document_id, :created_by, :created_at, :consumed_at)
+                """,
+                row,
+            )
+            await db.commit()
+        return self._chat_observation_row(row)
+
+    async def list_chat_observations(
+        self,
+        *,
+        session_id: str | None = None,
+        include_in_analysis_only: bool = False,
+        pending_only: bool = False,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 500))
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if include_in_analysis_only:
+            clauses.append("include_in_analysis = 1")
+        if pending_only:
+            clauses.append("consumed_at IS NULL")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"""
+                SELECT * FROM chat_observations
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                params,
+            )
+            rows = await cursor.fetchall()
+        return [self._chat_observation_row(dict(row)) for row in rows]
+
+    async def count_pending_chat_observations(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) FROM chat_observations
+                WHERE include_in_analysis = 1 AND consumed_at IS NULL
+                """
+            )
+            row = await cursor.fetchone()
+        return int(row[0] or 0)
+
+    async def get_chat_observation(self, observation_id: str) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM chat_observations WHERE id = ?",
+                (observation_id,),
+            )
+            row = await cursor.fetchone()
+        return self._chat_observation_row(dict(row)) if row else None
+
+    async def get_chat_observations_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT * FROM chat_observations WHERE id IN ({placeholders})",
+                ids,
+            )
+            rows = await cursor.fetchall()
+        by_id = {row["id"]: self._chat_observation_row(dict(row)) for row in rows}
+        return [by_id[i] for i in ids if i in by_id]
+
+    async def update_chat_observation(
+        self,
+        observation_id: str,
+        *,
+        title: str | None = None,
+        include_in_analysis: bool | None = None,
+        document_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_chat_observation(observation_id)
+        if not existing:
+            return None
+        next_title = existing["title"] if title is None else title.strip()[:200]
+        next_include = (
+            existing["include_in_analysis"]
+            if include_in_analysis is None
+            else include_in_analysis
+        )
+        next_doc_id = existing.get("document_id") if document_id is None else document_id
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE chat_observations
+                SET title = ?, include_in_analysis = ?, document_id = ?
+                WHERE id = ?
+                """,
+                (next_title, 1 if next_include else 0, next_doc_id, observation_id),
+            )
+            await db.commit()
+        return await self.get_chat_observation(observation_id)
+
+    async def delete_chat_observation(self, observation_id: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM chat_observations WHERE id = ?",
+                (observation_id,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def consume_chat_observations(self, observation_ids: list[str]) -> int:
+        if not observation_ids:
+            return 0
+        now = _now_iso()
+        placeholders = ",".join("?" * len(observation_ids))
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"""
+                UPDATE chat_observations
+                SET include_in_analysis = 0, consumed_at = ?
+                WHERE id IN ({placeholders}) AND consumed_at IS NULL
+                """,
+                [now, *observation_ids],
+            )
+            await db.commit()
+            return cursor.rowcount
+
+    @staticmethod
+    def _chat_observation_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "message_id": row.get("message_id"),
+            "excerpt": row["excerpt"],
+            "title": row["title"],
+            "include_in_analysis": bool(row.get("include_in_analysis", 1)),
+            "document_id": row.get("document_id"),
+            "created_by": row.get("created_by"),
+            "created_at": row["created_at"],
+            "consumed_at": row.get("consumed_at"),
         }
 
     @staticmethod

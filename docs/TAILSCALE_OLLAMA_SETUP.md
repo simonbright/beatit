@@ -1,10 +1,10 @@
 # Tailscale VM + Ollama setup for BeatIt
 
-Use this guide to run LLMs on your private Windows VM (`W11VMAI01`) and connect BeatIt over Tailscale. Work happens on branch `feature/tailscale-ollama-vm`; `main` stays unchanged for production on Render.
+Use this guide to run LLMs on a private machine (Windows or Linux) and connect BeatIt over **Tailscale**.
 
-**VM specs (reference):** 4 vCPU, 16 GB RAM, 110 GB disk — sized for one **7–8B text model** at a time, or occasional **vision** on a few CT slices later.
+**VM specs (reference):** 4 vCPU, 16 GB RAM — sized for one **7–8B text model** at a time, or occasional **vision** on a few CT slices.
 
-**Do not commit passwords or API keys.** Keep RDP credentials in a password manager, not in `.env` or git.
+**Do not commit passwords or API keys.** Keep credentials in a password manager, not in `.env` or git.
 
 ---
 
@@ -12,27 +12,27 @@ Use this guide to run LLMs on your private Windows VM (`W11VMAI01`) and connect 
 
 | Where | Role |
 |-------|------|
-| **Render (`main`)** | App + data; stays on **OpenRouter** |
-| **Your Mac (local dev)** | BeatIt; **`LLM_PROVIDER=auto`** → VM when up, else OpenRouter |
-| **Windows VM (Tailscale)** | **Ollama** on port 11434 |
+| **Render (`main`)** | App + data; typically **OpenRouter** |
+| **Your laptop (local dev)** | BeatIt; **`LLM_PROVIDER=auto`** → VM when up, else OpenRouter |
+| **Private VM (Tailscale)** | **Ollama** on port 11434 |
 
-Tailscale IP example: `100.92.208.65` — use `tailscale ip -4` on the VM if it changes.
+Tailscale IP example: `100.x.x.x` — use `tailscale ip -4` on the VM if it changes.
 
 ---
 
 ## Step 1 — Confirm Tailscale on the VM
 
-On **W11VMAI01** (RDP or local console):
+On your VM (RDP or local console):
 
 1. Open the Tailscale app — status should be **Connected**.
-2. Note the Tailscale IPv4 (e.g. `100.92.208.65`).
+2. Note the Tailscale IPv4 (e.g. `100.x.x.x`).
 
-On **your Mac**:
+On your **development machine**:
 
 ```bash
-ping -c 2 100.92.208.65
+ping -c 2 100.x.x.x
 # or
-ping -c 2 w11vmai01.tailc529.ts.net
+ping -c 2 your-hostname.tail-scale.ts.net
 ```
 
 If ping fails, fix Tailscale on both machines before continuing.
@@ -92,9 +92,6 @@ ollama pull llama3.2:3b
 
 # Vision for Imaging tab (recommended — works without mllama)
 ollama pull moondream
-
-# Optional heavier alternative if your Ollama build supports mllama:
-# ollama pull llama3.2-vision:11b
 ```
 
 Check:
@@ -107,17 +104,17 @@ ollama list
 
 ---
 
-## Step 5 — Test from your Mac
+## Step 5 — Test from your dev machine
 
 ```bash
 cd /path/to/beatit
-./scripts/check_ollama.sh http://100.92.208.65:11434
+./scripts/check_ollama.sh http://100.x.x.x:11434
 ```
 
 Or:
 
 ```bash
-curl -s http://100.92.208.65:11434/api/tags | python3 -m json.tool
+curl -s http://100.x.x.x:11434/api/tags | python3 -m json.tool
 ```
 
 Expected: HTTP 200 and your pulled model names.
@@ -132,11 +129,11 @@ Edit **local** `.env` (never commit secrets):
 LLM_PROVIDER=auto
 
 # Tailscale VM
-OLLAMA_BASE_URL=http://100.92.208.65:11434
+OLLAMA_BASE_URL=http://100.x.x.x:11434
 OLLAMA_MODEL=qwen2.5:7b-instruct
 OLLAMA_VISION_MODEL=moondream
 
-# Fallback when VM is off (and for comparison)
+# Fallback when VM is off
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=openai/gpt-4o-mini
 ```
@@ -154,13 +151,13 @@ source .venv/bin/activate
 python run.py
 ```
 
-Open http://localhost:8080 → **Settings** → confirm **Connected · ollama · qwen2.5:7b-instruct**.
+Open http://localhost:8080 → **Settings** → confirm LLM connectivity.
 
 Run a small custom task or baseline with a **narrow document scope** first (text-only) to validate latency.
 
 ---
 
-## Step 8 — Production (Render) unchanged
+## Step 8 — Production (Render)
 
 On Render, keep:
 
@@ -168,7 +165,7 @@ On Render, keep:
 LLM_PROVIDER=openrouter
 ```
 
-The VM is **not** reachable from Render unless you add Tailscale to Render (advanced). Local dev gets cheap/private LLM; production keeps OpenRouter.
+The private VM is **not** reachable from Render unless you add Tailscale to Render (advanced). Local dev gets private LLM; production typically uses OpenRouter.
 
 ---
 
@@ -176,30 +173,8 @@ The VM is **not** reachable from Render unless you add Tailscale to Render (adva
 
 | Symptom | Fix |
 |---------|-----|
-| Mac cannot reach `:11434` | Tailscale connected? Firewall rule? `OLLAMA_HOST=0.0.0.0`? Restart Ollama |
+| Dev machine cannot reach `:11434` | Tailscale connected? Firewall rule? `OLLAMA_HOST=0.0.0.0`? Restart Ollama |
 | `model_available: false` | Run `ollama pull` for the name in `OLLAMA_MODEL` |
-| Very slow responses | Normal on CPU; use smaller model or increase VM to 8 vCPU / 32 GB RAM |
+| Very slow responses | Normal on CPU; use smaller model or increase VM resources |
 | BeatIt still uses OpenRouter | `LLM_PROVIDER=auto` and VM health must pass; check `./scripts/check_ollama.sh` |
-| Vision fails with `500` / `unknown model architecture: 'mllama'` | Ollama on the VM is outdated or broken — reinstall from https://ollama.com/download, restart Ollama, retry. Or use a lighter model: `ollama pull moondream` and set `OLLAMA_VISION_MODEL=moondream` in `.env` |
-
----
-
-## Next (this branch)
-
-- [x] Vision API for selected DICOM slices → `moondream` on same VM  
-- [ ] Settings UI: show Ollama URL + available models from `/api/tags`  
-- [ ] Optional: bump VM RAM on host if imaging workloads grow  
-
----
-
-## Branch workflow
-
-```bash
-# Work on VM integration
-git checkout feature/tailscale-ollama-vm
-
-# Fall back to stable production line
-git checkout main
-```
-
-Merge to `main` only after local Ollama runs reliably end-to-end.
+| Vision fails | Update Ollama from https://ollama.com/download, or use `OLLAMA_VISION_MODEL=moondream` |

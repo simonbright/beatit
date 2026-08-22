@@ -3,6 +3,11 @@ from typing import Any
 from app.services.assessment_parse import ensure_executive_summary, open_items_to_json, parse_assessment
 from app.services.llm import LLMClient
 from app.services.content_policy import PALLIATIVE_EXCLUSION, filter_palliative_content
+from app.services.chat_observations import (
+    format_chat_observations_for_prompt,
+    observation_library_document_ids,
+    resolve_observations_for_analysis,
+)
 from app.services.source_policy import (
     BASELINE_GAP_RULES,
     BASELINE_GUIDANCE_SECTION,
@@ -310,10 +315,33 @@ class SynthesisService:
         analysis_type: str = "query",
         created_by: str | None = None,
         build_on_analysis_id: str | None = None,
+        chat_observation_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        corpus = await self.store.get_corpus(document_ids)
+        observations = await resolve_observations_for_analysis(
+            self.db,
+            observation_ids=chat_observation_ids,
+        )
+        obs_doc_ids = await observation_library_document_ids(observations)
+        merged_doc_ids = document_ids
+        if obs_doc_ids:
+            if merged_doc_ids is None:
+                pass
+            else:
+                merged = list(merged_doc_ids)
+                seen = set(merged)
+                for doc_id in obs_doc_ids:
+                    if doc_id not in seen:
+                        merged.append(doc_id)
+                        seen.add(doc_id)
+                merged_doc_ids = merged
+
+        corpus = await self.store.get_corpus(merged_doc_ids)
         corpus_text, coverage_notes = _format_corpus(corpus)
         doc_titles = [d["title"] for d in corpus if d.get("title")]
+        for obs in observations:
+            obs_title = (obs.get("title") or "").strip()
+            if obs_title and obs_title not in doc_titles:
+                doc_titles.append(obs_title)
         title_list = "\n".join(f'- "{t}"' for t in doc_titles) if doc_titles else "[No documents stored]"
         inventory = _format_document_inventory(corpus)
         coverage_section = (
@@ -360,15 +388,31 @@ class SynthesisService:
             else ""
         )
 
+        chat_section = format_chat_observations_for_prompt(observations)
+        if chat_section:
+            chat_section = f"\n{chat_section}\n"
+        obs_titles = [o["title"] for o in observations if o.get("title")]
+        chat_title_lines = (
+            "\n".join(f'- Chat observation "{t}"' for t in obs_titles)
+            if obs_titles
+            else ""
+        )
+        chat_titles_block = (
+            f"\nCHAT OBSERVATION TITLES — use EXACT strings inside [SOURCE: Chat observation \"…\"] tags:\n"
+            f"{chat_title_lines}\n"
+            if chat_title_lines
+            else ""
+        )
+
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
 {inventory_section}{coverage_section}
 DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags:
 {title_list}
-
+{chat_titles_block}
 === STORED DOCUMENTS ===
 {corpus_text}
-{prior_section}{guidance_section}
+{chat_section}{prior_section}{guidance_section}
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
 {gap_rules}
