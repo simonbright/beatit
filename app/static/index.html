@@ -240,6 +240,15 @@
             </div>
             <div id="assessment-scope-next" class="assessment-scope-block"></div>
             <div id="assessment-scope-warning" class="assessment-scope-warning hidden"></div>
+            <div class="assessment-scope-quick" id="assessment-scope-quick" aria-label="Quick source selection">
+              <span class="assessment-scope-quick-label muted small">Quick select</span>
+              <div class="assessment-scope-quick-buttons">
+                <button type="button" class="btn secondary btn-sm" id="btn-scope-main-sources" title="Clinical notes and PDFs — usual main sources">Notes + PDFs</button>
+                <button type="button" class="btn ghost btn-sm" id="btn-scope-type-text" title="All clinical notes / text">Clinical notes</button>
+                <button type="button" class="btn ghost btn-sm" id="btn-scope-type-pdf" title="All PDF documents">PDFs</button>
+                <button type="button" class="btn ghost btn-sm hidden" id="btn-scope-new-uploads" title="Keep last assessment sources and add documents uploaded since then">Last run + new</button>
+              </div>
+            </div>
             <div class="assessment-scope-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-scope-select-all">Select all</button>
               <button type="button" class="btn ghost btn-sm" id="btn-scope-clear">Clear selection</button>
@@ -554,6 +563,12 @@
 
         <div class="library-selection-bar" id="library-selection-bar">
             <p id="library-selection-summary" class="library-selection-summary muted small"></p>
+          <div class="library-selection-quick" id="library-selection-quick" aria-label="Quick source selection">
+            <button type="button" class="btn secondary btn-sm" id="btn-lib-main-sources" title="Clinical notes and PDFs">Notes + PDFs</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-lib-type-text">Clinical notes</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-lib-type-pdf">PDFs</button>
+            <button type="button" class="btn ghost btn-sm hidden" id="btn-lib-new-uploads" title="Keep last assessment sources and add documents uploaded since then">Last run + new</button>
+          </div>
           <div class="library-selection-actions">
             <button type="button" class="btn primary" id="btn-library-baseline">Run analysis</button>
             <button type="button" class="btn ghost" id="btn-select-all-shown">Select all shown</button>

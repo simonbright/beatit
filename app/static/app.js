@@ -627,7 +627,9 @@ function setAnalysisRunning(running, jobId = null, jobType = null) {
     btn.disabled = running;
     btn.setAttribute("aria-disabled", running ? "true" : "false");
   });
-  ["#btn-scope-select-all", "#btn-scope-clear", "#btn-scope-match-last", "#btn-scope-library"].forEach((sel) => {
+  ["#btn-scope-select-all", "#btn-scope-clear", "#btn-scope-match-last", "#btn-scope-library",
+   "#btn-scope-main-sources", "#btn-scope-type-text", "#btn-scope-type-pdf", "#btn-scope-new-uploads",
+   "#btn-lib-main-sources", "#btn-lib-type-text", "#btn-lib-type-pdf", "#btn-lib-new-uploads"].forEach((sel) => {
     const btn = $(sel);
     if (!btn) return;
     btn.disabled = running;
@@ -787,12 +789,19 @@ function renderAnalysisScopeSummary() {
     return;
   }
   const breakdown = formatScopeBreakdown(next.byType);
+  const lastIds = state.latestAnalysis?.document_ids || [];
+  const { newIds } = state.latestAnalysis
+    ? partitionNextScopeIds(nextIds, lastIds)
+    : { newIds: [] };
+  const newBit = newIds.length ? ` · ${newIds.length} new since last run` : "";
   if (usingAll) {
     el.textContent = breakdown
-      ? `All ${total} library documents · ${breakdown}`
-      : `All ${total} library documents`;
+      ? `All ${total} library documents · ${breakdown}${newBit}`
+      : `All ${total} library documents${newBit}`;
   } else {
-    el.textContent = breakdown ? `${next.count} selected · ${breakdown}` : `${next.count} selected`;
+    el.textContent = breakdown
+      ? `${next.count} selected · ${breakdown}${newBit}`
+      : `${next.count} selected${newBit}`;
   }
 }
 
@@ -1774,6 +1783,7 @@ const LIBRARY_TYPE_LABELS = {
   pdf: "PDF",
   video: "Video",
   imaging: "DICOM / imaging",
+  chat_observation: "Chat observation",
 };
 
 function libraryTypeLabel(type) {
@@ -2332,6 +2342,7 @@ function renderAssessmentScopeCard() {
 
   matchBtn?.classList.toggle("hidden", !lastIds.length);
 
+  updateScopeQuickButtons();
   renderAnalysisRunChrome();
   renderHomeResultsSidebar(state.latestAnalysis);
 }
@@ -2456,11 +2467,31 @@ function documentIdsOfType(sourceType) {
     .map((doc) => doc.id);
 }
 
-function selectDocumentIds(ids) {
+function documentIdsOfTypes(sourceTypes) {
+  const wanted = new Set(sourceTypes || []);
+  if (!wanted.size) return [];
+  return state.documentIndex
+    .filter((doc) => wanted.has(doc.source_type))
+    .map((doc) => doc.id);
+}
+
+function newDocumentIdsSinceLastAssessment() {
+  const lastIds = new Set(state.latestAnalysis?.document_ids || []);
+  if (!lastIds.size && !state.latestAnalysis) {
+    return state.documentIndex.map((doc) => doc.id);
+  }
+  return state.documentIndex
+    .filter((doc) => !lastIds.has(doc.id))
+    .map((doc) => doc.id);
+}
+
+function selectDocumentIds(ids, { replace = false } = {}) {
+  if (replace) state.selectedIds.clear();
   ids.forEach((id) => state.selectedIds.add(id));
   saveSelectionToSession();
   renderDocuments();
   updateSelectedLabel();
+  renderAnalysisScopeSummary();
 }
 
 function selectDocumentsOnPage() {
@@ -2468,27 +2499,73 @@ function selectDocumentsOnPage() {
   toast(`Selected ${state.documents.length} on this page`);
 }
 
-function selectDocumentsByType(sourceType) {
+function selectDocumentsByType(sourceType, { replace = true } = {}) {
   const ids = documentIdsOfType(sourceType);
   if (!ids.length) {
     toast(`No ${libraryTypeLabel(sourceType).toLowerCase()} documents to select`, "error");
     return;
   }
-  selectDocumentIds(ids);
-  toast(`Selected ${ids.length} ${libraryTypeLabel(sourceType).toLowerCase()} document${ids.length === 1 ? "" : "s"}`);
+  selectDocumentIds(ids, { replace });
+  toast(
+    `Selected ${ids.length} ${libraryTypeLabel(sourceType).toLowerCase()} document${ids.length === 1 ? "" : "s"}`
+  );
+}
+
+function selectDocumentsByTypes(sourceTypes, { replace = true, label = null } = {}) {
+  const ids = documentIdsOfTypes(sourceTypes);
+  const typeLabel =
+    label ||
+    sourceTypes.map((t) => libraryTypeLabel(t).toLowerCase()).join(" + ");
+  if (!ids.length) {
+    toast(`No ${typeLabel} documents to select`, "error");
+    return;
+  }
+  selectDocumentIds(ids, { replace });
+  const breakdown = formatScopeBreakdown(scopeSummaryFromIds(ids).byType);
+  toast(`Selected ${ids.length} · ${breakdown || typeLabel}`);
+}
+
+function selectMainSources() {
+  selectDocumentsByTypes(["text", "pdf"], {
+    replace: true,
+    label: "clinical notes + PDFs",
+  });
+}
+
+function selectNewSinceLastAssessment({ includePrior = true } = {}) {
+  const newIds = newDocumentIdsSinceLastAssessment();
+  if (!newIds.length) {
+    toast("No new documents since the current assessment", "error");
+    return;
+  }
+  let ids = newIds;
+  if (includePrior && state.latestAnalysis?.document_ids?.length) {
+    const combined = new Set(state.latestAnalysis.document_ids);
+    newIds.forEach((id) => combined.add(id));
+    ids = [...combined];
+  }
+  selectDocumentIds(ids, { replace: true });
+  const newCount = newIds.length;
+  const priorCount = Math.max(0, ids.length - newCount);
+  toast(
+    priorCount
+      ? `Selected last assessment (${priorCount}) + ${newCount} new upload${newCount === 1 ? "" : "s"}`
+      : `Selected ${newCount} new upload${newCount === 1 ? "" : "s"}`
+  );
+  scrollToAssessmentScope();
 }
 
 function selectAllDocuments() {
   const ids = state.documentIndex.map((doc) => doc.id);
   if (!ids.length) return toast("No documents to select", "error");
-  selectDocumentIds(ids);
+  selectDocumentIds(ids, { replace: true });
   toast(`Selected all ${ids.length} documents`);
 }
 
 function selectAllShownDocuments() {
   const filterType = state.libraryFilter || "";
   if (filterType) {
-    selectDocumentsByType(filterType);
+    selectDocumentsByType(filterType, { replace: true });
     return;
   }
   selectAllDocuments();
@@ -2500,7 +2577,44 @@ function clearDocumentSelection() {
   saveSelectionToSession();
   renderDocuments();
   updateSelectedLabel();
+  renderAnalysisScopeSummary();
   toast("Selection cleared — assessments will use all documents");
+}
+
+function updateScopeQuickButtons() {
+  const counts = state.libraryCounts || {};
+  const textCount = counts.text || documentIdsOfType("text").length;
+  const pdfCount = counts.pdf || documentIdsOfType("pdf").length;
+  const mainCount = textCount + pdfCount;
+  const newIds = state.latestAnalysis ? newDocumentIdsSinceLastAssessment() : [];
+  const newCount = newIds.length;
+
+  const setBtn = (sel, enabled, label = null) => {
+    const btn = $(sel);
+    if (!btn) return;
+    btn.disabled = !enabled || state.analysisRunning;
+    if (label != null) btn.textContent = label;
+  };
+
+  setBtn("#btn-scope-main-sources", mainCount > 0, `Notes + PDFs (${mainCount})`);
+  setBtn("#btn-scope-type-text", textCount > 0, `Clinical notes (${textCount})`);
+  setBtn("#btn-scope-type-pdf", pdfCount > 0, `PDFs (${pdfCount})`);
+  setBtn("#btn-lib-main-sources", mainCount > 0, `Notes + PDFs (${mainCount})`);
+  setBtn("#btn-lib-type-text", textCount > 0, `Clinical notes (${textCount})`);
+  setBtn("#btn-lib-type-pdf", pdfCount > 0, `PDFs (${pdfCount})`);
+
+  ["#btn-scope-new-uploads", "#btn-lib-new-uploads"].forEach((sel) => {
+    const btn = $(sel);
+    if (!btn) return;
+    const show = Boolean(state.latestAnalysis) && newCount > 0;
+    btn.classList.toggle("hidden", !show);
+    btn.disabled = !show || state.analysisRunning;
+    if (show) {
+      btn.textContent = `Last run + ${newCount} new`;
+      btn.title =
+        "Keep documents from the current assessment and add uploads that are not in it yet";
+    }
+  });
 }
 
 function renderLibrarySelectionControls() {
@@ -2547,9 +2661,10 @@ function renderLibrarySelectionControls() {
 
   const libraryBaselineBtn = $("#btn-library-baseline");
   if (libraryBaselineBtn) {
-    const totalDocs = state.documentIndex.length || Object.values(counts).reduce((a, b) => a + b, 0);
-    libraryBaselineBtn.disabled = state.analysisRunning || !totalDocs;
+    libraryBaselineBtn.disabled = state.analysisRunning || !total;
   }
+
+  updateScopeQuickButtons();
   renderAnalysisRunChrome();
 }
 
@@ -5549,6 +5664,14 @@ safeOn("#btn-scope-library", "click", goToLibraryForScope);
 safeOn("#btn-scope-select-all", "click", selectAllDocuments);
 safeOn("#btn-scope-clear", "click", clearDocumentSelection);
 safeOn("#btn-scope-match-last", "click", applyLastAssessmentScope);
+safeOn("#btn-scope-main-sources", "click", () => selectMainSources());
+safeOn("#btn-scope-type-text", "click", () => selectDocumentsByType("text", { replace: true }));
+safeOn("#btn-scope-type-pdf", "click", () => selectDocumentsByType("pdf", { replace: true }));
+safeOn("#btn-scope-new-uploads", "click", () => selectNewSinceLastAssessment({ includePrior: true }));
+safeOn("#btn-lib-main-sources", "click", () => selectMainSources());
+safeOn("#btn-lib-type-text", "click", () => selectDocumentsByType("text", { replace: true }));
+safeOn("#btn-lib-type-pdf", "click", () => selectDocumentsByType("pdf", { replace: true }));
+safeOn("#btn-lib-new-uploads", "click", () => selectNewSinceLastAssessment({ includePrior: true }));
 safeOn("#btn-open-item-adjust-scope", "click", scrollToAssessmentScope);
 safeOn("#btn-open-item-reassess", "click", reassessFromOpenItem);
 safeOn("#btn-summarize", "click", () => runAnalysis({ summarize: true }));

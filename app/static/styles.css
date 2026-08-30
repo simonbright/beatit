@@ -1404,6 +1404,31 @@ textarea { resize: vertical; min-height: 100px; }
   font-size: 0.88rem;
 }
 
+.assessment-scope-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  margin: 0.65rem 0 0.35rem;
+}
+
+.assessment-scope-quick-label {
+  flex-shrink: 0;
+}
+
+.assessment-scope-quick-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.library-selection-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+}
+
 .assessment-scope-actions {
   display: flex;
   flex-wrap: wrap;
