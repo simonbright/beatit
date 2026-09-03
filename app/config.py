@@ -64,16 +64,26 @@ class Settings(BaseSettings):
         return bool(self.auth_usernames and (self.auth_password or self.auth_password_by_user))
 
     @property
+    def _active_case_dir(self) -> Path:
+        # Lazy import to avoid circular dependency at module load
+        from app.services.case_manager import active_case_dir
+        d = active_case_dir()
+        if d:
+            return d
+        # Fallback for fresh installs before registry exists
+        return self.data_dir
+
+    @property
     def documents_dir(self) -> Path:
-        return self.data_dir / "documents"
+        return self._active_case_dir / "documents"
 
     @property
     def extracted_dir(self) -> Path:
-        return self.data_dir / "extracted"
+        return self._active_case_dir / "extracted"
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "beatit.db"
+        return self._active_case_dir / "beatit.db"
 
 
 settings = Settings()

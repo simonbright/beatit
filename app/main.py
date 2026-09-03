@@ -10,6 +10,7 @@ from app.config import settings
 from app.middleware.auth import SessionAuthMiddleware
 from app.storage.database import Database
 from app.services.analysis_jobs import resume_pending_jobs
+from app.services.case_manager import migrate_legacy_if_needed
 from app.version import APP_VERSION
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -17,6 +18,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    migrate_legacy_if_needed()
     db = Database()
     await db.init()
     await resume_pending_jobs()

@@ -70,6 +70,54 @@
     </nav>
   </header>
 
+  <!-- Patient / Case context bar -->
+  <div id="case-context-bar" class="case-context-bar">
+    <span class="case-context-label">
+      <strong id="case-ctx-patient">—</strong>
+      <span class="case-ctx-sep">›</span>
+      <strong id="case-ctx-case">—</strong>
+    </span>
+    <button type="button" class="btn ghost btn-xs" id="btn-switch-case" title="Switch patient or case">Switch</button>
+    <button type="button" class="btn ghost btn-xs" id="btn-new-patient" title="New patient">+ Patient</button>
+    <button type="button" class="btn ghost btn-xs" id="btn-new-case" title="New case for current patient">+ Case</button>
+  </div>
+
+  <!-- New Patient modal -->
+  <div id="modal-new-patient" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3>New Patient</h3>
+      <label>Name / label<br><input type="text" id="input-new-patient-label" class="input" placeholder="e.g. Simon Brightman"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btn-cancel-new-patient">Cancel</button>
+        <button type="button" class="btn primary" id="btn-confirm-new-patient">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Case modal -->
+  <div id="modal-new-case" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3>New Case <span id="new-case-patient-label"></span></h3>
+      <label>Case label<br><input type="text" id="input-new-case-label" class="input" placeholder="e.g. Cardiac workup"></label>
+      <label>Patient context (optional)<br><textarea id="input-new-case-context" class="input" rows="4" placeholder="Brief clinical summary for LLM context…"></textarea></label>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btn-cancel-new-case">Cancel</button>
+        <button type="button" class="btn primary" id="btn-confirm-new-case">Create & Switch</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Switch Patient/Case modal -->
+  <div id="modal-switch-case" class="modal-overlay hidden">
+    <div class="modal-card modal-card-wide">
+      <h3>Switch Patient / Case</h3>
+      <div id="switch-case-list" class="switch-case-list"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btn-cancel-switch-case">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="background-status-bar" class="background-status-bar hidden" role="status" aria-live="polite" aria-label="Background tasks">
     <div class="background-status-inner">
       <div id="background-status-list" class="background-status-list"></div>
@@ -577,6 +625,15 @@
           </div>
         </div>
         <div id="documents-list" class="documents-list"></div>
+
+        <!-- Cross-case documents (sibling cases of same patient) -->
+        <details id="cross-case-section" class="cross-case-section hidden">
+          <summary class="cross-case-summary">Documents from other cases</summary>
+          <p class="muted small">Browse documents from other cases for this patient. These are read-only — switch cases to edit.</p>
+          <div id="cross-case-tabs" class="cross-case-tabs"></div>
+          <div id="cross-case-docs" class="cross-case-docs"></div>
+        </details>
+
         <div id="library-pagination" class="library-pagination hidden">
           <button type="button" class="btn secondary" id="btn-library-prev">Previous</button>
           <span id="library-page-info" class="library-page-info muted small"></span>

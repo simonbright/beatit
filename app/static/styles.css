@@ -4052,3 +4052,91 @@ textarea { resize: vertical; min-height: 100px; }
     min-height: 360px;
   }
 }
+
+/* ------------------------------------------------
+   Case context bar
+   ------------------------------------------------ */
+.case-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1.25rem;
+  background: var(--bg-secondary, #f5f5f5);
+  border-bottom: 1px solid var(--border, #e0e0e0);
+  font-size: 0.82rem;
+}
+.case-context-label { display: flex; align-items: center; gap: 0.35rem; }
+.case-ctx-sep { opacity: 0.4; }
+.btn-xs { font-size: 0.75rem; padding: 0.15rem 0.5rem; }
+
+/* ------------------------------------------------
+   Modal overlay (shared)
+   ------------------------------------------------ */
+.modal-overlay {
+  position: fixed; inset: 0;
+  z-index: 9000;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-overlay.hidden { display: none; }
+.modal-card {
+  background: var(--bg-primary, #fff);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  min-width: 340px;
+  max-width: 480px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+}
+.modal-card-wide { max-width: 560px; }
+.modal-card h3 { margin: 0 0 1rem; }
+.modal-card label { display: block; margin-bottom: 0.75rem; font-size: 0.85rem; }
+.modal-card .input {
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 0.35rem;
+  font-size: 0.9rem;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #222);
+}
+.modal-actions {
+  display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;
+}
+
+/* Switch case list */
+.switch-case-list { max-height: 400px; overflow-y: auto; }
+.switch-patient-group { margin-bottom: 1rem; }
+.switch-patient-group h4 { margin: 0 0 0.35rem; font-size: 0.9rem; }
+.switch-case-btn {
+  display: block; width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 0.35rem;
+  margin-bottom: 0.25rem;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #222);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.switch-case-btn:hover { background: var(--bg-secondary, #f0f0f0); }
+.switch-case-btn.active-case { border-color: var(--accent, #4a9eff); font-weight: 600; }
+
+/* Cross-case documents */
+.cross-case-section { margin-top: 1rem; }
+.cross-case-summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; padding: 0.5rem 0; }
+.cross-case-tabs { display: flex; gap: 0.35rem; margin: 0.5rem 0; flex-wrap: wrap; }
+.cross-case-tab {
+  padding: 0.3rem 0.7rem; border: 1px solid var(--border, #ddd);
+  border-radius: 0.35rem; background: var(--bg-primary, #fff); cursor: pointer;
+  font-size: 0.82rem; color: var(--text-primary, #222);
+}
+.cross-case-tab:hover { background: var(--bg-secondary, #f0f0f0); }
+.cross-case-tab.active { border-color: var(--accent, #4a9eff); font-weight: 600; }
+.cross-case-docs { margin-top: 0.5rem; }
+.cross-case-doc-item {
+  padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border, #eee);
+  font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center;
+}
+.cross-case-doc-item .doc-type { font-size: 0.75rem; opacity: 0.6; }

@@ -6322,4 +6322,172 @@ loadAppVersion();
 initAuth();
 bindPdfFileInput();
 bindFileInput("#video-file");
+
+// ------------------------------------------------------------------
+// Patient / Case management
+// ------------------------------------------------------------------
+
+async function loadCaseContext() {
+  try {
+    const r = await fetch("/api/cases/active");
+    const ctx = await r.json();
+    const pEl = document.getElementById("case-ctx-patient");
+    const cEl = document.getElementById("case-ctx-case");
+    if (pEl) pEl.textContent = ctx.patient_label || "No patient";
+    if (cEl) cEl.textContent = ctx.case_label || "No case";
+  } catch { /* ignore */ }
+}
+
+function showModal(id) { document.getElementById(id)?.classList.remove("hidden"); }
+function hideModal(id) { document.getElementById(id)?.classList.add("hidden"); }
+
+// New Patient
+document.getElementById("btn-new-patient")?.addEventListener("click", () => {
+  document.getElementById("input-new-patient-label").value = "";
+  showModal("modal-new-patient");
+  document.getElementById("input-new-patient-label")?.focus();
+});
+document.getElementById("btn-cancel-new-patient")?.addEventListener("click", () => hideModal("modal-new-patient"));
+document.getElementById("btn-confirm-new-patient")?.addEventListener("click", async () => {
+  const label = document.getElementById("input-new-patient-label")?.value.trim();
+  if (!label) return;
+  await fetch("/api/patients", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({label}) });
+  hideModal("modal-new-patient");
+  // Show the new case modal immediately for the new patient
+  const pRes = await fetch("/api/patients");
+  const pData = await pRes.json();
+  const newP = pData.patients.find(p => p.label === label);
+  if (newP) {
+    document.getElementById("new-case-patient-label").textContent = `for ${newP.label}`;
+    document.getElementById("input-new-case-label").value = "";
+    document.getElementById("input-new-case-context").value = "";
+    document.getElementById("modal-new-case").dataset.patientId = newP.id;
+    showModal("modal-new-case");
+    document.getElementById("input-new-case-label")?.focus();
+  }
+});
+
+// New Case
+document.getElementById("btn-new-case")?.addEventListener("click", async () => {
+  const r = await fetch("/api/cases/active");
+  const ctx = await r.json();
+  if (!ctx.patient_id) { alert("Create a patient first."); return; }
+  document.getElementById("new-case-patient-label").textContent = `for ${ctx.patient_label}`;
+  document.getElementById("input-new-case-label").value = "";
+  document.getElementById("input-new-case-context").value = "";
+  document.getElementById("modal-new-case").dataset.patientId = ctx.patient_id;
+  showModal("modal-new-case");
+  document.getElementById("input-new-case-label")?.focus();
+});
+document.getElementById("btn-cancel-new-case")?.addEventListener("click", () => hideModal("modal-new-case"));
+document.getElementById("btn-confirm-new-case")?.addEventListener("click", async () => {
+  const patientId = document.getElementById("modal-new-case").dataset.patientId;
+  const label = document.getElementById("input-new-case-label")?.value.trim();
+  if (!label) return;
+  const patientContext = document.getElementById("input-new-case-context")?.value.trim() || null;
+  const res = await fetch(`/api/patients/${patientId}/cases`, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({label, patient_context: patientContext}),
+  });
+  if (!res.ok) { alert("Failed to create case"); return; }
+  const caseData = await res.json();
+  // Activate the new case
+  await fetch("/api/cases/activate", {
+    method: "PUT",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({patient_id: patientId, case_id: caseData.case.id}),
+  });
+  hideModal("modal-new-case");
+  location.reload();
+});
+
+// Switch modal
+document.getElementById("btn-switch-case")?.addEventListener("click", async () => {
+  const r = await fetch("/api/patients");
+  const data = await r.json();
+  const active = data.active;
+  const listEl = document.getElementById("switch-case-list");
+  listEl.innerHTML = "";
+  if (!data.patients.length) {
+    listEl.innerHTML = "<p>No patients yet. Create one first.</p>";
+    showModal("modal-switch-case");
+    return;
+  }
+  for (const p of data.patients) {
+    const group = document.createElement("div");
+    group.className = "switch-patient-group";
+    group.innerHTML = `<h4>${p.label}</h4>`;
+    for (const c of (p.cases || [])) {
+      const btn = document.createElement("button");
+      btn.className = "switch-case-btn";
+      if (active.patient_id === p.id && active.case_id === c.id) btn.classList.add("active-case");
+      btn.textContent = c.label;
+      btn.addEventListener("click", async () => {
+        await fetch("/api/cases/activate", {
+          method: "PUT",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({patient_id: p.id, case_id: c.id}),
+        });
+        hideModal("modal-switch-case");
+        location.reload();
+      });
+      group.appendChild(btn);
+    }
+    listEl.appendChild(group);
+  }
+  showModal("modal-switch-case");
+});
+document.getElementById("btn-cancel-switch-case")?.addEventListener("click", () => hideModal("modal-switch-case"));
+
+// Cross-case document browsing
+async function loadCrossCaseSiblings() {
+  const section = document.getElementById("cross-case-section");
+  if (!section) return;
+  try {
+    const r = await fetch("/api/cases/siblings");
+    const data = await r.json();
+    if (!data.siblings || !data.siblings.length) {
+      section.classList.add("hidden");
+      return;
+    }
+    section.classList.remove("hidden");
+    const tabsEl = document.getElementById("cross-case-tabs");
+    tabsEl.innerHTML = "";
+    for (const s of data.siblings) {
+      const btn = document.createElement("button");
+      btn.className = "cross-case-tab";
+      btn.textContent = s.label;
+      btn.addEventListener("click", () => loadCrossCaseDocs(s.id, s.label, btn));
+      tabsEl.appendChild(btn);
+    }
+  } catch { section.classList.add("hidden"); }
+}
+
+async function loadCrossCaseDocs(caseId, caseLabel, tabBtn) {
+  document.querySelectorAll(".cross-case-tab").forEach(b => b.classList.remove("active"));
+  if (tabBtn) tabBtn.classList.add("active");
+  const docsEl = document.getElementById("cross-case-docs");
+  docsEl.innerHTML = "<p class='muted small'>Loading…</p>";
+  try {
+    const r = await fetch(`/api/cases/siblings/${caseId}/documents`);
+    const data = await r.json();
+    if (!data.documents || !data.documents.length) {
+      docsEl.innerHTML = "<p class='muted small'>No documents in this case.</p>";
+      return;
+    }
+    docsEl.innerHTML = "";
+    for (const doc of data.documents) {
+      const item = document.createElement("div");
+      item.className = "cross-case-doc-item";
+      item.innerHTML = `<span>${doc.title || doc.id}</span><span class="doc-type">${doc.source_type || ""}</span>`;
+      docsEl.appendChild(item);
+    }
+  } catch { docsEl.innerHTML = "<p class='muted small'>Failed to load.</p>"; }
+}
+
+// Load context on startup
+loadCaseContext();
+loadCrossCaseSiblings();
+
 void loadInitialData();

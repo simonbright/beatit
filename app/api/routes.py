@@ -93,6 +93,17 @@ from app.config import settings
 from app.storage.database import Database
 from app.storage.documents import DocumentStore
 from app.version import version_info
+from app.services.case_manager import (
+    list_patients,
+    create_patient,
+    delete_patient,
+    list_cases,
+    create_case,
+    delete_case,
+    get_active_context,
+    activate_patient_case,
+    sibling_case_dirs,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -1839,3 +1850,113 @@ async def update_open_item(open_item_id: str, body: OpenItemUpdateRequest, reque
             },
         )
     return {"open_item": item}
+
+
+# ------------------------------------------------------------------
+# Patient / Case management
+# ------------------------------------------------------------------
+
+class CreatePatientRequest(BaseModel):
+    label: str
+
+
+class CreateCaseRequest(BaseModel):
+    label: str
+    patient_context: str | None = None
+
+
+class ActivateCaseRequest(BaseModel):
+    patient_id: str
+    case_id: str
+
+
+@router.get("/patients")
+async def api_list_patients():
+    patients = list_patients()
+    ctx = get_active_context()
+    return {"patients": patients, "active": ctx}
+
+
+@router.post("/patients")
+async def api_create_patient(body: CreatePatientRequest):
+    patient = create_patient(body.label)
+    return {"patient": patient}
+
+
+@router.delete("/patients/{patient_id}")
+async def api_delete_patient(patient_id: str):
+    ok = delete_patient(patient_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return {"ok": True}
+
+
+@router.get("/patients/{patient_id}/cases")
+async def api_list_cases(patient_id: str):
+    cases = list_cases(patient_id)
+    return {"cases": cases}
+
+
+@router.post("/patients/{patient_id}/cases")
+async def api_create_case(patient_id: str, body: CreateCaseRequest):
+    case = create_case(patient_id, body.label)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if body.patient_context:
+        activate_patient_case(patient_id, case["id"])
+        db = Database()
+        await db.init()
+        await db.set_setting("patient_context", body.patient_context)
+    return {"case": case}
+
+
+@router.delete("/patients/{patient_id}/cases/{case_id}")
+async def api_delete_case(patient_id: str, case_id: str):
+    ok = delete_case(patient_id, case_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return {"ok": True}
+
+
+@router.put("/cases/activate")
+async def api_activate_case(body: ActivateCaseRequest):
+    ok = activate_patient_case(body.patient_id, body.case_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Patient or case not found")
+    db = Database()
+    await db.init()
+    ctx = get_active_context()
+    return {"ok": True, "active": ctx}
+
+
+@router.get("/cases/active")
+async def api_active_context():
+    return get_active_context()
+
+
+@router.get("/cases/siblings")
+async def api_sibling_cases():
+    """List other cases for the same patient (for cross-case document browsing)."""
+    ctx = get_active_context()
+    if not ctx["patient_id"] or not ctx["case_id"]:
+        return {"siblings": []}
+    siblings = sibling_case_dirs(ctx["patient_id"], ctx["case_id"])
+    return {"siblings": [{"id": s["id"], "label": s["label"]} for s in siblings]}
+
+
+@router.get("/cases/siblings/{sibling_case_id}/documents")
+async def api_sibling_case_documents(sibling_case_id: str):
+    """List documents from a sibling case (read-only cross-case browsing)."""
+    ctx = get_active_context()
+    if not ctx["patient_id"]:
+        raise HTTPException(status_code=400, detail="No active patient")
+    siblings = sibling_case_dirs(ctx["patient_id"], ctx["case_id"])
+    sibling = next((s for s in siblings if s["id"] == sibling_case_id), None)
+    if not sibling:
+        raise HTTPException(status_code=404, detail="Sibling case not found")
+    sibling_db_path = Path(sibling["dir"]) / "beatit.db"
+    if not sibling_db_path.exists():
+        return {"documents": []}
+    sib_db = Database(db_path=sibling_db_path)
+    docs = await sib_db.list_documents()
+    return {"documents": docs, "case_label": sibling["label"]}
