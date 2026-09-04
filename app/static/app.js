@@ -6,6 +6,7 @@ const state = {
   libraryTotal: 0,
   libraryCounts: {},
   libraryView: "documents",
+  diagImportSourceDocumentId: null,
   homeSection: "assessment",
   settingsSection: "patients",
   selectedIds: new Set(),
@@ -1996,10 +1997,62 @@ const LIBRARY_TYPE_LABELS = {
   video: "Video",
   imaging: "DICOM / imaging",
   chat_observation: "Chat observation",
+  "kind:lab": "Lab reports",
+  "kind:mri": "MRI reports",
+  "kind:ultrasound": "Ultrasound reports",
+  "kind:ct": "CT reports",
+  "kind:pathology": "Pathology reports",
+  "kind:cardiology": "Cardiology reports",
+  "kind:other_report": "Clinical reports",
 };
 
 function libraryTypeLabel(type) {
   return LIBRARY_TYPE_LABELS[type] || type || "Unknown";
+}
+
+function clinicalReportKindBadge(doc) {
+  const info = doc?.source_info || {};
+  const meta = doc?.metadata || {};
+  const kind = info.report_kind || meta.clinical_report_kind;
+  if (!kind || kind === "unknown") return "";
+  const label =
+    info.report_kind_label ||
+    meta.clinical_report_kind_label ||
+    libraryTypeLabel(`kind:${kind}`) ||
+    kind;
+  return `<span class="badge badge-report-kind" title="Clinical report type">${escapeHtml(label)}</span>`;
+}
+
+function notifyLabImportResult(labImport, { fallbackToast } = {}) {
+  if (!labImport) {
+    if (fallbackToast) toast(fallbackToast);
+    return;
+  }
+  const n = labImport.added_count || 0;
+  const title = labImport.document_title || "lab report";
+  if (n > 0) {
+    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}`);
+    if (typeof applyProfileResponse === "function") {
+      try {
+        applyProfileResponse(labImport);
+      } catch {
+        /* ignore */
+      }
+    }
+    switchTab("analyze");
+    if (typeof setHomeSection === "function") {
+      setHomeSection("diagnostics", { scroll: true });
+    }
+    return;
+  }
+  if (labImport.offer_manual_import) {
+    toast(
+      "Tagged as lab report — open the document and use Import to Labs to review readings",
+      "error"
+    );
+    return;
+  }
+  if (fallbackToast) toast(fallbackToast);
 }
 
 function findDocumentById(id) {
@@ -2932,7 +2985,9 @@ function renderLibraryTypeFilter() {
   if (!select) return;
   const current = state.libraryFilter || "";
   const counts = state.libraryCounts || {};
-  const allCount = Object.values(counts).reduce((a, b) => a + b, 0);
+  const allCount = Object.entries(counts)
+    .filter(([type]) => !String(type).startsWith("kind:"))
+    .reduce((a, [, b]) => a + b, 0);
   const typeKeys = [
     ...Object.keys(LIBRARY_TYPE_LABELS).filter((type) => counts[type]),
     ...Object.keys(counts).filter((type) => !LIBRARY_TYPE_LABELS[type]),
@@ -3465,6 +3520,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
     : meta.extraction_method === "ocr"
       ? `<span class="badge" title="Text recovered with OCR">OCR</span>`
       : "";
+  const reportBadge = clinicalReportKindBadge(doc);
   const reextractBtn =
     editable && String(doc.source_type || "").toLowerCase() === "pdf"
       ? `<button type="button" class="btn ghost btn-reextract" data-id="${doc.id}" title="Re-run text extraction / OCR">Re-extract</button>`
@@ -3480,6 +3536,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
         </label>
         ${sourceBadge}
         <strong>${escapeHtml(displayName)}</strong>
+        ${reportBadge}
         ${ocrBadge}
       </div>
       ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
@@ -5244,6 +5301,7 @@ async function viewDocument(id) {
     metaEl.innerHTML = `
       ${sourceBadge}
       <span class="badge">${escapeHtml(doc.source_type || "document")}</span>
+      ${clinicalReportKindBadge(doc)}
       <span class="muted small">${escapeHtml(info.type_display || "")}</span>
       <span class="muted small">${escapeHtml(formatTimestamp(doc.created_at))}</span>
       ${meta.modality ? `<span class="badge">${escapeHtml(meta.modality)}</span>` : ""}
@@ -5395,8 +5453,17 @@ async function reextractDocument(id) {
       const needs = data.document?.metadata?.needs_ocr;
       if (needs) {
         toast("Still little text — OCR tools may be unavailable, or the scan is unreadable", "error");
+      } else if (data.lab_import) {
+        notifyLabImportResult(data.lab_import, {
+          fallbackToast: `Re-extracted (${method})`,
+        });
       } else {
-        toast(`Re-extracted (${method})`);
+        const kindLabel = data.document?.metadata?.clinical_report_kind_label;
+        toast(
+          kindLabel
+            ? `Re-extracted (${method}) · tagged as ${kindLabel}`
+            : `Re-extracted (${method})`
+        );
       }
       await loadDocuments();
       await loadDocumentIndex();
@@ -5744,6 +5811,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
         let ok = 0;
         let failed = 0;
         let lastDoc = null;
+        let lastLabImport = null;
         for (let i = 0; i < files.length; i++) {
           if (isCancelled()) return;
           const file = files[i];
@@ -5759,6 +5827,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
             });
             if (isCancelled()) return;
             lastDoc = data.document;
+            if (data.lab_import) lastLabImport = data.lab_import;
             ok += 1;
           } catch (err) {
             failed += 1;
@@ -5776,13 +5845,33 @@ safeOn("#btn-ingest-pdf", "click", async () => {
         }
         if (lastDoc) showUploadResult(lastDoc);
         if (ok && !failed) {
-          toast(ok === 1 ? `PDF uploaded · ${files[0].name}` : `${ok} PDFs uploaded`);
+          if (lastLabImport) {
+            notifyLabImportResult(lastLabImport, {
+              fallbackToast:
+                ok === 1 ? `PDF uploaded · ${files[0].name}` : `${ok} PDFs uploaded`,
+            });
+          } else {
+            const kindLabel = lastDoc?.metadata?.clinical_report_kind_label;
+            toast(
+              ok === 1
+                ? kindLabel
+                  ? `PDF uploaded · tagged as ${kindLabel}`
+                  : `PDF uploaded · ${files[0].name}`
+                : `${ok} PDFs uploaded`
+            );
+          }
         } else if (ok && failed) {
           toast(`${ok} uploaded, ${failed} failed`, "error");
         } else {
           toast("PDF upload failed", "error");
         }
-        if (ok) await openLibraryAfterIngest();
+        if (ok) {
+          if (!(lastLabImport && lastLabImport.added_count > 0)) {
+            await openLibraryAfterIngest();
+          } else {
+            await loadDocumentIndex();
+          }
+        }
       },
     });
   } catch (e) {
@@ -7278,6 +7367,7 @@ function clearDiagImportReview() {
   wrap?.classList.add("hidden");
   const file = document.getElementById("diag-import-file");
   if (file) file.value = "";
+  state.diagImportSourceDocumentId = null;
   setDiagImportStatus("");
 }
 
@@ -7289,6 +7379,7 @@ function renderDiagImportReview(data) {
   switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-import-review" });
   const proposed = data.proposed || [];
   const meta = data.extraction_meta || {};
+  state.diagImportSourceDocumentId = meta.document_id || null;
   const warnings = data.warnings || [];
   const method = meta.extraction_method || meta.source || "unknown";
   const chars = meta.extracted_chars != null ? `${meta.extracted_chars} chars` : "";
@@ -7360,7 +7451,10 @@ async function confirmDiagImportAndShowCharts() {
   try {
     const data = await api(`/api/patients/${state.activePatientId}/diagnostics/import/confirm`, {
       method: "POST",
-      body: JSON.stringify({ diagnostics }),
+      body: JSON.stringify({
+        diagnostics,
+        source_document_id: state.diagImportSourceDocumentId || null,
+      }),
     });
     applyProfileResponse(data);
     clearDiagImportReview();

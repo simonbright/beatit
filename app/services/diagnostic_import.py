@@ -15,7 +15,10 @@ from app.services.case_manager import (
     DIAGNOSTIC_PRESETS,
     _infer_diagnostic_category,
     _normalize_med_date,
+    add_patient_diagnostic,
     get_patient_profile,
+    group_diagnostics_for_charts,
+    group_journal_for_charts,
 )
 from app.services.llm import LLMClient
 
@@ -368,3 +371,94 @@ async def propose_diagnostics_from_document(
             raise ValueError(msg)
 
     return await _propose_from_text(patient_id, text, meta=meta, llm=llm)
+
+
+def _existing_name_date_keys(patient_id: str) -> set[tuple[str, str]]:
+    profile = get_patient_profile(patient_id)
+    return {
+        (
+            str(d.get("name") or "").strip().lower(),
+            str(d.get("recorded_at") or "")[:10],
+        )
+        for d in (profile.get("diagnostics") or [])
+    }
+
+
+async def auto_confirm_lab_readings_from_document(
+    patient_id: str,
+    doc: dict[str, Any],
+    *,
+    extracted_text: str | None = None,
+    llm: LLMClient | None = None,
+) -> dict[str, Any]:
+    """Propose lab rows and auto-add complete, non-duplicate readings.
+
+    Only rows with name + value + recorded_at are confirmed. Exact name+date
+    duplicates are skipped. Manual Import to Labs remains the fallback.
+    """
+    proposal = await propose_diagnostics_from_document(
+        patient_id,
+        doc,
+        extracted_text=extracted_text,
+        llm=llm,
+    )
+    proposed = proposal.get("proposed") or []
+    existing = _existing_name_date_keys(patient_id)
+    doc_id = str(doc.get("id") or "").strip() or None
+    added: list[dict[str, Any]] = []
+    skipped_duplicate = 0
+    skipped_incomplete = 0
+    errors: list[str] = []
+
+    for raw in proposed:
+        name = str(raw.get("name") or "").strip()
+        recorded_at = str(raw.get("recorded_at") or "").strip()[:10]
+        if not name or raw.get("value") is None or not recorded_at:
+            skipped_incomplete += 1
+            continue
+        key = (name.lower(), recorded_at)
+        if key in existing:
+            skipped_duplicate += 1
+            continue
+        try:
+            entry = add_patient_diagnostic(
+                patient_id,
+                name=name,
+                value=float(raw["value"]),
+                recorded_at=recorded_at,
+                unit=raw.get("unit"),
+                notes=raw.get("notes"),
+                category=raw.get("category"),
+                source_document_id=doc_id,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(str(exc))
+            continue
+        if entry:
+            added.append(entry)
+            existing.add(key)
+
+    profile = get_patient_profile(patient_id)
+    warnings = list(proposal.get("warnings") or [])
+    if skipped_duplicate:
+        warnings.append(f"Skipped {skipped_duplicate} duplicate name+date reading(s)")
+    if skipped_incomplete:
+        warnings.append(
+            f"Skipped {skipped_incomplete} incomplete reading(s) (need name, value, date)"
+        )
+
+    return {
+        "added": added,
+        "added_count": len(added),
+        "proposed_count": len(proposed),
+        "skipped_duplicate": skipped_duplicate,
+        "skipped_incomplete": skipped_incomplete,
+        "errors": errors,
+        "warnings": warnings,
+        "document_id": doc_id,
+        "document_title": doc.get("title"),
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+        "offer_manual_import": len(added) == 0 and len(proposed) > 0,
+    }

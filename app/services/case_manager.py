@@ -344,6 +344,7 @@ def add_patient_diagnostic(
     unit: str | None = None,
     notes: str | None = None,
     category: str | None = None,
+    source_document_id: str | None = None,
 ) -> dict[str, Any] | None:
     from uuid import uuid4
 
@@ -384,6 +385,9 @@ def add_patient_diagnostic(
         "notes": (notes or "").strip() or None,
         "created_at": _now_iso(),
     }
+    doc_id = (source_document_id or "").strip() or None
+    if doc_id:
+        entry["source_document_id"] = doc_id
     profile.setdefault("diagnostics", []).append(entry)
     saved = save_patient_profile(patient_id, profile)
     return next((d for d in saved["diagnostics"] if d["id"] == entry["id"]), entry)

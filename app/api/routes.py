@@ -16,6 +16,7 @@ from app.services.medication_import import (
     propose_medications_from_upload,
 )
 from app.services.diagnostic_import import (
+    auto_confirm_lab_readings_from_document,
     clamp_proposed_diagnostic,
     propose_diagnostics_from_document,
     propose_diagnostics_from_upload,
@@ -329,6 +330,37 @@ async def _audit(
         resource_id=resource_id,
         metadata=metadata,
     )
+
+
+async def _maybe_auto_import_lab_charts(
+    store: DocumentStore,
+    doc: dict[str, Any],
+) -> dict[str, Any] | None:
+    """When a PDF is classified as a lab report, auto-confirm chart readings."""
+    meta = doc.get("metadata") or {}
+    if str(meta.get("clinical_report_kind") or "").lower() != "lab":
+        return None
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
+    if not patient_id:
+        return None
+    text = await store.read_extracted_text(doc)
+    try:
+        return await auto_confirm_lab_readings_from_document(
+            patient_id,
+            doc,
+            extracted_text=text,
+        )
+    except Exception:
+        return {
+            "added_count": 0,
+            "proposed_count": 0,
+            "offer_manual_import": True,
+            "document_id": doc.get("id"),
+            "document_title": doc.get("title"),
+            "warnings": ["Automatic lab import failed — use Import to Labs"],
+            "errors": [],
+        }
 
 
 @router.post("/login")
@@ -947,12 +979,20 @@ async def reextract_document(doc_id: str, request: Request):
             "title": updated.get("title"),
             "extraction_method": (updated.get("metadata") or {}).get("extraction_method"),
             "needs_ocr": (updated.get("metadata") or {}).get("needs_ocr"),
+            "clinical_report_kind": (updated.get("metadata") or {}).get("clinical_report_kind"),
         },
     )
+    lab_import = await _maybe_auto_import_lab_charts(store, updated)
     catalog = await _source_catalog(db)
     updated["source_info"] = catalog.describe_document(updated)
     text = await store.read_extracted_text(updated)
-    return {"document": updated, "extracted_preview": (text or "")[:500]}
+    payload: dict[str, Any] = {
+        "document": updated,
+        "extracted_preview": (text or "")[:500],
+    }
+    if lab_import is not None:
+        payload["lab_import"] = lab_import
+    return payload
 
 
 @router.post("/ingest/text")
@@ -1093,9 +1133,16 @@ async def ingest_pdf_route(
             "source_type": doc.get("source_type"),
             "source_uri": doc.get("source_uri"),
             "original_filename": filename,
+            "clinical_report_kind": (doc.get("metadata") or {}).get("clinical_report_kind"),
         },
     )
-    return {"document": doc}
+    lab_import = await _maybe_auto_import_lab_charts(store, doc)
+    catalog = await _source_catalog(db)
+    doc["source_info"] = catalog.describe_document(doc)
+    payload: dict[str, Any] = {"document": doc}
+    if lab_import is not None:
+        payload["lab_import"] = lab_import
+    return payload
 
 
 @router.post("/ingest/video")
@@ -2363,10 +2410,12 @@ class PatientDiagnosticConfirmItem(BaseModel):
     unit: str | None = Field(default=None, max_length=40)
     notes: str | None = Field(default=None, max_length=500)
     category: str | None = Field(default=None, max_length=20)
+    source_document_id: str | None = Field(default=None, max_length=120)
 
 
 class PatientDiagnosticConfirmRequest(BaseModel):
     diagnostics: list[PatientDiagnosticConfirmItem] = Field(default_factory=list, max_length=120)
+    source_document_id: str | None = Field(default=None, max_length=120)
 
 
 class PatientDiagnosticImportFromDocRequest(BaseModel):
@@ -2442,6 +2491,7 @@ async def api_confirm_patient_diagnostics_import(
         raise HTTPException(status_code=400, detail="Select at least one reading to add")
     added: list[dict[str, Any]] = []
     errors: list[str] = []
+    default_doc_id = (body.source_document_id or "").strip() or None
     for raw in body.diagnostics:
         clamped = clamp_proposed_diagnostic(raw.model_dump())
         if clamped is None:
@@ -2450,6 +2500,7 @@ async def api_confirm_patient_diagnostics_import(
         if not clamped.get("recorded_at"):
             errors.append(f"Missing date for {clamped.get('name') or 'reading'}")
             continue
+        row_doc_id = (raw.source_document_id or "").strip() or default_doc_id
         try:
             entry = add_patient_diagnostic(
                 patient_id,
@@ -2459,6 +2510,7 @@ async def api_confirm_patient_diagnostics_import(
                 unit=clamped.get("unit"),
                 notes=clamped.get("notes"),
                 category=clamped.get("category"),
+                source_document_id=row_doc_id,
             )
         except ValueError as exc:
             errors.append(str(exc))

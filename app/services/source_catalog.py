@@ -63,7 +63,7 @@ DEFAULT_SOURCE_TYPES: dict[str, dict[str, str]] = {
         "display": "Diagnostic test",
         "shorthand": "Diag",
         "css_class": "source-diagnostic",
-        "description": "Imaging, pathology, and other diagnostic files",
+        "description": "Imaging, labs, pathology, and other diagnostic reports",
     },
     "web": {
         "display": "Web source",
@@ -143,8 +143,19 @@ def merge_source_types(custom: dict[str, dict[str, str]] | None = None) -> dict[
     return merged
 
 
-def document_source_type_key(source_type: str | None) -> str:
-    return DOCUMENT_SOURCE_TYPE_MAP.get(str(source_type or "").lower(), "document")
+def document_source_type_key(
+    source_type: str | None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    st = str(source_type or "").lower()
+    if st in ("pdf", "text") and metadata:
+        from app.services.clinical_report_classify import is_diagnostic_citation_kind
+
+        kind = metadata.get("clinical_report_kind")
+        if is_diagnostic_citation_kind(kind):
+            return "diagnostic"
+    return DOCUMENT_SOURCE_TYPE_MAP.get(st, "document")
 
 
 def parse_document_title(label: str) -> str | None:
@@ -182,10 +193,20 @@ class SourceCatalog:
         return self.type_defs.get(type_key, self.type_defs["document"])
 
     def describe_document(self, doc: dict[str, Any]) -> dict[str, Any]:
-        type_key = document_source_type_key(doc.get("source_type"))
+        meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        type_key = document_source_type_key(doc.get("source_type"), metadata=meta)
         type_def = self.type_info(type_key)
         display_name = (doc.get("citation_display_name") or doc.get("title") or "").strip()
-        return {
+        from app.services.clinical_report_classify import (
+            clinical_report_kind_label,
+            normalize_clinical_report_kind,
+        )
+
+        kind_raw = meta.get("clinical_report_kind")
+        report_kind = normalize_clinical_report_kind(kind_raw) if kind_raw else None
+        if report_kind == "unknown":
+            report_kind = None
+        result: dict[str, Any] = {
             "type": type_key,
             "shorthand": type_def["shorthand"],
             "css_class": type_def["css_class"],
@@ -193,6 +214,10 @@ class SourceCatalog:
             "display_name": display_name,
             "document_id": doc.get("id"),
         }
+        if report_kind:
+            result["report_kind"] = report_kind
+            result["report_kind_label"] = clinical_report_kind_label(report_kind)
+        return result
 
     def describe(self, raw_label: str) -> dict[str, Any]:
         label = (raw_label or "").strip()
@@ -255,7 +280,10 @@ class SourceCatalog:
                     if title.casefold() in names:
                         doc = stored
                         break
-            type_key = document_source_type_key(doc.get("source_type") if doc else None)
+            type_key = document_source_type_key(
+                doc.get("source_type") if doc else None,
+                metadata=(doc.get("metadata") if doc else None),
+            )
             display_name = (
                 (doc.get("citation_display_name") if doc else None)
                 or title

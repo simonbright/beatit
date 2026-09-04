@@ -296,12 +296,14 @@ async def ingest_pdf_bytes(
     source_uri: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from app.services.clinical_report_classify import classify_and_update_document
+
     extracted, extraction_meta = extract_pdf_text(content)
     meta = dict(metadata or {})
     meta["original_filename"] = filename
     meta.update(extraction_meta)
 
-    return await store.create_document(
+    doc = await store.create_document(
         title=title,
         source_type="pdf",
         source_uri=source_uri,
@@ -310,6 +312,14 @@ async def ingest_pdf_bytes(
         raw_content=content,
         metadata=meta,
     )
+    try:
+        doc = await classify_and_update_document(
+            store, doc, extracted_text=extracted
+        )
+    except Exception:
+        # Classification is best-effort; never fail ingest.
+        pass
+    return doc
 
 
 async def ingest_pdf_file(
@@ -331,6 +341,8 @@ async def ingest_pdf_file(
 
 async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> dict[str, Any]:
     """Re-run text/OCR extraction for an existing PDF document."""
+    from app.services.clinical_report_classify import classify_and_update_document
+
     file_path = doc.get("file_path")
     if not file_path:
         raise ValueError("Document has no stored PDF file")
@@ -347,4 +359,11 @@ async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> d
         metadata=meta,
         extracted_path=str(saved),
     )
-    return updated or doc
+    updated = updated or {**doc, "metadata": meta, "extracted_path": str(saved)}
+    try:
+        updated = await classify_and_update_document(
+            store, updated, extracted_text=extracted
+        )
+    except Exception:
+        pass
+    return updated

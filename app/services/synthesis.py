@@ -240,6 +240,14 @@ def _format_corpus(corpus: list[dict[str, Any]], max_chars: int = 200_000) -> tu
             f"{case_line}"
             f"Source: {item.get('source_uri') or 'local'}\n"
         )
+        meta = item.get("metadata") or {}
+        report_kind = meta.get("clinical_report_kind") if isinstance(meta, dict) else None
+        if report_kind and str(report_kind).lower() not in ("", "unknown"):
+            label = meta.get("clinical_report_kind_label") or report_kind
+            header += (
+                f"Clinical report type: {label} — treat as diagnostic evidence "
+                f"(lab/imaging/pathology report), not a generic note.\n"
+            )
         body = item["text"]
         chunk = f"{header}\n{body}\n"
         if used + len(chunk) > max_chars:

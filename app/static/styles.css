@@ -2523,6 +2523,15 @@ textarea { resize: vertical; min-height: 100px; }
   padding: 0.1rem 0.4rem;
 }
 
+.badge-report-kind {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--accent, #2563eb) 14%, transparent);
+  color: var(--text, #1a1a1a);
+  border: 1px solid color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
+}
+
 .assessment-scope-warning {
   margin-top: 0.75rem;
 }

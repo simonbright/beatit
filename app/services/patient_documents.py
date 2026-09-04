@@ -210,6 +210,11 @@ async def list_active_patient_document_index() -> dict[str, Any] | None:
     for doc in docs:
         key = str(doc.get("source_type") or "unknown")
         counts[key] = counts.get(key, 0) + 1
+        meta = doc.get("metadata") or {}
+        kind = str(meta.get("clinical_report_kind") or "").strip().lower()
+        if kind and kind != "unknown":
+            kind_key = f"kind:{kind}"
+            counts[kind_key] = counts.get(kind_key, 0) + 1
     return {
         "documents": [_to_index_row(d) for d in docs],
         "total": len(docs),
@@ -227,16 +232,41 @@ async def list_active_patient_documents_page(
     patient_id = ctx.get("patient_id")
     if not patient_id:
         return None
+    clinical_kind = None
+    page_source_type = source_type
+    if source_type and source_type.startswith("kind:"):
+        clinical_kind = source_type[5:].strip().lower() or None
+        page_source_type = None
     all_docs = await list_patient_documents(
         patient_id,
         active_case_id=ctx.get("case_id"),
-        source_type=source_type,
     )
-    counts = await patient_document_type_counts(patient_id)
-    page = all_docs[offset : offset + limit]
+    counts: dict[str, int] = {}
+    for doc in all_docs:
+        key = str(doc.get("source_type") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+        kind = str((doc.get("metadata") or {}).get("clinical_report_kind") or "").strip().lower()
+        if kind and kind != "unknown":
+            kind_key = f"kind:{kind}"
+            counts[kind_key] = counts.get(kind_key, 0) + 1
+    filtered = all_docs
+    if page_source_type:
+        filtered = [
+            d
+            for d in filtered
+            if str(d.get("source_type") or "").lower() == page_source_type.lower()
+        ]
+    if clinical_kind:
+        filtered = [
+            d
+            for d in filtered
+            if str((d.get("metadata") or {}).get("clinical_report_kind") or "").lower()
+            == clinical_kind
+        ]
+    page = filtered[offset : offset + limit]
     return {
         "documents": page,
-        "total": len(all_docs),
+        "total": len(filtered),
         "limit": limit,
         "offset": offset,
         "source_type": source_type,
