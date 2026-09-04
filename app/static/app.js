@@ -2664,6 +2664,47 @@ function substantiveSummaryLength(text) {
     .trim().length;
 }
 
+function stripExecutiveSummarySection(response) {
+  /** Remove the executive summary block from full assessment text (shown separately above). */
+  if (!response) return "";
+  const lines = String(response).split(/\r?\n/);
+  const result = [];
+  let skipping = false;
+  let sawExecHeader = false;
+  const normalize = (h) =>
+    String(h || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, "")
+      .trim();
+  const isExec = (h) => h.includes("executive summary") || h === "1 executive summary";
+  const plainSection =
+    /^(?:what we know|what we do not know|uncertainties|critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|treatment options|next steps|open items|questions for(?:\s+the)?\s+oncology|disclaimer|full assessment|latest assessment)\b/i;
+
+  for (const line of lines) {
+    const stripped = line.trim();
+    let header = null;
+    const md = stripped.match(/^(?:#{1,3}\s*|\d+\.\s+)(.+)$/);
+    if (md) header = normalize(md[1]);
+    else if (plainSection.test(stripped) && stripped.length < 80) header = normalize(stripped);
+
+    if (header != null) {
+      if (isExec(header)) {
+        skipping = true;
+        sawExecHeader = true;
+        continue;
+      }
+      skipping = false;
+    }
+    if (!skipping) result.push(line);
+  }
+
+  const out = result.join("\n").trim();
+  if (sawExecHeader && out.length < Math.max(200, Math.floor(String(response).length * 0.15))) {
+    return String(response).trim();
+  }
+  return out;
+}
+
 function effectiveExecutiveSummaryDisplay(analysis) {
   const summary = analysis.executive_summary_display || analysis.executive_summary || "";
   const response = analysis.response_display || analysis.response || "";
