@@ -5382,9 +5382,13 @@ function renderLatestAssessment(analysis) {
   }
 
   if (fullCard && fullBody) {
-    if (responseDisplay && !summaryPick.usedFallback) {
+    const fullText =
+      responseDisplay && !summaryPick.usedFallback
+        ? stripExecutiveSummarySection(responseDisplay)
+        : "";
+    if (fullText) {
       fullCard.classList.remove("hidden");
-      fullBody.innerHTML = formatNumberedReferences(responseDisplay, state.referenceRegistry, refPrefix);
+      fullBody.innerHTML = formatNumberedReferences(fullText, state.referenceRegistry, refPrefix);
     } else {
       fullCard.classList.add("hidden");
       fullBody.innerHTML = "";
