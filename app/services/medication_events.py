@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 
@@ -39,6 +39,109 @@ def _compact_date(iso: str | None) -> str:
     return f"{dt.strftime('%b')} {dt.day}"
 
 
+def _name_key(name: Any) -> str:
+    return " ".join(str(name or "").lower().split())
+
+
+def _parse_day(iso: str | None) -> date | None:
+    d = _date_only(iso)
+    if not d:
+        return None
+    try:
+        return date.fromisoformat(d)
+    except ValueError:
+        return None
+
+
+def _coalesce_stop_start_switches(
+    events: list[dict[str, Any]],
+    medications: list[dict[str, Any]] | None,
+    *,
+    max_gap_days: int = 3,
+) -> list[dict[str, Any]]:
+    """Merge stop + nearby start of the same drug into one dose-change marker."""
+    meds_by_id = {
+        str(m.get("id") or ""): m for m in (medications or []) if isinstance(m, dict) and m.get("id")
+    }
+    stops = [e for e in events if e.get("kind") == "stop"]
+    starts = [e for e in events if e.get("kind") == "start"]
+    used_stop: set[int] = set()
+    used_start: set[int] = set()
+    merged: list[dict[str, Any]] = []
+
+    for si, stop in enumerate(stops):
+        stop_day = _parse_day(stop.get("date"))
+        if stop_day is None:
+            continue
+        stop_name = _name_key(stop.get("medication_name"))
+        best: tuple[int, dict[str, Any], int] | None = None  # gap, start, start_index
+        for ti, start in enumerate(starts):
+            if ti in used_start:
+                continue
+            if _name_key(start.get("medication_name")) != stop_name:
+                continue
+            start_day = _parse_day(start.get("date"))
+            if start_day is None:
+                continue
+            gap = (start_day - stop_day).days
+            # Allow start 0–max_gap days after stop, or same-day / 1 day early
+            if gap < -1 or gap > max_gap_days:
+                continue
+            abs_gap = abs(gap)
+            if best is None or abs_gap < best[0]:
+                best = (abs_gap, start, ti)
+        if best is None:
+            continue
+        _, start, ti = best
+        used_stop.add(si)
+        used_start.add(ti)
+
+        stop_med = meds_by_id.get(str(stop.get("medication_id") or ""))
+        start_med = meds_by_id.get(str(start.get("medication_id") or ""))
+        old_bits = _dose_bits(
+            (stop_med or {}).get("dosage"),
+            (stop_med or {}).get("frequency"),
+        ) or "?"
+        new_bits = _dose_bits(
+            (start_med or {}).get("dosage"),
+            (start_med or {}).get("frequency"),
+        ) or "?"
+        name = str(stop.get("medication_name") or start.get("medication_name") or "Medication")
+        # Prefer the new-regimen date for the chart marker
+        when = str(start.get("date") or stop.get("date") or "")
+        body = f"{name}: {old_bits} → {new_bits}"
+        merged.append(
+            {
+                "date": when,
+                "label": _short_label(f"{_compact_date(when)} · {body}"),
+                "body": body,
+                "kind": "dose_change",
+                "medication_id": str(start.get("medication_id") or stop.get("medication_id") or ""),
+                "medication_name": name,
+                "coalesced_from": "stop_start",
+            }
+        )
+
+    out: list[dict[str, Any]] = []
+    stop_i = 0
+    start_i = 0
+    for ev in events:
+        kind = ev.get("kind")
+        if kind == "stop":
+            if stop_i in used_stop:
+                stop_i += 1
+                continue
+            stop_i += 1
+        elif kind == "start":
+            if start_i in used_start:
+                start_i += 1
+                continue
+            start_i += 1
+        out.append(ev)
+    out.extend(merged)
+    return out
+
+
 def medication_chart_events(
     medications: list[dict[str, Any]] | None,
     *,
@@ -48,7 +151,9 @@ def medication_chart_events(
 
     Each event: ``{date, label, kind, medication_id, medication_name}``
     where ``kind`` is ``start`` | ``dose_change`` | ``stop``.
-    Labels include a compact date so chart markers stay unambiguous.
+
+    A stop followed soon by a start of the same drug is coalesced into one
+    ``dose_change`` (e.g. Rosuvastatin 20mg → 40mg), not two chart markers.
     """
     events: list[dict[str, Any]] = []
     for med in medications or []:
@@ -69,6 +174,7 @@ def medication_chart_events(
                 {
                     "date": started,
                     "label": _short_label(f"{_compact_date(started)} · {body}"),
+                    "body": body,
                     "kind": "start",
                     "medication_id": med_id,
                     "medication_name": name,
@@ -94,6 +200,7 @@ def medication_chart_events(
                 {
                     "date": effective,
                     "label": _short_label(f"{_compact_date(effective)} · {body}"),
+                    "body": body,
                     "kind": "dose_change",
                     "medication_id": med_id,
                     "medication_name": name,
@@ -102,25 +209,28 @@ def medication_chart_events(
 
         stopped = _date_only(med.get("stopped_at"))
         if stopped and (med.get("status") or "") == "stopped":
+            body = f"Stopped {name}"
             events.append(
                 {
                     "date": stopped,
-                    "label": _short_label(f"{_compact_date(stopped)} · Stopped {name}"),
+                    "label": _short_label(f"{_compact_date(stopped)} · {body}"),
+                    "body": body,
                     "kind": "stop",
                     "medication_id": med_id,
                     "medication_name": name,
                 }
             )
 
-    _kind_order = {"stop": 0, "dose_change": 1, "start": 2}
+    events = _coalesce_stop_start_switches(events, medications)
+
+    kind_order = {"stop": 0, "dose_change": 1, "start": 2}
     events.sort(
         key=lambda e: (
             e.get("date") or "",
-            _kind_order.get(str(e.get("kind") or ""), 9),
+            kind_order.get(str(e.get("kind") or ""), 9),
             e.get("label") or "",
         )
     )
-    # De-dupe identical date+label pairs
     seen: set[tuple[str, str]] = set()
     unique: list[dict[str, Any]] = []
     for ev in events:
@@ -143,8 +253,6 @@ def filter_events_for_range(
     if not events or not start or not end:
         return []
     try:
-        from datetime import date, timedelta
-
         d0 = date.fromisoformat(start[:10]) - timedelta(days=pad_days)
         d1 = date.fromisoformat(end[:10]) + timedelta(days=pad_days)
     except ValueError:
