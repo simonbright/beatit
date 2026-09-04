@@ -6,6 +6,8 @@ const state = {
   libraryTotal: 0,
   libraryCounts: {},
   libraryView: "documents",
+  homeSection: "assessment",
+  settingsSection: "patients",
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
@@ -749,8 +751,7 @@ function finishCustomTaskRun(analysis, queryText = "") {
 }
 
 function scrollToAssessmentResults() {
-  const target = $("#executive-summary-card") || $("#analyze-results-section");
-  scrollToElement(target);
+  setHomeSection("assessment", { scroll: true });
 }
 
 function scrollToOpenItems() {
@@ -758,14 +759,24 @@ function scrollToOpenItems() {
     switchTab("analyze");
   }
   requestAnimationFrame(() => {
-    scrollToElement($("#open-items-card"));
+    setHomeSection("gaps", { scroll: true });
   });
 }
 
 function getStickyHeaderOffset(extra = 16) {
   const header = document.querySelector(".header");
-  if (!header) return 96 + extra;
-  return header.getBoundingClientRect().height + extra;
+  const subnav = document.querySelector(
+    "#panel-analyze.active #home-subnav, #panel-settings.active #settings-subnav"
+  );
+  let height = header ? header.getBoundingClientRect().height : 96;
+  if (subnav) height += subnav.getBoundingClientRect().height;
+  return height + extra;
+}
+
+function syncStickyHeaderOffset() {
+  const header = document.querySelector(".header");
+  const h = header ? Math.ceil(header.getBoundingClientRect().height) : 88;
+  document.documentElement.style.setProperty("--sticky-header-offset", `${h}px`);
 }
 
 function scrollToElement(element, { behavior = "smooth", offset = null } = {}) {
@@ -798,6 +809,7 @@ function updateHomeWorkflow() {
 
 function renderHomeState(hasAssessment) {
   $("#analyze-results-section")?.classList.toggle("hidden", !hasAssessment);
+  $("#home-assessment-empty")?.classList.toggle("hidden", Boolean(hasAssessment));
   $("#analyze-actions-card")?.classList.toggle("analyze-actions-secondary", hasAssessment);
   if (hasAssessment && !state.analysisRunning) {
     setAnalyzeActionsExpanded(false);
@@ -806,6 +818,11 @@ function renderHomeState(hasAssessment) {
   }
   renderAnalysisRunChrome();
   updateHomeToolbar();
+  if (!hasAssessment && state.homeSection === "assessment") {
+    // keep assessment pane visible with empty state
+  } else if (hasAssessment && state.homeSection === "run" && !state.analysisRunning) {
+    // leave user on Run if they navigated there
+  }
 }
 
 function renderAnalysisScopeSummary() {
@@ -997,6 +1014,7 @@ function switchTab(name, options = {}) {
   if (name === "analyze") {
     loadLatestAssessment();
     loadChatObservations().catch(() => {});
+    setHomeSection(state.homeSection || "assessment");
   }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
@@ -1011,8 +1029,15 @@ function switchTab(name, options = {}) {
         .catch(() => {});
     }
   }
-  if (name === "settings") loadSettings();
+  if (name === "settings") {
+    loadSettings();
+    setSettingsSection(options.settingsSection || state.settingsSection || "patients", {
+      focusSelector: options.settingsFocus || null,
+      scroll: Boolean(options.settingsFocus),
+    });
+  }
   updateHomeToolbar();
+  syncStickyHeaderOffset();
 }
 
 function setLibraryView(view) {
@@ -1027,6 +1052,50 @@ function setLibraryView(view) {
   $("#library-view-imaging")?.classList.toggle("hidden", next !== "imaging");
   if (next === "imaging") {
     loadImagingPanel().catch((e) => toast(e.message, "error"));
+  }
+}
+
+const HOME_SECTIONS = new Set(["assessment", "journal", "medications", "diagnostics", "gaps", "run"]);
+const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", "llm", "audit"]);
+
+function setHomeSection(section, { scroll = false } = {}) {
+  const next = HOME_SECTIONS.has(section) ? section : "assessment";
+  state.homeSection = next;
+  document.querySelectorAll("#home-subnav [data-home-section]").forEach((btn) => {
+    const active = btn.dataset.homeSection === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-home-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.homePane !== next);
+  });
+  syncStickyHeaderOffset();
+  if (scroll) {
+    requestAnimationFrame(() => {
+      const pane = $(`[data-home-pane="${next}"]`);
+      scrollToElement(pane || $("#home-subnav"));
+    });
+  }
+}
+
+function setSettingsSection(section, { scroll = false, focusSelector = null } = {}) {
+  const next = SETTINGS_SECTIONS.has(section) ? section : "patients";
+  state.settingsSection = next;
+  document.querySelectorAll("#settings-subnav [data-settings-section]").forEach((btn) => {
+    const active = btn.dataset.settingsSection === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.settingsPane !== next);
+  });
+  syncStickyHeaderOffset();
+  if (scroll || focusSelector) {
+    requestAnimationFrame(() => {
+      const target = focusSelector ? $(focusSelector) : $(`[data-settings-pane="${next}"]`);
+      scrollToElement(target || $("#settings-subnav"));
+      if (focusSelector) $(focusSelector)?.focus?.();
+    });
   }
 }
 
@@ -2464,6 +2533,7 @@ function applyLastAssessmentScope() {
 
 function scrollToAssessmentScope() {
   switchTab("analyze");
+  setHomeSection("run", { scroll: false });
   setAnalyzeActionsExpanded(true);
   const card = $("#assessment-scope-card");
   requestAnimationFrame(() => scrollToElement(card));
@@ -4618,6 +4688,7 @@ function renderOpenItemPanel(item) {
   if (!panel || !item) return;
 
   panel.classList.remove("hidden");
+  setHomeSection("gaps");
   $("#open-item-scope-hint")?.classList.toggle("hidden", !state.latestAnalysis);
   if (title) title.textContent = truncate(item.item, 100);
   if (meta) {
@@ -5382,6 +5453,29 @@ function bootstrapUi() {
   updateNativeShareButton();
   initReferenceNavigation();
   updateHomeToolbar();
+  initSectionSubnav();
+  syncStickyHeaderOffset();
+  window.addEventListener("resize", syncStickyHeaderOffset);
+}
+
+function initSectionSubnav() {
+  document.getElementById("home-subnav")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-home-section]");
+    if (!btn) return;
+    setHomeSection(btn.dataset.homeSection, { scroll: true });
+  });
+  document.getElementById("panel-analyze")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("#home-assessment-empty [data-home-section]");
+    if (!btn) return;
+    setHomeSection(btn.dataset.homeSection, { scroll: true });
+  });
+  document.getElementById("settings-subnav")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-settings-section]");
+    if (!btn) return;
+    setSettingsSection(btn.dataset.settingsSection, { scroll: true });
+  });
+  setHomeSection(state.homeSection || "assessment");
+  setSettingsSection(state.settingsSection || "patients");
 }
 
 async function loadInitialData() {
@@ -6591,17 +6685,76 @@ function fillSelect(select, items, selectedId) {
   }
 }
 
-async function activatePatientCase(patientId, caseId) {
-  const res = await fetch("/api/cases/activate", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ patient_id: patientId, case_id: caseId }),
-  });
-  if (!res.ok) {
-    alert("Could not switch case");
-    return;
+async function activatePatientCase(patientId, caseId, { label } = {}) {
+  showSwitchProgress(label || "Switching patient / case…");
+  try {
+    const res = await fetch("/api/cases/activate", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patient_id: patientId, case_id: caseId }),
+    });
+    if (!res.ok) {
+      hideSwitchProgress();
+      clearSwitchBusyState();
+      alert("Could not switch case");
+      return;
+    }
+    location.reload();
+  } catch (err) {
+    hideSwitchProgress();
+    clearSwitchBusyState();
+    alert(err.message || "Could not switch case");
   }
-  location.reload();
+}
+
+function showSwitchProgress(message) {
+  const overlay = document.getElementById("switch-progress-overlay");
+  const title = document.getElementById("switch-progress-title");
+  if (title) title.textContent = message || "Switching…";
+  overlay?.classList.remove("hidden");
+  document.body.style.cursor = "wait";
+}
+
+function hideSwitchProgress() {
+  document.getElementById("switch-progress-overlay")?.classList.add("hidden");
+  document.body.style.cursor = "";
+}
+
+function setSwitchBusyState(btn, message) {
+  const list = document.getElementById("switch-case-list");
+  const status = document.getElementById("switch-case-status");
+  const closeBtn = document.getElementById("btn-cancel-switch-case");
+  list?.querySelectorAll(".switch-case-btn").forEach((el) => {
+    el.disabled = true;
+  });
+  if (btn) {
+    btn.classList.add("switching");
+    if (!btn.querySelector(".switch-case-btn-spinner")) {
+      const spin = document.createElement("span");
+      spin.className = "switch-case-btn-spinner";
+      spin.setAttribute("aria-hidden", "true");
+      btn.appendChild(spin);
+    }
+  }
+  if (status) {
+    status.innerHTML = `<span class="switch-case-btn-spinner" aria-hidden="true"></span><span>${escapeHtml(message || "Switching…")}</span>`;
+    status.classList.remove("hidden");
+  }
+  if (closeBtn) closeBtn.disabled = true;
+}
+
+function clearSwitchBusyState() {
+  const list = document.getElementById("switch-case-list");
+  const status = document.getElementById("switch-case-status");
+  const closeBtn = document.getElementById("btn-cancel-switch-case");
+  list?.querySelectorAll(".switch-case-btn").forEach((el) => {
+    el.disabled = false;
+    el.classList.remove("switching");
+    el.querySelector(".switch-case-btn-spinner")?.remove();
+  });
+  status?.classList.add("hidden");
+  if (status) status.innerHTML = "";
+  if (closeBtn) closeBtn.disabled = false;
 }
 
 async function loadCaseContext() {
@@ -7742,11 +7895,11 @@ async function openSwitchPatientCaseModal() {
               .map((c) => {
                 const active =
                   p.id === activePid && c.id === activeCid ? " active-case" : "";
-                return `<button type="button" class="switch-case-btn${active}" data-patient-id="${escapeHtml(p.id)}" data-case-id="${escapeHtml(c.id)}">${escapeHtml(c.label || c.id)}</button>`;
+                return `<button type="button" class="switch-case-btn${active}" data-patient-id="${escapeHtml(p.id)}" data-case-id="${escapeHtml(c.id)}"><span class="switch-case-btn-label">${escapeHtml(c.label || c.id)}</span></button>`;
               })
               .join("")
           : `<p class="muted small">No cases — create one after selecting this patient.</p>
-             <button type="button" class="switch-case-btn" data-patient-id="${escapeHtml(p.id)}" data-new-case="1">New case…</button>`;
+             <button type="button" class="switch-case-btn" data-patient-id="${escapeHtml(p.id)}" data-new-case="1"><span class="switch-case-btn-label">New case…</span></button>`;
         return `<div class="switch-patient-group">
           <h4>${escapeHtml(p.label || p.id)}${p.id === activePid ? " · current" : ""}</h4>
           ${caseBtns}
@@ -7881,7 +8034,10 @@ document.getElementById("header-case-select")?.addEventListener("change", async 
   const patientId = data.active?.patient_id;
   if (!patientId) return;
   if (caseId === data.active?.case_id) return;
-  await activatePatientCase(patientId, caseId);
+  const label =
+    event.target.selectedOptions?.[0]?.textContent?.trim() || "Switching case…";
+  event.target.disabled = true;
+  await activatePatientCase(patientId, caseId, { label: `Switching to ${label}…` });
 });
 
 document.getElementById("header-patient-select")?.addEventListener("change", async (event) => {
@@ -7898,7 +8054,10 @@ document.getElementById("header-patient-select")?.addEventListener("change", asy
     return;
   }
   if (patientId === data.active?.patient_id && firstCase.id === data.active?.case_id) return;
-  await activatePatientCase(patientId, firstCase.id);
+  event.target.disabled = true;
+  await activatePatientCase(patientId, firstCase.id, {
+    label: `Switching to ${patient.label}…`,
+  });
 });
 
 document.getElementById("btn-patient-photo")?.addEventListener("click", () => {
@@ -7925,18 +8084,18 @@ document.getElementById("input-patient-photo")?.addEventListener("change", async
   await loadCaseContext();
 });
 
-document.getElementById("btn-cancel-switch-case")?.addEventListener("click", () => hideModal("modal-switch-case"));
-
-document.getElementById("btn-open-switch-case")?.addEventListener("click", () => {
-  openSwitchPatientCaseModal();
+document.getElementById("btn-cancel-switch-case")?.addEventListener("click", () => {
+  if (!document.getElementById("switch-progress-overlay")?.classList.contains("hidden")) return;
+  hideModal("modal-switch-case");
 });
+
 document.getElementById("btn-header-switch-patient")?.addEventListener("click", () => {
   openSwitchPatientCaseModal();
 });
 
 document.getElementById("switch-case-list")?.addEventListener("click", async (event) => {
   const btn = event.target.closest(".switch-case-btn");
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   const patientId = btn.dataset.patientId;
   if (!patientId) return;
   if (btn.dataset.newCase === "1") {
@@ -7950,12 +8109,23 @@ document.getElementById("switch-case-list")?.addEventListener("click", async (ev
   }
   const caseId = btn.dataset.caseId;
   if (!caseId) return;
-  hideModal("modal-switch-case");
-  await activatePatientCase(patientId, caseId);
+  const patientLabel =
+    btn.closest(".switch-patient-group")?.querySelector("h4")?.textContent?.replace(/\s·\scurrent$/, "").trim() ||
+    "patient";
+  const caseLabel = btn.querySelector(".switch-case-btn-label")?.textContent?.trim() || "case";
+  setSwitchBusyState(btn, `Switching to ${patientLabel} · ${caseLabel}…`);
+  await activatePatientCase(patientId, caseId, {
+    label: `Switching to ${patientLabel} · ${caseLabel}…`,
+  });
 });
 
 document.getElementById("modal-switch-case")?.addEventListener("click", (event) => {
-  if (event.target.id === "modal-switch-case") hideModal("modal-switch-case");
+  if (event.target.id === "modal-switch-case") {
+    if (document.getElementById("switch-progress-overlay") && !document.getElementById("switch-progress-overlay").classList.contains("hidden")) {
+      return;
+    }
+    hideModal("modal-switch-case");
+  }
 });
 
 document.getElementById("btn-save-profile")?.addEventListener("click", async () => {
@@ -8255,15 +8425,11 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
 });
 
 document.getElementById("btn-diagnostics-settings")?.addEventListener("click", () => {
-  switchTab("settings");
-  document.getElementById("diag-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
-  document.getElementById("diag-name")?.focus();
+  switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-name" });
 });
 
 document.getElementById("btn-medications-settings")?.addEventListener("click", () => {
-  switchTab("settings");
-  document.getElementById("medications-settings-heading")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  document.getElementById("med-name")?.focus();
+  switchTab("settings", { settingsSection: "profile", settingsFocus: "#med-name" });
 });
 
 document.getElementById("btn-med-safety-home")?.addEventListener("click", () => {
@@ -8381,7 +8547,7 @@ document.getElementById("patient-medications-list")?.addEventListener("click", a
     const med = (data.profile?.medications || []).find((m) => m.id === id);
     if (!med) return toast("Medication not found", "error");
     fillMedicationForm(med);
-    document.getElementById("medications-settings-heading")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setSettingsSection("profile", { scroll: true, focusSelector: "#med-name" });
     return;
   }
 

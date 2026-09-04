@@ -98,7 +98,6 @@
         <span>Case</span>
         <select id="header-case-select" aria-label="Switch case"></select>
       </label>
-      <button type="button" class="btn ghost btn-sm header-switch-btn" id="btn-open-switch-case" title="Browse all patients and cases">Browse</button>
     </div>
     <nav class="header-nav" aria-label="Main navigation">
       <div class="tabs header-tabs header-tabs-icons" role="tablist">
@@ -220,9 +219,18 @@
     <div class="modal-card modal-card-wide">
       <h3>Switch Patient / Case</h3>
       <div id="switch-case-list" class="switch-case-list"></div>
+      <p id="switch-case-status" class="switch-case-status muted small hidden" role="status" aria-live="polite"></p>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btn-cancel-switch-case">Close</button>
       </div>
+    </div>
+  </div>
+
+  <div id="switch-progress-overlay" class="switch-progress-overlay hidden" role="status" aria-live="assertive" aria-busy="true">
+    <div class="switch-progress-card">
+      <div class="switch-progress-spinner" aria-hidden="true"></div>
+      <p class="switch-progress-title" id="switch-progress-title">Switching…</p>
+      <p class="switch-progress-hint muted small">Loading patient workspace</p>
     </div>
   </div>
 
@@ -244,49 +252,85 @@
 
     <!-- HOME / ANALYZE -->
     <section id="panel-analyze" class="panel active">
-      <div id="analyze-results-section" class="analyze-results-section hidden">
-        <div class="answer-layout" id="home-answer-layout">
-          <div class="answer-main">
-            <div class="card executive-summary-card answer-article" id="executive-summary-card">
-              <h3 class="answer-section-label">Executive summary</h3>
-              <p class="section-updated muted small hidden">Last updated <time id="executive-summary-time"></time></p>
-              <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
-              <div id="executive-summary-notice" class="executive-summary-notice hidden" role="status"></div>
-              <div id="executive-summary-text" class="executive-summary-text"></div>
+      <nav id="home-subnav" class="section-subnav" role="tablist" aria-label="Home sections">
+        <button type="button" class="section-subtab active" data-home-section="assessment" role="tab" aria-selected="true" title="Summary">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v16H6z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 8h6M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Summary</span>
+        </button>
+        <button type="button" class="section-subtab" data-home-section="journal" role="tab" aria-selected="false" title="How you feel">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 11c0 5.5-7 10-7 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="section-subtab-label">Journal</span>
+        </button>
+        <button type="button" class="section-subtab" data-home-section="medications" role="tab" aria-selected="false" title="Medications">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Meds</span>
+        </button>
+        <button type="button" class="section-subtab" data-home-section="diagnostics" role="tab" aria-selected="false" title="Diagnostics">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="section-subtab-label">Labs</span>
+        </button>
+        <button type="button" class="section-subtab" data-home-section="gaps" role="tab" aria-selected="false" title="Open items">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Gaps</span>
+        </button>
+        <button type="button" class="section-subtab" data-home-section="run" role="tab" aria-selected="false" title="Run analysis">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 8.5v7l6-3.5z" fill="currentColor"/></svg>
+          <span class="section-subtab-label">Run</span>
+        </button>
+      </nav>
+
+      <div id="home-pane-assessment" class="section-pane" data-home-pane="assessment">
+        <div id="analyze-results-section" class="analyze-results-section hidden">
+          <div class="answer-layout" id="home-answer-layout">
+            <div class="answer-main">
+              <div class="card executive-summary-card answer-article" id="executive-summary-card">
+                <h3 class="answer-section-label">Executive summary</h3>
+                <p class="section-updated muted small hidden">Last updated <time id="executive-summary-time"></time></p>
+                <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
+                <div id="executive-summary-notice" class="executive-summary-notice hidden" role="status"></div>
+                <div id="executive-summary-text" class="executive-summary-text"></div>
+              </div>
+
+              <div class="card full-assessment-card answer-article hidden" id="full-assessment-card">
+                <h3 class="answer-section-label">Full assessment</h3>
+                <p class="section-updated muted small hidden">Last updated <time id="full-assessment-time"></time></p>
+                <div id="full-assessment-body" class="sourced-text assessment-body-text numbered-text"></div>
+              </div>
+
+              <div class="card references-appendix hidden" id="references-appendix">
+                <h3 class="references-appendix-heading">References</h3>
+                <p class="muted small">Inline citations map to the numbered list below. Each Doc entry is a distinct library file.</p>
+                <ol class="references-appendix-list" id="references-appendix-list"></ol>
+              </div>
             </div>
 
-            <div class="card full-assessment-card answer-article hidden" id="full-assessment-card">
-              <h3 class="answer-section-label">Full assessment</h3>
-              <p class="section-updated muted small hidden">Last updated <time id="full-assessment-time"></time></p>
-              <div id="full-assessment-body" class="sourced-text assessment-body-text numbered-text"></div>
-            </div>
-
-            <div class="card references-appendix hidden" id="references-appendix">
-              <h3 class="references-appendix-heading">References</h3>
-              <p class="muted small">Inline citations map to the numbered list below. Each Doc entry is a distinct library file.</p>
-              <ol class="references-appendix-list" id="references-appendix-list"></ol>
-            </div>
+            <aside class="sources-sidebar hidden" id="home-sources-sidebar" aria-label="Assessment documents and citations">
+              <div id="home-sources-sidebar-inner" class="sources-sidebar-inner"></div>
+            </aside>
           </div>
 
-          <aside class="sources-sidebar hidden" id="home-sources-sidebar" aria-label="Assessment documents and citations">
-            <div id="home-sources-sidebar-inner" class="sources-sidebar-inner"></div>
-          </aside>
+          <details class="source-legend-wrap card" id="source-legend-wrap">
+            <summary class="source-legend-summary">How source citations work</summary>
+            <div class="source-legend" id="source-legend">
+              <ul class="source-legend-list" id="source-legend-list">
+                <li><span class="source-tag source-document">Doc</span> Clinical record — hard data from stored files</li>
+                <li><span class="source-tag source-diagnostic">Diag</span> Diagnostic test — imaging and pathology</li>
+                <li><span class="source-tag source-context">Ctx</span> Patient context — from settings, not verified</li>
+                <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
+                <li><span class="source-tag source-unknown">?</span> Not in your library — claim not backed by a stored record</li>
+              </ul>
+              <p class="source-legend-note">Inline tags point to the numbered <strong>References</strong> list at the bottom — each Doc is a different library file, not a generic badge.</p>
+            </div>
+          </details>
         </div>
+        <div id="home-assessment-empty" class="card home-pane-empty">
+          <h3>No assessment yet</h3>
+          <p class="muted">Run analysis from the Run tab to generate an executive summary, full assessment, and open items.</p>
+          <button type="button" class="btn primary" data-home-section="run">Go to Run</button>
+        </div>
+      </div>
 
-        <details class="source-legend-wrap card" id="source-legend-wrap">
-          <summary class="source-legend-summary">How source citations work</summary>
-          <div class="source-legend" id="source-legend">
-            <ul class="source-legend-list" id="source-legend-list">
-              <li><span class="source-tag source-document">Doc</span> Clinical record — hard data from stored files</li>
-              <li><span class="source-tag source-diagnostic">Diag</span> Diagnostic test — imaging and pathology</li>
-              <li><span class="source-tag source-context">Ctx</span> Patient context — from settings, not verified</li>
-              <li><span class="source-tag source-inference">AI</span> AI inference — interpretation, not verified</li>
-              <li><span class="source-tag source-unknown">?</span> Not in your library — claim not backed by a stored record</li>
-            </ul>
-            <p class="source-legend-note">Inline tags point to the numbered <strong>References</strong> list at the bottom — each Doc is a different library file, not a generic badge.</p>
-          </div>
-        </details>
-
+      <div id="home-pane-journal" class="section-pane hidden" data-home-pane="journal">
         <div class="card journal-card" id="journal-card">
           <div class="row-between wrap">
             <div>
@@ -298,7 +342,9 @@
           <div id="journal-recent" class="journal-recent"></div>
           <div id="journal-charts" class="journal-charts"></div>
         </div>
+      </div>
 
+      <div id="home-pane-medications" class="section-pane hidden" data-home-pane="medications">
         <div class="card medications-card" id="medications-card">
           <div class="row-between wrap">
             <div>
@@ -315,7 +361,9 @@
             <p class="muted small">No active medications yet.</p>
           </div>
         </div>
+      </div>
 
+      <div id="home-pane-diagnostics" class="section-pane hidden" data-home-pane="diagnostics">
         <div class="card diagnostics-card" id="diagnostics-card">
           <div class="row-between wrap">
             <div>
@@ -331,11 +379,13 @@
             <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Patient profile.</p>
           </div>
         </div>
+      </div>
 
+      <div id="home-pane-gaps" class="section-pane hidden" data-home-pane="gaps">
         <div class="card open-items-card" id="open-items-card">
           <h3>Open items</h3>
           <p class="section-updated muted small hidden">Last updated <time id="open-items-time"></time></p>
-          <p class="muted small open-items-hint">Prioritized gaps to resolve. Wrong gap? Add the missing report under <strong>Update analysis</strong> below, then re-run. Click Explore to investigate.</p>
+          <p class="muted small open-items-hint">Prioritized gaps to resolve. Wrong gap? Add the missing report under <strong>Run</strong>, then re-run analysis. Click Explore to investigate.</p>
           <div class="table-wrap">
             <table class="open-items-table" id="open-items-table">
               <thead>
@@ -355,71 +405,72 @@
             </table>
           </div>
         </div>
+
+        <div class="card open-item-panel hidden" id="open-item-panel">
+            <div class="row-between wrap">
+              <h4 id="open-item-panel-title">Open item investigation</h4>
+              <button type="button" class="btn ghost" id="btn-close-open-item">Close</button>
+            </div>
+            <div class="open-item-meta" id="open-item-meta"></div>
+
+            <div id="open-item-scope-hint" class="open-item-scope-hint hidden">
+              <p class="muted small">If this gap looks wrong, a report may have been left out of the last run. Adjust scope or add guidance below, then update analysis.</p>
+              <div class="open-item-scope-actions">
+                <button type="button" class="btn secondary btn-sm" id="btn-open-item-adjust-scope">Adjust assessment scope</button>
+                <button type="button" class="btn primary btn-sm" id="btn-open-item-reassess">Update analysis</button>
+              </div>
+            </div>
+
+            <div class="open-item-investigation-section">
+              <h5>Investigation guidance</h5>
+              <p class="muted small">Add instructions for this run, or pick a suggestion. Results stay as a draft until you accept or discard them.</p>
+              <div class="investigation-guidance-presets" id="investigation-guidance-presets"></div>
+              <label class="open-item-guidance-form">Your guidance
+                <textarea id="open-item-guidance" rows="4" placeholder="e.g. Focus on CT and pathology only. What staging data is still missing?"></textarea>
+              </label>
+              <button type="button" class="btn primary" id="btn-investigate-item">Run investigation</button>
+              <div id="open-item-loading" class="loading hidden">Running focused investigation…</div>
+            </div>
+
+            <div id="open-item-draft-review" class="open-item-draft-review hidden">
+              <h5>Raw investigation results — review before integrating</h5>
+              <p class="muted small" id="open-item-draft-meta"></p>
+              <article id="open-item-draft-raw" class="result investigation-draft-raw sourced-text"></article>
+              <label class="open-item-draft-edit-form">Edit before accepting (optional)
+                <textarea id="open-item-draft-edit" rows="8" placeholder="Adjust wording or trim sections before accepting…"></textarea>
+              </label>
+              <div class="investigation-review-actions">
+                <button type="button" class="btn primary" id="btn-accept-investigation">Accept findings</button>
+                <button type="button" class="btn secondary" id="btn-comment-investigation">Save as comment only</button>
+                <button type="button" class="btn ghost" id="btn-discard-investigation">Discard draft</button>
+              </div>
+            </div>
+
+            <div id="open-item-accepted-review" class="open-item-accepted-review hidden">
+              <h5>Accepted investigation</h5>
+              <p class="muted small" id="open-item-accepted-meta"></p>
+              <article id="open-item-investigation" class="result investigation-body sourced-text"></article>
+            </div>
+
+            <div class="open-item-comments-section">
+              <h5>Comments</h5>
+              <div id="open-item-comments-list" class="open-item-comments-list">
+                <p class="muted small">No comments yet.</p>
+              </div>
+              <label class="open-item-comment-form">Add a note
+                <textarea id="open-item-comment-input" rows="3" placeholder="Progress, decisions, follow-up notes…"></textarea>
+              </label>
+              <button type="button" class="btn secondary" id="btn-add-comment">Add comment</button>
+            </div>
+
+            <div class="open-item-actions row-between wrap">
+              <button type="button" class="btn secondary" id="btn-resolve-item">Resolve</button>
+              <button type="button" class="btn ghost hidden" id="btn-reopen-item">Reopen</button>
+            </div>
+        </div>
       </div>
 
-      <div class="card open-item-panel hidden" id="open-item-panel">
-          <div class="row-between wrap">
-            <h4 id="open-item-panel-title">Open item investigation</h4>
-            <button type="button" class="btn ghost" id="btn-close-open-item">Close</button>
-          </div>
-          <div class="open-item-meta" id="open-item-meta"></div>
-
-          <div id="open-item-scope-hint" class="open-item-scope-hint hidden">
-            <p class="muted small">If this gap looks wrong, a report may have been left out of the last run. Adjust scope or add guidance below, then update analysis.</p>
-            <div class="open-item-scope-actions">
-              <button type="button" class="btn secondary btn-sm" id="btn-open-item-adjust-scope">Adjust assessment scope</button>
-              <button type="button" class="btn primary btn-sm" id="btn-open-item-reassess">Update analysis</button>
-            </div>
-          </div>
-
-          <div class="open-item-investigation-section">
-            <h5>Investigation guidance</h5>
-            <p class="muted small">Add instructions for this run, or pick a suggestion. Results stay as a draft until you accept or discard them.</p>
-            <div class="investigation-guidance-presets" id="investigation-guidance-presets"></div>
-            <label class="open-item-guidance-form">Your guidance
-              <textarea id="open-item-guidance" rows="4" placeholder="e.g. Focus on CT and pathology only. What staging data is still missing?"></textarea>
-            </label>
-            <button type="button" class="btn primary" id="btn-investigate-item">Run investigation</button>
-            <div id="open-item-loading" class="loading hidden">Running focused investigation…</div>
-          </div>
-
-          <div id="open-item-draft-review" class="open-item-draft-review hidden">
-            <h5>Raw investigation results — review before integrating</h5>
-            <p class="muted small" id="open-item-draft-meta"></p>
-            <article id="open-item-draft-raw" class="result investigation-draft-raw sourced-text"></article>
-            <label class="open-item-draft-edit-form">Edit before accepting (optional)
-              <textarea id="open-item-draft-edit" rows="8" placeholder="Adjust wording or trim sections before accepting…"></textarea>
-            </label>
-            <div class="investigation-review-actions">
-              <button type="button" class="btn primary" id="btn-accept-investigation">Accept findings</button>
-              <button type="button" class="btn secondary" id="btn-comment-investigation">Save as comment only</button>
-              <button type="button" class="btn ghost" id="btn-discard-investigation">Discard draft</button>
-            </div>
-          </div>
-
-          <div id="open-item-accepted-review" class="open-item-accepted-review hidden">
-            <h5>Accepted investigation</h5>
-            <p class="muted small" id="open-item-accepted-meta"></p>
-            <article id="open-item-investigation" class="result investigation-body sourced-text"></article>
-          </div>
-
-          <div class="open-item-comments-section">
-            <h5>Comments</h5>
-            <div id="open-item-comments-list" class="open-item-comments-list">
-              <p class="muted small">No comments yet.</p>
-            </div>
-            <label class="open-item-comment-form">Add a note
-              <textarea id="open-item-comment-input" rows="3" placeholder="Progress, decisions, follow-up notes…"></textarea>
-            </label>
-            <button type="button" class="btn secondary" id="btn-add-comment">Add comment</button>
-          </div>
-
-          <div class="open-item-actions row-between wrap">
-            <button type="button" class="btn secondary" id="btn-resolve-item">Resolve</button>
-            <button type="button" class="btn ghost hidden" id="btn-reopen-item">Reopen</button>
-          </div>
-      </div>
-
+      <div id="home-pane-run" class="section-pane hidden" data-home-pane="run">
       <details class="card analyze-actions-card" id="analyze-actions-card" open>
         <summary class="analyze-actions-summary">
           <span class="analyze-actions-summary-title" id="analysis-panel-title">Run analysis</span>
@@ -494,6 +545,7 @@
           <div id="assessment-scope-last" class="assessment-scope-block hidden" hidden></div>
         </div>
       </details>
+      </div>
     </section>
 
     <!-- OPTIONS CHAT -->
@@ -1015,6 +1067,34 @@
 
     <!-- SETTINGS -->
     <section id="panel-settings" class="panel">
+      <nav id="settings-subnav" class="section-subnav" role="tablist" aria-label="Settings sections">
+        <button type="button" class="section-subtab active" data-settings-section="patients" role="tab" aria-selected="true" title="Patients & cases">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a3 3 0 0 1 0 5.74" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Patients</span>
+        </button>
+        <button type="button" class="section-subtab" data-settings-section="profile" role="tab" aria-selected="false" title="Patient profile">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Profile</span>
+        </button>
+        <button type="button" class="section-subtab" data-settings-section="analysis" role="tab" aria-selected="false" title="Analysis context">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 14l3-5 3 3 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="section-subtab-label">Analysis</span>
+        </button>
+        <button type="button" class="section-subtab" data-settings-section="labels" role="tab" aria-selected="false" title="Source labels">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4 12.7 5.5a2 2 0 0 0-1.4-.6H5a2 2 0 0 0-2 2v6.3a2 2 0 0 0 .6 1.4l7.9 7.9a2 2 0 0 0 2.8 0l6.3-6.3a2 2 0 0 0 0-2.8z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor"/></svg>
+          <span class="section-subtab-label">Labels</span>
+        </button>
+        <button type="button" class="section-subtab" data-settings-section="llm" role="tab" aria-selected="false" title="LLM settings">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 21h8M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">LLM</span>
+        </button>
+        <button type="button" class="section-subtab" data-settings-section="audit" role="tab" aria-selected="false" title="Audit trail">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 2v6h6M9 13h6M9 17h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Audit</span>
+        </button>
+      </nav>
+
+      <div id="settings-pane-patients" class="section-pane" data-settings-pane="patients">
       <div class="card settings-card">
         <h3>Patients &amp; cases</h3>
         <p class="muted">Each person is a patient. Each condition or workup is a separate case with its own library and assessments. Switch from the header, or add them here.</p>
@@ -1032,7 +1112,9 @@
           </div>
         </div>
       </div>
+      </div>
 
+      <div id="settings-pane-profile" class="section-pane hidden" data-settings-pane="profile">
       <div class="card settings-card">
         <h3>Patient profile</h3>
         <p class="muted">Basic demographics for the current patient. Date of birth and gender stay fixed; height and weight can be recorded over time.</p>
@@ -1159,7 +1241,9 @@
         </div>
         <div id="patient-medications-list" class="patient-measurements-list"></div>
       </div>
+      </div>
 
+      <div id="settings-pane-analysis" class="section-pane hidden" data-settings-pane="analysis">
       <div class="card settings-card">
         <h3>Clinical reviewer context</h3>
         <p class="muted">Persona and synthesis instructions for every analysis. Default: medical oncologist. Controls how the model reads and integrates all selected documents.</p>
@@ -1171,7 +1255,6 @@
           <button class="btn primary" id="btn-save-reviewer">Save reviewer context</button>
         </div>
       </div>
-
       <div class="card settings-card patient-banner">
         <div class="banner-duck" aria-hidden="true">🦆</div>
         <h3>Patient &amp; case context</h3>
@@ -1187,7 +1270,9 @@
           <button class="btn primary" id="btn-save-patient">Save patient context</button>
         </div>
       </div>
+      </div>
 
+      <div id="settings-pane-labels" class="section-pane hidden" data-settings-pane="labels">
       <div class="card settings-card">
         <h3>Source labels</h3>
         <p class="muted small">Customize shorthand badges and display names used in assessments, references, and the library. Source links and audit trail stay tied to the underlying records.</p>
@@ -1197,7 +1282,9 @@
           <button type="button" class="btn primary" id="btn-save-source-labels">Save source labels</button>
         </div>
       </div>
+      </div>
 
+      <div id="settings-pane-llm" class="section-pane hidden" data-settings-pane="llm">
       <div class="card settings-card">
         <h3>LLM settings</h3>
         <p class="muted">Baseline and custom tasks use the <strong>text</strong> Ollama model when the VM is reachable (<code>LLM_PROVIDER=auto</code>). The <strong>Imaging</strong> tab uses a separate vision model. OpenRouter is the cloud fallback (and default on Render).</p>
@@ -1215,7 +1302,9 @@
           <button class="btn primary" id="btn-save-settings">Save model</button>
         </div>
       </div>
+      </div>
 
+      <div id="settings-pane-audit" class="section-pane hidden" data-settings-pane="audit">
       <div class="card settings-card audit-trail-card">
         <div class="row-between wrap">
           <h3>Audit trail</h3>
@@ -1240,7 +1329,9 @@
           <button type="button" class="btn secondary hidden" id="btn-audit-load-more">Load more</button>
         </div>
       </div>
+      </div>
     </section>
+
   </main>
 
   <footer class="app-footer" aria-label="App version">
