@@ -657,19 +657,32 @@ async def list_handling_flagged():
 
 @router.post("/documents/{doc_id}/handling/dismiss")
 async def dismiss_document_handling_flag(doc_id: str, request: Request):
-    from app.services.clinical_report_handling import dismiss_document_handling
+    from app.services.clinical_report_handling import (
+        dismiss_document_handling,
+        open_store_for_patient_document,
+    )
 
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
     db, store, _, _, _ = await _get_services()
-    patient_doc = await resolve_active_patient_document(doc_id)
-    if patient_doc and not patient_doc.get("is_active_case"):
-        raise HTTPException(
-            status_code=403,
-            detail="Switch to that focus case to dismiss this flag",
+    doc = None
+    target_store = store
+
+    if patient_id:
+        opened = await open_store_for_patient_document(
+            patient_id,
+            doc_id,
+            active_case_id=ctx.get("case_id"),
         )
-    doc = await db.get_document(doc_id)
+        if opened:
+            target_store, doc = opened
+    if doc is None:
+        doc = await db.get_document(doc_id)
+        target_store = store
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    updated = await dismiss_document_handling(store, doc)
+
+    updated = await dismiss_document_handling(target_store, doc)
     await _audit(
         db,
         request,
@@ -684,6 +697,56 @@ async def dismiss_document_handling_flag(doc_id: str, request: Request):
     catalog = await _source_catalog(db)
     updated["source_info"] = catalog.describe_document(updated)
     return {"document": updated, "ok": True}
+
+
+@router.post("/handling/refresh")
+async def refresh_all_handling_flags():
+    """Re-evaluate handled/flagged state for all patient clinical PDFs."""
+    from app.services.clinical_report_handling import (
+        list_flagged_documents_for_patient,
+        open_store_for_patient_document,
+        refresh_document_handling,
+    )
+    from app.services.patient_documents import list_patient_documents
+
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
+    if not patient_id:
+        return {"items": [], "count": 0, "critical_count": 0, "refreshed": 0}
+    profile = get_patient_profile(patient_id)
+    docs = await list_patient_documents(
+        patient_id,
+        active_case_id=ctx.get("case_id"),
+        source_type="pdf",
+    )
+    refreshed = 0
+    for doc in docs:
+        meta = doc.get("metadata") or {}
+        kind = str(meta.get("clinical_report_kind") or "").lower()
+        if not kind and not (
+            "lab" in str(doc.get("title") or "").lower()
+            or "lab" in str(meta.get("original_filename") or "").lower()
+        ):
+            # Still refresh PDFs that already carry handling metadata
+            if not meta.get("handling_status"):
+                continue
+        opened = await open_store_for_patient_document(
+            patient_id,
+            doc["id"],
+            active_case_id=ctx.get("case_id"),
+        )
+        if not opened:
+            continue
+        store, raw = opened
+        await refresh_document_handling(store, raw, profile=profile)
+        refreshed += 1
+    payload = await list_flagged_documents_for_patient(
+        patient_id,
+        active_case_id=ctx.get("case_id"),
+        profile=profile,
+    )
+    payload["refreshed"] = refreshed
+    return payload
 
 
 @router.get("/documents/imaging/facets")
@@ -2514,11 +2577,21 @@ async def api_import_patient_diagnostics_from_document(
     patient_id: str,
     body: PatientDiagnosticImportFromDocRequest,
 ):
+    from app.services.clinical_report_handling import open_store_for_patient_document
+
     patients = list_patients()
     if not any(p["id"] == patient_id for p in patients):
         raise HTTPException(status_code=404, detail="Patient not found")
     db, store, _, _, _ = await _get_services()
-    doc = await db.get_document(body.document_id.strip())
+    doc_id = body.document_id.strip()
+    doc = None
+    target_store = store
+    opened = await open_store_for_patient_document(patient_id, doc_id)
+    if opened:
+        target_store, doc = opened
+    if doc is None:
+        doc = await db.get_document(doc_id)
+        target_store = store
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     source_type = str(doc.get("source_type") or "").lower()
@@ -2533,7 +2606,7 @@ async def api_import_patient_diagnostics_from_document(
                 status_code=400,
                 detail="Import to Labs supports PDF or image lab reports",
             )
-    text = await store.read_extracted_text(doc)
+    text = await target_store.read_extracted_text(doc)
     try:
         result = await propose_diagnostics_from_document(
             patient_id,
@@ -2589,19 +2662,23 @@ async def api_confirm_patient_diagnostics_import(
     profile = get_patient_profile(patient_id)
     if default_doc_id:
         try:
-            from app.services.clinical_report_handling import refresh_document_handling
+            from app.services.clinical_report_handling import (
+                open_store_for_patient_document,
+                refresh_document_handling,
+            )
 
-            db, store, _, _, _ = await _get_services()
-            src = await db.get_document(default_doc_id)
-            if src:
+            opened = await open_store_for_patient_document(patient_id, default_doc_id)
+            if opened:
+                target_store, src = opened
                 await refresh_document_handling(
-                    store,
+                    target_store,
                     src,
                     profile=profile,
                     lab_import={
                         "added_count": len(added),
                         "proposed_count": len(body.diagnostics),
                         "skipped_incomplete": 0,
+                        "skipped_duplicate": 0,
                     },
                 )
         except Exception:

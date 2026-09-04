@@ -849,9 +849,11 @@ function updateHomeWorkflow() {
   renderHandlingAlerts();
 }
 
-async function refreshHandlingFlags() {
+async function refreshHandlingFlags({ rescan = false } = {}) {
   try {
-    const data = await api("/api/handling/flagged");
+    const data = rescan
+      ? await api("/api/handling/refresh", { method: "POST", timeoutMs: 120000 })
+      : await api("/api/handling/flagged");
     state.handlingFlags = {
       items: data.items || [],
       count: data.count || 0,
@@ -963,8 +965,8 @@ async function handleFlaggedAction(action, docId) {
     return;
   }
   if (action === "import_labs") {
+    toast("Review the readings, then Add selected — that clears the flag");
     await importDiagnosticsFromLibraryDocument(docId);
-    await refreshHandlingFlags();
     return;
   }
   if (action === "dismiss") {
@@ -973,7 +975,7 @@ async function handleFlaggedAction(action, docId) {
       method: "POST",
     });
     toast("Flag dismissed");
-    await refreshHandlingFlags();
+    await refreshHandlingFlags({ rescan: true });
   }
 }
 
@@ -993,6 +995,14 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
   }
   const n = labImport.added_count || 0;
   const title = labImport.document_title || "lab report";
+  if (labImport.already_on_profile || (n === 0 && !flagged && labImport.skipped_duplicate > 0)) {
+    toast(`Lab readings already on charts for ${title}`);
+    refreshHandlingFlags({ rescan: true }).then(() => {
+      switchTab("analyze");
+      setHomeSection("flagged", { scroll: true });
+    });
+    return;
+  }
   if (n > 0 && !flagged) {
     toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}`);
     if (typeof applyProfileResponse === "function") {
@@ -5809,7 +5819,15 @@ $$(".tab").forEach((tab) =>
 
 safeOn("#btn-dismiss-upload", "click", dismissUploadResult);
 safeOn("#btn-flagged-refresh", "click", () => {
-  refreshHandlingFlags().catch((e) => toast(e.message, "error"));
+  refreshHandlingFlags({ rescan: true })
+    .then((flags) => {
+      toast(
+        flags.count
+          ? `${flags.count} still flagged`
+          : "All lab/diagnostic reports are clear"
+      );
+    })
+    .catch((e) => toast(e.message, "error"));
 });
 safeOn("#flagged-list", "click", (event) => {
   const btn = event.target.closest(".btn-flagged-action");
@@ -7671,7 +7689,7 @@ async function confirmDiagImportAndShowCharts() {
     toast(`Added ${data.added_count || diagnostics.length} lab reading(s)`);
     switchTab("analyze");
     setHomeSection("diagnostics", { scroll: true });
-    refreshHandlingFlags().catch(() => {});
+    refreshHandlingFlags({ rescan: true }).catch(() => {});
   } catch (err) {
     toast(err.message || "Could not add lab readings", "error");
   } finally {

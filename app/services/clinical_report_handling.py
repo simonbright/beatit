@@ -41,12 +41,16 @@ def _meta(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_empty_extract(meta: dict[str, Any], text: str | None = None) -> bool:
+    chars = meta.get("extracted_chars")
+    if isinstance(chars, int) and chars >= 40:
+        return False
+    if text is not None and len((text or "").strip()) >= 40:
+        return False
     if meta.get("needs_ocr"):
         return True
     method = str(meta.get("extraction_method") or "").lower()
     if method in {"empty", "failed"}:
         return True
-    chars = meta.get("extracted_chars")
     if isinstance(chars, int) and chars < 40:
         return True
     if text is not None and len((text or "").strip()) < 40:
@@ -62,6 +66,39 @@ def _readings_from_doc(profile: dict[str, Any] | None, doc_id: str) -> int:
         for d in (profile.get("diagnostics") or [])
         if str(d.get("source_document_id") or "") == doc_id
     )
+
+
+async def open_store_for_patient_document(
+    patient_id: str,
+    doc_id: str,
+    *,
+    active_case_id: str | None = None,
+) -> tuple[Any, dict[str, Any]] | None:
+    """Return (DocumentStore, document) for the case that owns doc_id."""
+    from app.services.patient_documents import find_patient_document
+    from app.storage.database import Database
+    from app.storage.documents import DocumentStore
+    from app.services.case_manager import _case_dir
+
+    found = await find_patient_document(
+        patient_id,
+        doc_id,
+        active_case_id=active_case_id,
+    )
+    if not found:
+        return None
+    case_id = found.get("case_id")
+    if not case_id:
+        return None
+    db_path = _case_dir(patient_id, case_id) / "beatit.db"
+    if not db_path.exists():
+        return None
+    db = Database(db_path=db_path)
+    store = DocumentStore(db)
+    doc = await db.get_document(doc_id)
+    if not doc:
+        return None
+    return store, doc
 
 
 def evaluate_document_handling(
@@ -101,25 +138,41 @@ def evaluate_document_handling(
     messages: list[str] = []
 
     empty = _is_empty_extract(meta, extracted_text)
-    is_clinical = kind in DIAGNOSTIC_CITATION_KINDS or kind == "unknown"
 
     if empty and (kind in DIAGNOSTIC_CITATION_KINDS or _looks_like_clinical_filename(doc, meta)):
         reasons.append(REASON_NEEDS_OCR)
         messages.append("Little or no text extracted — re-extract / OCR before relying on this report")
 
     if kind == "unknown" and _looks_like_clinical_filename(doc, meta) and not empty:
-        reasons.append(REASON_UNCLASSIFIED)
-        messages.append("Looks like a clinical report but type is unclear — review and re-extract if needed")
+        # Only flag unclear type when it looks like a lab and charts are empty,
+        # or when it strongly matches imaging/pathology keywords (not bare "report").
         if _looks_like_lab_filename(doc, meta):
-            reasons.append(REASON_LAB_CHARTS_PENDING)
-            messages.append("Possible lab report with no chart readings yet — Import to Labs or re-extract")
+            linked = _readings_from_doc(profile, str(doc.get("id") or ""))
+            already = int(meta.get("lab_charts_added") or 0)
+            stored_ok = str(meta.get("lab_charts_status") or "").lower() in {
+                "imported",
+                "already_on_profile",
+            }
+            if linked == 0 and already == 0 and not stored_ok:
+                reasons.append(REASON_UNCLASSIFIED)
+                reasons.append(REASON_LAB_CHARTS_PENDING)
+                messages.append(
+                    "Possible lab report with no chart readings yet — Import to Labs or re-extract"
+                )
+        elif _looks_like_strong_diagnostic_filename(doc, meta):
+            reasons.append(REASON_UNCLASSIFIED)
+            messages.append(
+                "Looks like a diagnostic report but type is unclear — review and re-extract if needed"
+            )
 
     if kind == "lab":
         linked = _readings_from_doc(profile, str(doc.get("id") or ""))
+        skipped_duplicate = 0
         if lab_import is not None:
             added = int(lab_import.get("added_count") or 0)
             proposed = int(lab_import.get("proposed_count") or 0)
             incomplete = int(lab_import.get("skipped_incomplete") or 0)
+            skipped_duplicate = int(lab_import.get("skipped_duplicate") or 0)
             import_failed = bool(
                 lab_import.get("offer_manual_import")
                 or any("failed" in str(w).lower() for w in (lab_import.get("warnings") or []))
@@ -128,26 +181,35 @@ def evaluate_document_handling(
             added = max(int(meta.get("lab_charts_added") or 0), linked)
             proposed = int(meta.get("lab_charts_proposed") or 0)
             incomplete = int(meta.get("lab_charts_incomplete") or 0)
+            skipped_duplicate = int(meta.get("lab_charts_duplicates") or 0)
             stored = str(meta.get("lab_charts_status") or "").lower()
             import_failed = stored in {"failed", "needs_review"} and added == 0
+            if stored in {"imported", "already_on_profile"}:
+                added = max(added, 1)
 
         charted = max(added, linked)
+        # Readings already on Home Labs for this panel count as handled.
+        covered_by_duplicates = skipped_duplicate > 0 and charted == 0 and incomplete == 0
+        if covered_by_duplicates:
+            charted = skipped_duplicate
+
         if empty:
             reasons.append(REASON_LAB_CHARTS_PENDING)
             messages.append("Cannot chart lab values until text is extracted")
-        elif charted == 0:
+        elif charted == 0 and not covered_by_duplicates:
             reasons.append(
                 REASON_IMPORT_FAILED if import_failed or proposed > 0 else REASON_LAB_CHARTS_PENDING
             )
             messages.append(
                 "Lab report is tagged but no readings are on Home Labs charts — Import to Labs"
             )
-        elif incomplete > 0 or (proposed > charted):
+        elif incomplete > 0 and charted == 0:
             reasons.append(REASON_LAB_PARTIAL)
-            leftover = max(incomplete, proposed - charted)
             messages.append(
-                f"{charted} reading(s) on charts; {leftover} still need dates or review"
+                f"No readings charted yet; {incomplete} still need dates or review"
             )
+        # If some readings are on charts, do not keep the flag for leftover incomplete rows.
+        # User can re-import or dismiss; charts are no longer empty.
 
     # Non-lab diagnostic reports with text are considered handled once classified
     if not reasons and kind in DIAGNOSTIC_CITATION_KINDS and kind != "lab":
@@ -163,10 +225,20 @@ def evaluate_document_handling(
     if not reasons and kind == "lab":
         linked = _readings_from_doc(profile, str(doc.get("id") or ""))
         stored_added = int(meta.get("lab_charts_added") or 0)
+        dupes = 0
+        if lab_import is not None:
+            dupes = int(lab_import.get("skipped_duplicate") or 0)
+        else:
+            dupes = int(meta.get("lab_charts_duplicates") or 0)
+        count = max(linked, stored_added, dupes)
         return {
             "status": HANDLING_OK,
             "reasons": [],
-            "message": f"Lab readings on charts ({max(linked, stored_added) or 'ok'})",
+            "message": (
+                f"Lab readings already on charts ({count})"
+                if dupes and not linked and not stored_added
+                else f"Lab readings on charts ({count or 'ok'})"
+            ),
             "severity": "info",
             "kind": kind,
             "kind_label": kind_label,
@@ -213,15 +285,18 @@ def _looks_like_clinical_filename(doc: dict[str, Any], meta: dict[str, Any]) -> 
         "labs",
         "mri",
         "ct ",
+        "ct-",
         "ultrasound",
         "pathology",
         "biopsy",
         "echo",
         "ecg",
         "ekg",
-        "blood",
+        "bloodwork",
+        "blood work",
         "lipid",
-        "report",
+        "cholesterol",
+        "hba1c",
     )
     return any(n in hay for n in needles)
 
@@ -231,6 +306,24 @@ def _looks_like_lab_filename(doc: dict[str, Any], meta: dict[str, Any]) -> bool:
     return any(
         n in hay
         for n in ("lab", "labs", "bloodwork", "blood work", "lipid", "cholesterol", "hba1c")
+    )
+
+
+def _looks_like_strong_diagnostic_filename(doc: dict[str, Any], meta: dict[str, Any]) -> bool:
+    hay = f"{doc.get('title') or ''} {meta.get('original_filename') or ''}".lower()
+    return any(
+        n in hay
+        for n in (
+            "mri",
+            "ultrasound",
+            "pathology",
+            "biopsy",
+            "echocardiogram",
+            "ct scan",
+            "ct abdomen",
+            "ct chest",
+            "ct pelvis",
+        )
     )
 
 
@@ -258,17 +351,24 @@ def apply_handling_to_metadata(
         added = int(lab_import.get("added_count") or 0)
         proposed = int(lab_import.get("proposed_count") or 0)
         incomplete = int(lab_import.get("skipped_incomplete") or 0)
+        duplicates = int(lab_import.get("skipped_duplicate") or 0)
         meta["lab_charts_added"] = added
         meta["lab_charts_proposed"] = proposed
         meta["lab_charts_incomplete"] = incomplete
-        if added > 0 and incomplete == 0 and proposed <= added:
+        meta["lab_charts_duplicates"] = duplicates
+        if status == HANDLING_OK and duplicates > 0 and added == 0:
+            meta["lab_charts_status"] = "already_on_profile"
+            meta["lab_charts_added"] = max(added, duplicates)
+        elif added > 0 and incomplete == 0:
             meta["lab_charts_status"] = "imported"
         elif added > 0:
             meta["lab_charts_status"] = "partial"
-        elif proposed > 0:
+        elif proposed > 0 and incomplete > 0:
             meta["lab_charts_status"] = "needs_review"
+        elif proposed > 0:
+            meta["lab_charts_status"] = "failed" if status == HANDLING_FLAGGED else "pending"
         else:
-            meta["lab_charts_status"] = "failed" if evaluation.get("status") == HANDLING_FLAGGED else "pending"
+            meta["lab_charts_status"] = "failed" if status == HANDLING_FLAGGED else "pending"
 
     return meta
 

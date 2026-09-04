@@ -460,5 +460,13 @@ async def auto_confirm_lab_readings_from_document(
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
-        "offer_manual_import": len(added) == 0 and len(proposed) > 0,
+        "offer_manual_import": (
+            len(added) == 0
+            and skipped_incomplete > 0
+            and skipped_duplicate < len(proposed)
+        )
+        or (len(added) == 0 and len(proposed) > 0 and skipped_duplicate == 0),
+        "already_on_profile": len(added) == 0
+        and skipped_duplicate > 0
+        and skipped_incomplete == 0,
     }
