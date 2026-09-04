@@ -1075,10 +1075,9 @@ body {
 }
 
 .diag-milestone-controls {
-  margin-top: 0.85rem;
-  padding: 0.75rem 0.9rem;
+  margin-top: 0.55rem;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface-2);
 }
 
@@ -1086,54 +1085,91 @@ body {
   display: none;
 }
 
+.diag-milestone-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.diag-milestone-summary::-webkit-details-marker {
+  display: none;
+}
+
+.diag-milestone-summary-label::before {
+  content: "▸ ";
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.diag-milestone-controls[open] .diag-milestone-summary-label::before {
+  content: "▾ ";
+}
+
+.diag-milestone-summary-meta {
+  font-weight: 500;
+}
+
+.diag-milestone-controls-body {
+  padding: 0 0.65rem 0.55rem;
+  border-top: 1px solid var(--border);
+}
+
 .diag-milestone-controls-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem 1rem;
+  gap: 0.35rem 0.75rem;
+  padding-top: 0.4rem;
 }
 
 .diag-milestone-master {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
   font-weight: 600;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
   cursor: pointer;
 }
 
 .diag-milestone-bulk {
   display: inline-flex;
-  gap: 0.25rem;
-}
-
-.diag-milestone-hint {
-  margin: 0.35rem 0 0.55rem;
+  gap: 0.2rem;
 }
 
 .diag-milestones-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 0.55rem;
+  gap: 0.25rem 0.35rem;
+  margin-top: 0.35rem;
+  max-height: 4.75rem;
+  overflow: auto;
 }
 
 .diag-milestone-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.28rem 0.55rem;
+  gap: 0.28rem;
+  padding: 0.15rem 0.4rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface);
-  font-size: 0.8rem;
-  line-height: 1.3;
+  font-size: 0.72rem;
+  line-height: 1.25;
   cursor: pointer;
   max-width: 100%;
 }
 
 .diag-milestone-chip input {
   margin: 0;
+  transform: scale(0.9);
 }
 
 .diag-milestone-chip.is-off {

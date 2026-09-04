@@ -7409,7 +7409,52 @@ function formatMedicationHistory(m) {
       return `<li><strong>${escapeHtml(dose)}</strong> until ${escapeHtml(when)}${note}</li>`;
     })
     .join("");
-  return `<details class="medication-history"><summary>Dosage history (${hist.length})</summary><ul>${items}</ul></details>`;
+  const current = formatMedicationDoseLine(m);
+  return `<details class="medication-history">
+    <summary>Changes (${hist.length})</summary>
+    <ul>
+      <li><strong>${escapeHtml(current)}</strong> · current</li>
+      ${items}
+    </ul>
+  </details>`;
+}
+
+function renderMedicationsHome(profile) {
+  const el = document.getElementById("medications-home-list");
+  if (!el) return;
+  renderMedSafetyHomeStatus(profile);
+  if (!profile) {
+    el.innerHTML = `<p class="muted small">Select a patient to see medications.</p>`;
+    return;
+  }
+  const meds = profile.medications || [];
+  if (!meds.length) {
+    el.innerHTML = `<p class="muted small">No medications yet. Add them in Settings.</p>`;
+    return;
+  }
+  const active = meds.filter((m) => (m.status || "active") === "active");
+  const stopped = meds.filter((m) => m.status === "stopped");
+  const rowHtml = (m, { stopped: isStopped } = {}) => {
+    const started = m.started_at ? `since ${formatDiagDate(m.started_at)}` : "";
+    const ended = m.stopped_at ? `ended ${formatDiagDate(m.stopped_at)}` : "";
+    const meta = [formatMedicationDoseLine(m), started, ended].filter(Boolean).join(" · ");
+    return `<div class="medication-home-row${isStopped ? " is-stopped" : ""}">
+      <div class="medication-row-main">
+        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationIdentityBadge(m)}${
+          isStopped ? `<span class="medication-stopped-pill">Stopped</span>` : ""
+        }
+        <p class="medication-row-meta">${escapeHtml(meta)}</p>
+        ${formatMedicationConditions(m)}
+        ${formatMedicationHistory(m)}
+      </div>
+    </div>`;
+  };
+  let html = active.map((m) => rowHtml(m)).join("");
+  if (stopped.length) {
+    html += `<h5 class="medication-stopped-heading">History / stopped</h5>`;
+    html += stopped.map((m) => rowHtml(m, { stopped: true })).join("");
+  }
+  el.innerHTML = html;
 }
 
 function medicationChartEvents(medications) {
@@ -7627,6 +7672,7 @@ function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = [])
   const wrap = document.getElementById("diagnostics-milestone-controls");
   const list = document.getElementById("diag-milestones-list");
   const enabledEl = document.getElementById("diag-milestones-enabled");
+  const metaEl = document.getElementById("diag-milestones-summary-meta");
   if (!wrap || !list || !enabledEl) return;
   const span = seriesDateSpan(seriesList);
   // Only list overlays that can land on current charts (drops ancient starts outside the labs range)
@@ -7636,6 +7682,7 @@ function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = [])
   if (!events.length) {
     wrap.classList.add("hidden");
     state.diagMilestonePrefs = { enabled: true, selected: [] };
+    if (metaEl) metaEl.textContent = "";
     return;
   }
   wrap.classList.remove("hidden");
@@ -7643,6 +7690,12 @@ function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = [])
   state.diagMilestonePrefs = prefs;
   enabledEl.checked = !!prefs.enabled;
   wrap.classList.toggle("is-disabled", !prefs.enabled);
+  const selectedCount = events.filter((e) => (prefs.selected || []).includes(e.id)).length;
+  if (metaEl) {
+    metaEl.textContent = prefs.enabled
+      ? `${selectedCount}/${events.length} on charts`
+      : "hidden";
+  }
   list.innerHTML = events
     .map((ev) => {
       const checked = (prefs.selected || []).includes(ev.id);
@@ -7778,33 +7831,6 @@ function renderMedSafetyResult(saved) {
   }
   el.innerHTML = html;
   el.classList.remove("hidden");
-}
-
-function renderMedicationsHome(profile) {
-  const el = document.getElementById("medications-home-list");
-  if (!el) return;
-  renderMedSafetyHomeStatus(profile);
-  if (!profile) {
-    el.innerHTML = `<p class="muted small">Select a patient to see medications.</p>`;
-    return;
-  }
-  const active = (profile.medications || []).filter((m) => (m.status || "active") === "active");
-  if (!active.length) {
-    el.innerHTML = `<p class="muted small">No active medications yet. Add them in Settings.</p>`;
-    return;
-  }
-  el.innerHTML = active
-    .map((m) => {
-      const started = m.started_at ? ` · since ${escapeHtml(formatDiagDate(m.started_at))}` : "";
-      return `<div class="medication-home-row">
-        <div class="medication-row-main">
-          <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationIdentityBadge(m)}
-          <p class="medication-row-meta">${escapeHtml(formatMedicationDoseLine(m))}${started}</p>
-          ${formatMedicationConditions(m)}
-        </div>
-      </div>`;
-    })
-    .join("");
 }
 
 function renderMedicationsSettings(profile) {

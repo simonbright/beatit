@@ -363,7 +363,7 @@
           <div class="row-between wrap">
             <div>
               <h3>Medications</h3>
-              <p class="muted small">Active prescriptions for this patient. Dosage changes keep a history.</p>
+              <p class="muted small">Active and past medications, including dosage changes.</p>
               <p class="muted small hidden" id="med-safety-home-status" role="status"></p>
             </div>
             <div class="medications-home-actions">
@@ -389,20 +389,25 @@
               <button type="button" class="btn ghost btn-sm" id="btn-diagnostics-settings" data-nav-settings>Add in Settings</button>
             </div>
           </div>
-          <div id="diagnostics-milestone-controls" class="diag-milestone-controls hidden">
-            <div class="diag-milestone-controls-head">
-              <label class="diag-milestone-master">
-                <input type="checkbox" id="diag-milestones-enabled" checked>
-                <span>Show medication overlays</span>
-              </label>
-              <div class="diag-milestone-bulk">
-                <button type="button" class="btn ghost btn-sm" id="diag-milestones-all">All</button>
-                <button type="button" class="btn ghost btn-sm" id="diag-milestones-none">None</button>
+          <details id="diagnostics-milestone-controls" class="diag-milestone-controls hidden">
+            <summary class="diag-milestone-summary">
+              <span class="diag-milestone-summary-label">Medication overlays</span>
+              <span class="diag-milestone-summary-meta muted small" id="diag-milestones-summary-meta"></span>
+            </summary>
+            <div class="diag-milestone-controls-body">
+              <div class="diag-milestone-controls-head">
+                <label class="diag-milestone-master">
+                  <input type="checkbox" id="diag-milestones-enabled" checked>
+                  <span>Show on charts</span>
+                </label>
+                <div class="diag-milestone-bulk">
+                  <button type="button" class="btn ghost btn-sm" id="diag-milestones-all">All</button>
+                  <button type="button" class="btn ghost btn-sm" id="diag-milestones-none">None</button>
+                </div>
               </div>
+              <div id="diag-milestones-list" class="diag-milestones-list" role="group" aria-label="Medication overlay selection"></div>
             </div>
-            <p class="muted small diag-milestone-hint">Select overlays for the charts.</p>
-            <div id="diag-milestones-list" class="diag-milestones-list" role="group" aria-label="Medication overlay selection"></div>
-          </div>
+          </details>
           <div id="diagnostics-charts" class="diagnostics-charts">
             <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Patient profile.</p>
           </div>
