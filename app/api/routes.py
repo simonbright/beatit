@@ -379,6 +379,8 @@ async def _finalize_clinical_report_document(
     if lab_import is not None and updated.get("handling"):
         lab_import["handling"] = updated["handling"]
         lab_import["flagged"] = updated["handling"].get("status") == "flagged"
+        if lab_import.get("already_on_profile"):
+            lab_import["flagged"] = False
     return updated, lab_import
 
 
