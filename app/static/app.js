@@ -779,6 +779,44 @@ function syncStickyHeaderOffset() {
   document.documentElement.style.setProperty("--sticky-header-offset", `${h}px`);
 }
 
+function initHeaderCollapse() {
+  const mq = window.matchMedia("(max-width: 600px)");
+  const expandAt = 8;
+  const collapseAt = 40;
+  let compact = false;
+
+  const apply = (next) => {
+    if (!mq.matches) {
+      if (document.body.classList.contains("header-compact")) {
+        document.body.classList.remove("header-compact");
+        compact = false;
+        syncStickyHeaderOffset();
+      }
+      return;
+    }
+    if (next === compact) return;
+    compact = next;
+    document.body.classList.toggle("header-compact", next);
+    syncStickyHeaderOffset();
+  };
+
+  const onScroll = () => {
+    if (!mq.matches) {
+      apply(false);
+      return;
+    }
+    const y = window.scrollY || window.pageYOffset || 0;
+    if (!compact && y > collapseAt) apply(true);
+    else if (compact && y <= expandAt) apply(false);
+  };
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+  if (typeof mq.addEventListener === "function") mq.addEventListener("change", onScroll);
+  else if (typeof mq.addListener === "function") mq.addListener(onScroll);
+  onScroll();
+  syncStickyHeaderOffset();
+}
+
 function scrollToElement(element, { behavior = "smooth", offset = null } = {}) {
   if (!element) return;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -5454,6 +5492,7 @@ function bootstrapUi() {
   initReferenceNavigation();
   updateHomeToolbar();
   initSectionSubnav();
+  initHeaderCollapse();
   syncStickyHeaderOffset();
   window.addEventListener("resize", syncStickyHeaderOffset);
 }
