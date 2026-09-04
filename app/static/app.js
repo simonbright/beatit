@@ -7658,12 +7658,16 @@ function applyDiagMilestonePrefsAndRedraw() {
   const prefs = state.diagMilestonePrefs || { enabled: true, selected: [] };
   const profile = state.patientProfile || null;
   const allEvents = medicationChartEvents(profile?.medications);
-  prefs.seen = allEvents.map((e) => e.id);
-  saveDiagMilestonePrefs(state.activePatientId, prefs);
-  renderDiagnosticsMilestoneControls(profile, allEvents);
   const series = resolveDiagnosticSeries(profile, {
     diagnostic_series: state.diagnosticSeriesCache,
   });
+  const span = seriesDateSpan(series);
+  const inSpan = span
+    ? filterMilestonesForRange(allEvents, span.start, span.end, 0)
+    : allEvents;
+  prefs.seen = inSpan.map((e) => e.id);
+  saveDiagMilestonePrefs(state.activePatientId, prefs);
+  renderDiagnosticsMilestoneControls(profile, allEvents, series);
   renderDiagnosticsCharts(profile, series, { skipControls: true });
 }
 
