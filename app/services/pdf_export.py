@@ -644,11 +644,15 @@ def _sparkline_png_bytes(
     if not points:
         return None
 
+    # One point per calendar day (last reading that day wins)
+    by_day: dict[str, tuple[str, float, str | None]] = {}
+    for date, value, status in points:
+        by_day[date] = (date, value, status)
+    points = [by_day[k] for k in sorted(by_day)]
+
     # Single-point cards are rendered as text rows in the PDF — no PNG needed.
     if len(points) == 1:
         return None
-
-    points.sort(key=lambda p: p[0])
 
     from PIL import Image, ImageDraw
 
@@ -712,38 +716,39 @@ def _sparkline_png_bytes(
 
     draw.rectangle((pad_l, pad_t, pad_l + chart_w, pad_t + chart_h), outline=(148, 163, 184), width=2)
 
-    # Medication milestones (dashed vertical markers)
+    # Medication milestones — one dashed line per date, stacked labels
     range_events = filter_events_for_range(
         milestones,
         start=points[0][0],
         end=points[-1][0],
-        pad_days=3,
+        pad_days=0,
     )
-    # Also keep events strictly between chart date span (including ends)
     marker_fill = (100, 116, 139)
-    for mi, ev in enumerate(range_events[:6]):
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for ev in range_events:
         d = str(ev.get("date") or "")[:10]
+        if not d:
+            continue
+        by_day.setdefault(d, []).append(ev)
+    for mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
         except ValueError:
             continue
         if day < t_min or day > t_max:
-            # Allow slight outside only if within pad from filter; clamp to edges
-            if day < t_min - 3 or day > t_max + 3:
-                continue
-            day = min(max(day, t_min), t_max)
+            continue
         x = x_for_day(day)
-        # Dashed vertical line
         y0, y1 = pad_t + 2, pad_t + chart_h - 2
         dash = 10
         yy = y0
         while yy < y1:
             draw.line((x, yy, x, min(yy + dash, y1)), fill=marker_fill, width=2)
             yy += dash * 2
-        label = _safe_text(str(ev.get("label") or ""))[:48]
-        if label:
-            # Alternate label vertical position to reduce overlap
-            ly = pad_t + 10 + (mi % 3) * 14
+        for li, ev in enumerate(day_events[:3]):
+            label = _safe_text(str(ev.get("label") or ""))[:48]
+            if not label:
+                continue
+            ly = pad_t + 10 + li * 14
             draw.text((x + 4, ly), label, fill=marker_fill, font=font_small, anchor="lt")
 
     if ref_low is not None or ref_high is not None:

@@ -7366,7 +7366,7 @@ function formatMedicationHistory(m) {
 
 function medicationChartEvents(medications) {
   const events = [];
-  const short = (text, max = 42) => {
+  const short = (text, max = 48) => {
     const t = String(text || "").replace(/\s+/g, " ").trim();
     return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
   };
@@ -7374,6 +7374,14 @@ function medicationChartEvents(medications) {
   const dateOnly = (raw) => {
     const s = String(raw || "").slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  const compactDate = (iso) => {
+    const raw = dateOnly(iso);
+    if (!raw) return "";
+    const d = new Date(`${raw}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return raw;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${months[d.getMonth()]} ${d.getDate()}`;
   };
   for (const med of medications || []) {
     const name = String(med.name || "").trim() || "Medication";
@@ -7383,9 +7391,10 @@ function medicationChartEvents(medications) {
       const initial = hist.length
         ? doseBits(hist[0].dosage, hist[0].frequency)
         : doseBits(med.dosage, med.frequency);
+      const body = `Started ${name}${initial ? ` ${initial}` : ""}`;
       events.push({
         date: started,
-        label: short(`Started ${name}${initial ? ` ${initial}` : ""}`),
+        label: short(`${compactDate(started)} · ${body}`),
         kind: "start",
       });
     }
@@ -7398,15 +7407,20 @@ function medicationChartEvents(medications) {
           ? doseBits(hist[i + 1].dosage, hist[i + 1].frequency) || "?"
           : doseBits(med.dosage, med.frequency) || "?";
       const note = String(row.note || "").trim();
+      const body = note ? `${name}: ${note}` : `${name}: ${oldBits} → ${newBits}`;
       events.push({
         date: effective,
-        label: short(note ? `${name}: ${note}` : `${name}: ${oldBits} → ${newBits}`),
+        label: short(`${compactDate(effective)} · ${body}`),
         kind: "dose_change",
       });
     });
     const stopped = dateOnly(med.stopped_at);
     if (stopped && med.status === "stopped") {
-      events.push({ date: stopped, label: short(`Stopped ${name}`), kind: "stop" });
+      events.push({
+        date: stopped,
+        label: short(`${compactDate(stopped)} · Stopped ${name}`),
+        kind: "stop",
+      });
     }
   }
   events.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.label).localeCompare(String(b.label)));
@@ -7419,7 +7433,7 @@ function medicationChartEvents(medications) {
   });
 }
 
-function filterMilestonesForRange(events, start, end, padDays = 3) {
+function filterMilestonesForRange(events, start, end, padDays = 0) {
   if (!events?.length || !start || !end) return [];
   const toDay = (iso) => {
     const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
@@ -8082,30 +8096,21 @@ function applyProfileResponse(data) {
 function resolveDiagnosticSeries(profile, extras = {}) {
   const fromClient = groupDiagnosticsClient(profile || {});
   const fromServer = extras.diagnostic_series;
-  if (!Array.isArray(fromServer) || !fromServer.length) return fromClient;
-  const profileCount = (profile?.diagnostics || []).length;
-  const serverCount = fromServer.reduce(
-    (n, s) => n + Number(s.point_count || (s.readings || []).length || 0),
-    0
-  );
-  // Prefer server series (status + reference bands) when it includes all readings.
-  if (serverCount >= profileCount) return fromServer;
-  // Otherwise merge: keep client points, overlay server refs/status by key.
-  const byKey = new Map(fromServer.map((s) => [String(s.key || s.name || "").toLowerCase(), s]));
-  return fromClient.map((s) => {
-    const server = byKey.get(String(s.key || s.name || "").toLowerCase());
-    if (!server) return s;
-    return {
-      ...s,
-      reference: server.reference || s.reference,
-      status: server.status || s.status,
-      unit: s.unit || server.unit,
-      readings: (s.readings || []).map((r, i) => {
-        const sr = (server.readings || []).find((x) => x.id && r.id && x.id === r.id) || (server.readings || [])[i];
-        return sr?.status ? { ...r, status: sr.status } : r;
-      }),
-    };
-  });
+  // Prefer server series (reference bands + status + date dedupe).
+  if (Array.isArray(fromServer) && fromServer.length) return fromServer;
+  return fromClient;
+}
+
+function dedupeReadingsByDate(readings) {
+  const byDate = new Map();
+  for (const r of [...(readings || [])].sort((a, b) =>
+    String(a.recorded_at || "").localeCompare(String(b.recorded_at || ""))
+  )) {
+    const day = String(r.recorded_at || "").slice(0, 10);
+    if (!day) continue;
+    byDate.set(day, r);
+  }
+  return [...byDate.values()];
 }
 
 function groupDiagnosticsClient(profile) {
@@ -8135,14 +8140,16 @@ function groupDiagnosticsClient(profile) {
   }
   return [...groups.values()]
     .map((g) => {
-      const readings = [...g.readings].sort((a, b) =>
+      const raw = [...g.readings].sort((a, b) =>
         String(a.recorded_at || "").localeCompare(String(b.recorded_at || ""))
       );
+      const readings = dedupeReadingsByDate(raw);
       return {
         ...g,
         readings,
         latest: readings[readings.length - 1] || null,
         point_count: readings.length,
+        raw_count: raw.length,
       };
     })
     .sort((a, b) => {
@@ -8158,14 +8165,15 @@ function groupDiagnosticsClient(profile) {
 }
 
 function weightSeriesFromProfile(profile) {
-  const points = (profile?.measurements || [])
-    .filter((m) => m.weight_kg != null)
-    .map((m) => ({
-      recorded_at: String(m.recorded_at || "").slice(0, 10),
-      value: Number(m.weight_kg),
-      id: m.id,
-    }))
-    .sort((a, b) => String(a.recorded_at || "").localeCompare(String(b.recorded_at || "")));
+  const points = dedupeReadingsByDate(
+    (profile?.measurements || [])
+      .filter((m) => m.weight_kg != null)
+      .map((m) => ({
+        recorded_at: String(m.recorded_at || "").slice(0, 10),
+        value: Number(m.weight_kg),
+        id: m.id,
+      }))
+  ).sort((a, b) => String(a.recorded_at || "").localeCompare(String(b.recorded_at || "")));
   if (!points.length) return null;
   return {
     key: "weight",
@@ -8178,23 +8186,24 @@ function weightSeriesFromProfile(profile) {
 }
 
 function bmiSeriesFromProfile(profile) {
-  const points = (profile?.measurements || [])
-    .map((m) => {
-      const bmi = bmiFor(m.height_cm, m.weight_kg);
-      if (bmi == null) return null;
-      return {
-        recorded_at: String(m.recorded_at || "").slice(0, 10),
-        value: Number(bmi),
-        id: m.id,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => String(a.recorded_at || "").localeCompare(String(b.recorded_at || "")));
-  if (!points.length) return null;
+  const points = dedupeReadingsByDate(
+    (profile?.measurements || [])
+      .map((m) => {
+        const bmi = bmiFor(m.height_cm, m.weight_kg);
+        if (bmi == null) return null;
+        return {
+          recorded_at: String(m.recorded_at || "").slice(0, 10),
+          value: Number(bmi),
+          id: m.id,
+        };
+      })
+      .filter(Boolean)
+  ).sort((a, b) => String(a.recorded_at || "").localeCompare(String(b.recorded_at || "")));
+  if (points.length < 1) return null;
   return {
     key: "bmi",
     name: "BMI",
-    unit: "",
+    unit: null,
     readings: points,
     latest: points[points.length - 1],
     point_count: points.length,
@@ -8291,7 +8300,7 @@ function clientStatusForValue(value, reference) {
 }
 
 function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = null, milestones = null } = {}) {
-  const points = (readings || [])
+  const points = dedupeReadingsByDate(readings || [])
     .map((r) => ({
       date: String(r.recorded_at || "").slice(0, 10),
       value: Number(r.value),
@@ -8326,7 +8335,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
 
   const padX = 32;
   const padTop = 28;
-  const padBottom = 20;
+  const padBottom = 28;
   const w = 360;
   const h = 150;
   const values = points.map((p) => p.value);
@@ -8347,18 +8356,32 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   const coords = points.map((p) => ({ ...p, x: xFor(p.date), y: yFor(p.value) }));
 
   let milestoneLayer = "";
-  const inRange = filterMilestonesForRange(milestones, points[0].date, points[points.length - 1].date, 0).slice(0, 6);
+  const inRange = filterMilestonesForRange(milestones, points[0].date, points[points.length - 1].date, 0);
   if (inRange.length) {
-    milestoneLayer = inRange
-      .map((ev, i) => {
-        const x = xFor(ev.date);
-        if (!Number.isFinite(x)) return "";
-        const ly = padTop + 6 + (i % 3) * 12;
+    const byDay = new Map();
+    for (const ev of inRange) {
+      const d = String(ev.date || "").slice(0, 10);
+      if (!d) continue;
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(ev);
+    }
+    milestoneLayer = [...byDay.entries()]
+      .slice(0, 6)
+      .map(([date, dayEvents], i) => {
+        const x = xFor(date);
+        if (!Number.isFinite(x) || x < padX - 1 || x > w - padX + 1) return "";
+        const labels = dayEvents
+          .slice(0, 3)
+          .map((ev, li) => {
+            const ly = padTop + 8 + li * 11;
+            return `<text x="${(x + 3).toFixed(1)}" y="${ly.toFixed(1)}" fill="#64748b" font-size="8.5" opacity="0.95">${escapeHtml(ev.label)}</text>`;
+          })
+          .join("");
         return `<g class="diag-milestone">
           <line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(1)}" y2="${(h - padBottom).toFixed(1)}" stroke="#64748b" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.75">
-            <title>${escapeHtml(ev.label)} · ${escapeHtml(formatDiagDate(ev.date))}</title>
+            <title>${escapeHtml(dayEvents.map((e) => e.label).join(" · "))}</title>
           </line>
-          <text x="${(x + 3).toFixed(1)}" y="${ly.toFixed(1)}" fill="#64748b" font-size="9" opacity="0.9">${escapeHtml(ev.label)}</text>
+          ${labels}
         </g>`;
       })
       .join("");
@@ -8396,11 +8419,13 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     })
     .join("");
 
-  const dateRow = `<div class="diag-chart-dates" style="grid-template-columns: repeat(${coords.length}, 1fr);">
-    ${coords
-      .map((c) => `<span class="diag-chart-date">${escapeHtml(formatDiagDate(c.date))}</span>`)
-      .join("")}
-  </div>`;
+  // Unique date labels at the true time-scaled X (no duplicate days, no equal-grid skew)
+  const dateLabels = coords
+    .map((c, i) => {
+      const anchor = i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle";
+      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="10" opacity="0.75">${escapeHtml(formatDiagDateAxis(c.date))}</text>`;
+    })
+    .join("");
 
   return `<div class="diag-chart-plot">
     <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
@@ -8408,8 +8433,8 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       ${refLayer}
       <polyline fill="none" stroke="${lineStroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
       ${dots}
+      ${dateLabels}
     </svg>
-    ${dateRow}
   </div>`;
 }
 

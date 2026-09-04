@@ -846,10 +846,22 @@ def recent_journal_for_prompt(
     return rows
 
 
+def _dedupe_readings_by_date(readings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one reading per calendar day (last value that day wins)."""
+    by_date: dict[str, dict[str, Any]] = {}
+    for row in sorted(readings, key=lambda r: str(r.get("recorded_at") or "")):
+        day = str(row.get("recorded_at") or "")[:10]
+        if not day:
+            continue
+        by_date[day] = row
+    return [by_date[k] for k in sorted(by_date)]
+
+
 def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Group diagnostic readings by name (case-insensitive) for charting.
 
     Blood-test series with multiple dated points are sorted first.
+    Same-day duplicates are collapsed (last reading wins) so chart axes stay clean.
     """
     groups: dict[str, dict[str, Any]] = {}
     for row in (profile or {}).get("diagnostics") or []:
@@ -882,10 +894,11 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
         )
     series: list[dict[str, Any]] = []
     for group in groups.values():
-        readings = sorted(
+        raw_readings = sorted(
             group["readings"],
             key=lambda r: str(r.get("recorded_at") or ""),
         )
+        readings = _dedupe_readings_by_date(raw_readings)
         latest = readings[-1] if readings else None
         series.append(
             {
@@ -896,6 +909,7 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
                 "readings": readings,
                 "latest": latest,
                 "point_count": len(readings),
+                "raw_count": len(raw_readings),
             }
         )
 

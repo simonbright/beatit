@@ -28,6 +28,17 @@ def _short_label(text: str, *, max_len: int = 48) -> str:
     return cleaned[: max_len - 1].rstrip() + "…"
 
 
+def _compact_date(iso: str | None) -> str:
+    d = _date_only(iso)
+    if not d:
+        return ""
+    try:
+        dt = datetime.fromisoformat(d)
+    except ValueError:
+        return d
+    return f"{dt.strftime('%b')} {dt.day}"
+
+
 def medication_chart_events(
     medications: list[dict[str, Any]] | None,
     *,
@@ -37,6 +48,7 @@ def medication_chart_events(
 
     Each event: ``{date, label, kind, medication_id, medication_name}``
     where ``kind`` is ``start`` | ``dose_change`` | ``stop``.
+    Labels include a compact date so chart markers stay unambiguous.
     """
     events: list[dict[str, Any]] = []
     for med in medications or []:
@@ -52,11 +64,11 @@ def medication_chart_events(
                 initial = _dose_bits(history[0].get("dosage"), history[0].get("frequency"))
             else:
                 initial = _dose_bits(med.get("dosage"), med.get("frequency"))
-            label = f"Started {name}" + (f" {initial}" if initial else "")
+            body = f"Started {name}" + (f" {initial}" if initial else "")
             events.append(
                 {
                     "date": started,
-                    "label": _short_label(label),
+                    "label": _short_label(f"{_compact_date(started)} · {body}"),
                     "kind": "start",
                     "medication_id": med_id,
                     "medication_name": name,
@@ -75,13 +87,13 @@ def medication_chart_events(
                 new_bits = _dose_bits(med.get("dosage"), med.get("frequency")) or "?"
             note = str(row.get("note") or "").strip()
             if note:
-                label = f"{name}: {note}"
+                body = f"{name}: {note}"
             else:
-                label = f"{name}: {old_bits} → {new_bits}"
+                body = f"{name}: {old_bits} → {new_bits}"
             events.append(
                 {
                     "date": effective,
-                    "label": _short_label(label),
+                    "label": _short_label(f"{_compact_date(effective)} · {body}"),
                     "kind": "dose_change",
                     "medication_id": med_id,
                     "medication_name": name,
@@ -93,14 +105,21 @@ def medication_chart_events(
             events.append(
                 {
                     "date": stopped,
-                    "label": _short_label(f"Stopped {name}"),
+                    "label": _short_label(f"{_compact_date(stopped)} · Stopped {name}"),
                     "kind": "stop",
                     "medication_id": med_id,
                     "medication_name": name,
                 }
             )
 
-    events.sort(key=lambda e: (e.get("date") or "", e.get("kind") or "", e.get("label") or ""))
+    _kind_order = {"stop": 0, "dose_change": 1, "start": 2}
+    events.sort(
+        key=lambda e: (
+            e.get("date") or "",
+            _kind_order.get(str(e.get("kind") or ""), 9),
+            e.get("label") or "",
+        )
+    )
     # De-dupe identical date+label pairs
     seen: set[tuple[str, str]] = set()
     unique: list[dict[str, Any]] = []
