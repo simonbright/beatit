@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -318,8 +319,11 @@ async def propose_diagnostics_from_upload(
     filename: str | None = None,
     llm: LLMClient | None = None,
 ) -> dict[str, Any]:
-    text, meta = extract_med_list_text(
-        content, content_type=content_type, filename=filename
+    text, meta = await asyncio.to_thread(
+        extract_med_list_text,
+        content,
+        content_type=content_type,
+        filename=filename,
     )
     if is_empty_med_extract(text):
         hint = (meta or {}).get("ocr_hint")
@@ -356,11 +360,14 @@ async def propose_diagnostics_from_document(
             raise ValueError(
                 "This document has no extractable text. Re-extract / OCR it in Library first."
             )
-        content = Path(file_path).read_bytes()
+        content = await asyncio.to_thread(Path(file_path).read_bytes)
         filename = Path(file_path).name
         ctype = "application/pdf" if filename.lower().endswith(".pdf") else None
-        text, file_meta = extract_med_list_text(
-            content, content_type=ctype, filename=filename
+        text, file_meta = await asyncio.to_thread(
+            extract_med_list_text,
+            content,
+            content_type=ctype,
+            filename=filename,
         )
         meta.update(file_meta or {})
         if is_empty_med_extract(text):

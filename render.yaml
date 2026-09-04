@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 75
     healthCheckPath: /api/health
     disk:
       name: beatit-data
