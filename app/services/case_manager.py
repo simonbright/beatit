@@ -411,6 +411,12 @@ def delete_patient_diagnostic(patient_id: str, diagnostic_id: str) -> bool:
 JOURNAL_KINDS = frozenset({"symptom", "feeling", "medication", "note"})
 
 JOURNAL_PRESETS = [
+    # Positive first — so a day can read headache → med → better
+    {"label": "Feeling good", "kind": "feeling"},
+    {"label": "Better", "kind": "feeling"},
+    {"label": "OK / normal", "kind": "feeling"},
+    {"label": "Energetic", "kind": "feeling"},
+    {"label": "Pain-free", "kind": "feeling"},
     {"label": "Weak", "kind": "feeling"},
     {"label": "Headache", "kind": "symptom"},
     {"label": "Nauseous", "kind": "symptom"},

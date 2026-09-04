@@ -8163,6 +8163,12 @@ function formatJournalListRow(j) {
 
 function defaultJournalPresets() {
   return [
+    // Positive first — so a day can read headache → med → better
+    { label: "Feeling good", kind: "feeling" },
+    { label: "Better", kind: "feeling" },
+    { label: "OK / normal", kind: "feeling" },
+    { label: "Energetic", kind: "feeling" },
+    { label: "Pain-free", kind: "feeling" },
     { label: "Weak", kind: "feeling" },
     { label: "Headache", kind: "symptom" },
     { label: "Nauseous", kind: "symptom" },
@@ -8176,6 +8182,14 @@ function defaultJournalPresets() {
     { label: "Note", kind: "note" },
   ];
 }
+
+const POSITIVE_JOURNAL_LABELS = new Set([
+  "feeling good",
+  "better",
+  "ok / normal",
+  "energetic",
+  "pain-free",
+]);
 
 function ensureJournalChips() {
   const feelingEl = document.getElementById("journal-feeling-chips");
@@ -8205,9 +8219,22 @@ function updateJournalDraftUi() {
     btn.classList.toggle("is-selected", String(draft.severity || "") === btn.dataset.sev);
   });
   const severityRow = document.getElementById("journal-severity-row");
+  const severityLabel = severityRow?.querySelector(":scope > .muted, :scope > span");
   if (severityRow) {
     const show = draft.kind === "symptom" || draft.kind === "feeling";
     severityRow.classList.toggle("hidden", !show);
+    const positive = POSITIVE_JOURNAL_LABELS.has(String(draft.label || "").toLowerCase());
+    if (severityLabel) {
+      severityLabel.textContent = positive ? "How good (optional)" : "Severity";
+    }
+    document.querySelectorAll(".journal-sev-btn").forEach((btn) => {
+      const n = btn.dataset.sev;
+      if (positive) {
+        btn.title = n === "1" ? "A bit better" : n === "5" ? "Great" : "";
+      } else {
+        btn.title = n === "1" ? "Mild" : n === "3" ? "Moderate" : n === "5" ? "Severe" : "";
+      }
+    });
   }
   const hint = document.getElementById("journal-selected-hint");
   if (hint) {
