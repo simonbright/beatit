@@ -7423,7 +7423,13 @@ function medicationChartEvents(medications) {
       });
     }
   }
-  events.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.label).localeCompare(String(b.label)));
+  const kindOrder = { stop: 0, dose_change: 1, start: 2 };
+  events.sort(
+    (a, b) =>
+      String(a.date).localeCompare(String(b.date)) ||
+      (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9) ||
+      String(a.label).localeCompare(String(b.label))
+  );
   const seen = new Set();
   return events.filter((e) => {
     const key = `${e.date}|${e.label}`;
