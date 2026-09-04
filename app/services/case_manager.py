@@ -156,6 +156,7 @@ def _empty_profile() -> dict[str, Any]:
         "diagnostics": [],
         "journal": [],
         "medications": [],
+        "medication_safety": None,
     }
 
 
@@ -193,20 +194,36 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
         )
     medications = data.get("medications") or []
     if isinstance(medications, list):
-        profile["medications"] = _sort_medications(medications)
+        from app.services.medication_identity import annotate_medications
+
+        profile["medications"] = annotate_medications(_sort_medications(medications))
+    safety = data.get("medication_safety")
+    if isinstance(safety, dict):
+        profile["medication_safety"] = safety
     return profile
 
 
 def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, Any]:
     d = _patient_dir(patient_id)
     d.mkdir(parents=True, exist_ok=True)
+    meds_out: list[dict[str, Any]] = []
+    for raw in profile.get("medications") or []:
+        if not isinstance(raw, dict):
+            continue
+        med = dict(raw)
+        # Persist identity snapshot when present
+        for key in ("identity_status", "identity_match", "identity_score"):
+            if key in med and med[key] is None:
+                med.pop(key, None)
+        meds_out.append(med)
     cleaned = {
         "date_of_birth": profile.get("date_of_birth") or None,
         "gender": profile.get("gender") or None,
         "measurements": profile.get("measurements") or [],
         "diagnostics": profile.get("diagnostics") or [],
         "journal": profile.get("journal") or [],
-        "medications": profile.get("medications") or [],
+        "medications": meds_out,
+        "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     return get_patient_profile(patient_id)
@@ -543,6 +560,7 @@ def add_patient_medication(
     conditions: Any = None,
     notes: str | None = None,
     started_at: str | None = None,
+    ended_at: str | None = None,
 ) -> dict[str, Any] | None:
     from uuid import uuid4
 
@@ -552,6 +570,10 @@ def add_patient_medication(
     cleaned_name = " ".join((name or "").strip().split())
     if not cleaned_name:
         raise ValueError("Medication name is required")
+    start = _normalize_med_date(started_at)
+    end = _normalize_med_date(ended_at)
+    if start and end and end < start:
+        raise ValueError("End date must be on or after the start date")
     now = _now_iso()
     entry = {
         "id": str(uuid4()),
@@ -560,13 +582,16 @@ def add_patient_medication(
         "frequency": (frequency or "").strip() or None,
         "conditions": _normalize_conditions(conditions),
         "notes": (notes or "").strip() or None,
-        "status": "active",
-        "started_at": _normalize_med_date(started_at),
-        "stopped_at": None,
+        "status": "stopped" if end else "active",
+        "started_at": start,
+        "stopped_at": end,
         "created_at": now,
         "updated_at": now,
         "dosage_history": [],
     }
+    from app.services.medication_identity import apply_identity_fields
+
+    apply_identity_fields(entry)
     profile = get_patient_profile(patient_id)
     profile.setdefault("medications", []).append(entry)
     saved = save_patient_profile(patient_id, profile)
@@ -583,11 +608,13 @@ def update_patient_medication(
     conditions: Any = ...,
     notes: str | None = ...,  # type: ignore[assignment]
     started_at: str | None = ...,  # type: ignore[assignment]
+    ended_at: str | None = ...,  # type: ignore[assignment]
     history_note: str | None = None,
 ) -> dict[str, Any] | None:
     """Update a medication. Dosage/frequency changes append to dosage_history.
 
     Use ellipsis (...) as sentinel for “field not provided”.
+    Setting ended_at stops the medication; clearing it reopens as active.
     """
     reg = load_registry()
     if not _find_patient(reg, patient_id):
@@ -616,6 +643,15 @@ def update_patient_medication(
         med["notes"] = (notes or "").strip() or None
     if started_at is not ...:
         med["started_at"] = _normalize_med_date(started_at)
+    if ended_at is not ...:
+        end = _normalize_med_date(ended_at)
+        med["stopped_at"] = end
+        med["status"] = "stopped" if end else "active"
+
+    start = med.get("started_at")
+    end = med.get("stopped_at")
+    if start and end and str(end) < str(start):
+        raise ValueError("End date must be on or after the start date")
 
     dosage_changed = dosage is not ... and med.get("dosage") != old_dosage
     frequency_changed = frequency is not ... and med.get("frequency") != old_frequency
@@ -632,6 +668,9 @@ def update_patient_medication(
         med["dosage_history"] = history
 
     med["updated_at"] = _now_iso()
+    from app.services.medication_identity import apply_identity_fields
+
+    apply_identity_fields(med)
     meds[idx] = med
     profile["medications"] = meds
     saved = save_patient_profile(patient_id, profile)
@@ -976,6 +1015,8 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
                 bits.append("for " + ", ".join(str(c) for c in m["conditions"]))
             if m.get("started_at"):
                 bits.append(f"since {m['started_at']}")
+            if m.get("stopped_at"):
+                bits.append(f"ended {m['stopped_at']}")
             hist = m.get("dosage_history") or []
             if hist:
                 last = hist[-1]

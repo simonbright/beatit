@@ -15,6 +15,10 @@ from app.services.medication_import import (
     clamp_proposed_medication,
     propose_medications_from_upload,
 )
+from app.services.medication_safety import (
+    get_medication_safety,
+    run_medication_safety_review,
+)
 from app.ingest.imaging import ingest_imaging_file, is_allowed_imaging_upload
 from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
@@ -2402,6 +2406,7 @@ class PatientMedicationCreateRequest(BaseModel):
     conditions: list[str] | str | None = None
     notes: str | None = Field(default=None, max_length=500)
     started_at: str | None = Field(default=None, max_length=20)
+    ended_at: str | None = Field(default=None, max_length=20)
 
 
 class PatientMedicationUpdateRequest(BaseModel):
@@ -2411,6 +2416,7 @@ class PatientMedicationUpdateRequest(BaseModel):
     conditions: list[str] | str | None = None
     notes: str | None = Field(default=None, max_length=500)
     started_at: str | None = Field(default=None, max_length=20)
+    ended_at: str | None = Field(default=None, max_length=20)
     history_note: str | None = Field(default=None, max_length=200)
 
 
@@ -2425,10 +2431,42 @@ class PatientMedicationConfirmItem(BaseModel):
     conditions: list[str] | str | None = None
     notes: str | None = Field(default=None, max_length=500)
     started_at: str | None = Field(default=None, max_length=20)
+    ended_at: str | None = Field(default=None, max_length=20)
 
 
 class PatientMedicationConfirmRequest(BaseModel):
     medications: list[PatientMedicationConfirmItem] = Field(default_factory=list, max_length=80)
+
+
+@router.get("/patients/{patient_id}/medications/safety-review")
+async def api_get_medication_safety_review(patient_id: str):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    saved = get_medication_safety(patient_id)
+    profile = get_patient_profile(patient_id)
+    return {
+        "medication_safety": saved,
+        "profile": profile,
+    }
+
+
+@router.post("/patients/{patient_id}/medications/safety-review")
+async def api_run_medication_safety_review(patient_id: str):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    try:
+        saved = await run_medication_safety_review(patient_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    profile = get_patient_profile(patient_id)
+    return {
+        "medication_safety": saved,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
 
 
 @router.post("/patients/{patient_id}/medications/import")
@@ -2478,6 +2516,7 @@ async def api_confirm_patient_medications_import(
                 conditions=clamped.get("conditions"),
                 notes=clamped.get("notes"),
                 started_at=clamped.get("started_at"),
+                ended_at=clamped.get("ended_at"),
             )
         except ValueError as exc:
             errors.append(str(exc))
@@ -2509,6 +2548,7 @@ async def api_add_patient_medication(patient_id: str, body: PatientMedicationCre
             conditions=body.conditions,
             notes=body.notes,
             started_at=body.started_at,
+            ended_at=body.ended_at,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2543,6 +2583,8 @@ async def api_update_patient_medication(
         kwargs["notes"] = body.notes
     if "started_at" in fields_set:
         kwargs["started_at"] = body.started_at
+    if "ended_at" in fields_set:
+        kwargs["ended_at"] = body.ended_at
     try:
         entry = update_patient_medication(patient_id, medication_id, **kwargs)
     except ValueError as exc:

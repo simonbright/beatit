@@ -31,6 +31,7 @@ Return a JSON array. Each object may include:
 - conditions (array of short strings, or null)
 - notes (string or null)
 - started_at (YYYY-MM-DD or null)
+- ended_at (YYYY-MM-DD or null; when the medication was stopped or the course ended)
 
 Rules:
 - Only medications the patient takes or is prescribed. Skip vitamins only if clearly not listed as meds.
@@ -81,6 +82,17 @@ def clamp_proposed_medication(raw: Any) -> dict[str, Any] | None:
             started_at = _normalize_med_date(str(started_raw))
         except ValueError:
             started_at = None
+    ended_raw = raw.get("ended_at")
+    if ended_raw in (None, ""):
+        ended_raw = raw.get("stopped_at")
+    ended_at = None
+    if ended_raw not in (None, ""):
+        try:
+            ended_at = _normalize_med_date(str(ended_raw))
+        except ValueError:
+            ended_at = None
+    if started_at and ended_at and ended_at < started_at:
+        ended_at = None
     conditions = _normalize_conditions(raw.get("conditions"))
     return {
         "name": name,
@@ -89,6 +101,7 @@ def clamp_proposed_medication(raw: Any) -> dict[str, Any] | None:
         "conditions": conditions,
         "notes": _clamp_str(raw.get("notes"), 500),
         "started_at": started_at,
+        "ended_at": ended_at,
     }
 
 

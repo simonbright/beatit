@@ -44,18 +44,11 @@
         </button>
         <input type="file" id="input-patient-photo" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
         <div class="header-patient-meta">
-          <h2 class="header-patient-name" id="header-patient-name">No patient</h2>
-          <p class="header-patient-sub" id="header-patient-sub"></p>
-          <div class="header-patient-controls">
-            <label class="header-select-wrap hidden" id="header-patient-select-wrap">
-              <span class="sr-only">Patient</span>
-              <select id="header-patient-select" aria-label="Switch patient"></select>
-            </label>
-            <label class="header-select-wrap" id="header-case-select-wrap">
-              <span>Case</span>
-              <select id="header-case-select" aria-label="Switch case"></select>
-            </label>
-          </div>
+          <button type="button" class="header-patient-switcher" id="btn-header-switch-patient" title="Switch patient or case" aria-label="Switch patient or case">
+            <h2 class="header-patient-name" id="header-patient-name">No patient</h2>
+            <p class="header-patient-sub" id="header-patient-sub"></p>
+            <span class="header-patient-switch-hint muted small">Tap to switch</span>
+          </button>
         </div>
       </div>
       <div class="header-actions">
@@ -95,6 +88,17 @@
           </svg>
         </button>
       </div>
+    </div>
+    <div class="header-context-bar" id="header-context-bar" aria-label="Patient and case">
+      <label class="header-select-wrap hidden" id="header-patient-select-wrap">
+        <span>Patient</span>
+        <select id="header-patient-select" aria-label="Switch patient"></select>
+      </label>
+      <label class="header-select-wrap" id="header-case-select-wrap">
+        <span>Case</span>
+        <select id="header-case-select" aria-label="Switch case"></select>
+      </label>
+      <button type="button" class="btn ghost btn-sm header-switch-btn" id="btn-open-switch-case" title="Browse all patients and cases">Browse</button>
     </div>
     <nav class="header-nav" aria-label="Main navigation">
       <div class="tabs header-tabs header-tabs-icons" role="tablist">
@@ -300,8 +304,12 @@
             <div>
               <h3>Medications</h3>
               <p class="muted small">Active prescriptions for this patient. Dosage changes keep a history.</p>
+              <p class="muted small hidden" id="med-safety-home-status" role="status"></p>
             </div>
-            <button type="button" class="btn ghost btn-sm" id="btn-medications-settings">Manage in Settings</button>
+            <div class="medications-home-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-med-safety-home">Health oversight</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-medications-settings">Manage in Settings</button>
+            </div>
           </div>
           <div id="medications-home-list" class="medications-home-list">
             <p class="muted small">No active medications yet.</p>
@@ -537,6 +545,18 @@
 
     <!-- CUSTOM TASKS -->
     <section id="panel-custom-tasks" class="panel">
+      <div class="card med-safety-card" id="med-safety-card">
+        <div class="row-between wrap">
+          <div>
+            <h3>Health oversight</h3>
+            <p class="muted small">Testing check for possible drug interactions (including ad hoc journal meds like pain relief) and dosage that may be too high or too low. If nothing concerning is found, the report says so.</p>
+          </div>
+          <button type="button" class="btn primary" id="btn-med-safety-review">Run safety review</button>
+        </div>
+        <p class="muted small med-safety-disclaimer">Research support only — verify with a pharmacist or clinician before changing medications.</p>
+        <div id="med-safety-result" class="med-safety-result hidden" aria-live="polite"></div>
+      </div>
+
       <div class="card custom-tasks-card">
         <div class="row-between wrap">
           <h3>Custom Tasks</h3>
@@ -1119,6 +1139,9 @@
           </label>
           <label for="med-started">Started
             <input type="date" id="med-started">
+          </label>
+          <label for="med-ended">Ended
+            <input type="date" id="med-ended" title="Optional. Leave blank if still taking. Setting an end date marks the medication stopped.">
           </label>
           <label for="med-conditions" class="med-span-2">Conditions / illnesses
             <input type="text" id="med-conditions" maxlength="240" placeholder="Optional — comma-separated, e.g. high cholesterol, cardiac risk" autocomplete="off">
