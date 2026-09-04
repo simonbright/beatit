@@ -36,7 +36,8 @@ def _compact_date(iso: str | None) -> str:
         dt = datetime.fromisoformat(d)
     except ValueError:
         return d
-    return f"{dt.strftime('%b')} {dt.day}"
+    # Always include year — starts can be many years before the chart range
+    return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
 
 
 def _name_key(name: Any) -> str:

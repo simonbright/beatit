@@ -7429,7 +7429,8 @@ function medicationChartEvents(medications) {
     const d = new Date(`${raw}T12:00:00`);
     if (Number.isNaN(d.getTime())) return raw;
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return `${months[d.getMonth()]} ${d.getDate()}`;
+    // Always include year — med starts can predate the chart by years
+    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   };
   const nameKey = (name) => String(name || "").toLowerCase().replace(/\s+/g, " ").trim();
   const dayMs = (iso) => {
@@ -7608,22 +7609,41 @@ function visibleDiagMilestones(allEvents, prefs) {
   return (allEvents || []).filter((e) => selected.has(e.id));
 }
 
-function renderDiagnosticsMilestoneControls(profile, allEvents) {
+function seriesDateSpan(seriesList) {
+  let min = null;
+  let max = null;
+  for (const s of seriesList || []) {
+    for (const r of s.readings || []) {
+      const d = String(r.recorded_at || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+      if (!min || d < min) min = d;
+      if (!max || d > max) max = d;
+    }
+  }
+  return min && max ? { start: min, end: max } : null;
+}
+
+function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = []) {
   const wrap = document.getElementById("diagnostics-milestone-controls");
   const list = document.getElementById("diag-milestones-list");
   const enabledEl = document.getElementById("diag-milestones-enabled");
   if (!wrap || !list || !enabledEl) return;
-  if (!allEvents.length) {
+  const span = seriesDateSpan(seriesList);
+  // Only list overlays that can land on current charts (drops ancient starts outside the labs range)
+  const events = span
+    ? filterMilestonesForRange(allEvents, span.start, span.end, 0)
+    : allEvents;
+  if (!events.length) {
     wrap.classList.add("hidden");
     state.diagMilestonePrefs = { enabled: true, selected: [] };
     return;
   }
   wrap.classList.remove("hidden");
-  const prefs = loadDiagMilestonePrefs(state.activePatientId, allEvents);
+  const prefs = loadDiagMilestonePrefs(state.activePatientId, events);
   state.diagMilestonePrefs = prefs;
   enabledEl.checked = !!prefs.enabled;
   wrap.classList.toggle("is-disabled", !prefs.enabled);
-  list.innerHTML = allEvents
+  list.innerHTML = events
     .map((ev) => {
       const checked = (prefs.selected || []).includes(ev.id);
       return `<label class="diag-milestone-chip${checked ? "" : " is-off"}" title="${escapeHtml(ev.label)}">
@@ -8253,13 +8273,16 @@ function renderJournalHome(profile, series) {
 
   const entries = profile.journal || [];
   if (!entries.length) {
-    recentEl.innerHTML = `<p class="muted small">Nothing logged yet — tap a chip and Log now.</p>`;
+    recentEl.innerHTML = `<p class="muted small">Nothing logged yet — use the heart to log.</p>`;
   } else {
     recentEl.innerHTML = entries
-      .slice(0, 10)
+      .slice(0, 4)
       .map((j) => {
         const sev = j.severity != null ? ` · ${j.severity}/5` : "";
-        const text = j.text ? ` · ${escapeHtml(j.text)}` : "";
+        const rawText = String(j.text || "").trim();
+        const shortText =
+          rawText.length > 72 ? `${rawText.slice(0, 71)}…` : rawText;
+        const text = shortText ? ` · ${escapeHtml(shortText)}` : "";
         return `<div class="journal-recent-row">
           <div class="journal-recent-main">
             <span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span>
@@ -8272,7 +8295,7 @@ function renderJournalHome(profile, series) {
       .join("");
   }
 
-  const cards = series || [];
+  const cards = (series || []).slice(0, 3);
   if (!cards.length) {
     chartsEl.innerHTML = "";
     return;
@@ -8290,7 +8313,7 @@ function renderJournalHome(profile, series) {
           <span class="muted small">${escapeHtml(latestLabel)}</span>
         </div>
         ${buildSparklineSvg(s.readings || [], { stroke: "var(--accent-warm, var(--accent))" })}
-        <p class="journal-chart-meta">${escapeHtml(s.kind || "note")} · ${s.entry_count || 0} log${(s.entry_count || 0) === 1 ? "" : "s"} · ${unitLabel}</p>
+        <p class="journal-chart-meta">${escapeHtml(s.kind || "note")} · ${s.entry_count || 0} log${(s.entry_count || 0) === 1 ? "" : "s"}</p>
       </article>`;
     })
     .join("");
@@ -8700,16 +8723,19 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   const cards = [...bloodFirst, ...extras];
   const allEvents = medicationChartEvents(profile?.medications);
   if (!opts.skipControls) {
-    renderDiagnosticsMilestoneControls(profile, allEvents);
+    renderDiagnosticsMilestoneControls(profile, allEvents, cards);
   }
   if (!cards.length) {
     wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
     return;
   }
 
-  const prefs = state.diagMilestonePrefs || loadDiagMilestonePrefs(state.activePatientId, allEvents);
-  const milestones =
-    opts.milestones || visibleDiagMilestones(allEvents, prefs);
+  const span = seriesDateSpan(cards);
+  const inSpan = span
+    ? filterMilestonesForRange(allEvents, span.start, span.end, 0)
+    : allEvents;
+  const prefs = state.diagMilestonePrefs || loadDiagMilestonePrefs(state.activePatientId, inSpan);
+  const milestones = opts.milestones || visibleDiagMilestones(inSpan, prefs);
 
   wrap.innerHTML = cards
     .map((s) => {
