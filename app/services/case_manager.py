@@ -614,11 +614,14 @@ def update_patient_medication(
     started_at: str | None = ...,  # type: ignore[assignment]
     ended_at: str | None = ...,  # type: ignore[assignment]
     history_note: str | None = None,
+    effective_at: str | None = None,
 ) -> dict[str, Any] | None:
     """Update a medication. Dosage/frequency changes append to dosage_history.
 
     Use ellipsis (...) as sentinel for “field not provided”.
     Setting ended_at stops the medication; clearing it reopens as active.
+    ``effective_at`` is the clinical date of a dose/frequency change (YYYY-MM-DD);
+    defaults to today when omitted.
     """
     reg = load_registry()
     if not _find_patient(reg, patient_id):
@@ -660,17 +663,18 @@ def update_patient_medication(
     dosage_changed = dosage is not ... and med.get("dosage") != old_dosage
     frequency_changed = frequency is not ... and med.get("frequency") != old_frequency
     if dosage_changed or frequency_changed:
+        effective = _normalize_med_date(effective_at) or datetime.now().date().isoformat()
         history = list(med.get("dosage_history") or [])
         history.append(
             {
                 "dosage": old_dosage,
                 "frequency": old_frequency,
                 "changed_at": _now_iso(),
+                "effective_at": effective,
                 "note": (history_note or "").strip() or None,
             }
         )
         med["dosage_history"] = history
-
     med["updated_at"] = _now_iso()
     from app.services.medication_identity import apply_identity_fields
 

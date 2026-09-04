@@ -29,6 +29,11 @@ def _safe_text(text: str) -> str:
         "\xa0": " ",
         "\u00d7": "x",
         "\u2192": "->",
+        "\u2265": ">=",
+        "\u2264": "<=",
+        "\u00b5": "u",
+        "\u03bc": "u",
+        "\u2212": "-",
     }
     for src, dst in replacements.items():
         text = text.replace(src, dst)
@@ -514,12 +519,13 @@ def _expand_appendix_with_scope_documents(
     return expanded
 
 
-def _format_diag_date_label(iso: str | None) -> str:
+def _format_diag_date_label(iso: str | None, *, compact: bool = False) -> str:
     raw = str(iso or "")[:10]
     dt = _parse_iso_datetime(raw)
     if not dt:
         return raw or "-"
-    # Use day without leading zero via manual format (portable)
+    if compact:
+        return f"{dt.strftime('%b')} '{str(dt.year)[2:]}"
     return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
 
 
@@ -577,25 +583,27 @@ def _chart_font_paths() -> tuple[Path | None, Path | None]:
     return reg, bld
 
 
-def _load_chart_fonts() -> tuple[Any, Any, Any, Any]:
+def _load_chart_fonts(*, compact: bool = False) -> tuple[Any, Any, Any, Any]:
     """Return (title, value, label, small) Pillow fonts sized for print clarity."""
     from PIL import ImageFont
 
     regular, bold = _chart_font_paths()
+    # Compact = denser multi-chart PDF pages
+    sizes = (36, 64, 28, 24) if compact else (48, 96, 40, 32)
     try:
         if bold and regular:
             return (
-                ImageFont.truetype(str(bold), 52),
-                ImageFont.truetype(str(bold), 110),
-                ImageFont.truetype(str(bold), 44),
-                ImageFont.truetype(str(regular), 36),
+                ImageFont.truetype(str(bold), sizes[0]),
+                ImageFont.truetype(str(bold), sizes[1]),
+                ImageFont.truetype(str(bold), sizes[2]),
+                ImageFont.truetype(str(regular), sizes[3]),
             )
         if regular:
             return (
-                ImageFont.truetype(str(regular), 52),
-                ImageFont.truetype(str(regular), 110),
-                ImageFont.truetype(str(regular), 44),
-                ImageFont.truetype(str(regular), 36),
+                ImageFont.truetype(str(regular), sizes[0]),
+                ImageFont.truetype(str(regular), sizes[1]),
+                ImageFont.truetype(str(regular), sizes[2]),
+                ImageFont.truetype(str(regular), sizes[3]),
             )
     except OSError:
         pass
@@ -606,15 +614,18 @@ def _load_chart_fonts() -> tuple[Any, Any, Any, Any]:
 def _sparkline_png_bytes(
     readings: list[dict[str, Any]],
     *,
-    width: int = 1800,
-    height: int = 640,
+    width: int = 1600,
+    height: int = 360,
     stroke: tuple[int, int, int] = (14, 116, 144),
     reference: dict[str, Any] | None = None,
     series_status: str | None = None,
     title: str | None = None,
     unit: str | None = None,
+    milestones: list[dict[str, Any]] | None = None,
 ) -> bytes | None:
     """Render a print-quality diagnostic chart PNG for embedding in the PDF."""
+    from app.services.medication_events import filter_events_for_range
+
     points: list[tuple[str, float, str | None]] = []
     for row in readings or []:
         date = str(row.get("recorded_at") or "")[:10]
@@ -633,18 +644,24 @@ def _sparkline_png_bytes(
     if not points:
         return None
 
+    # Single-point cards are rendered as text rows in the PDF — no PNG needed.
+    if len(points) == 1:
+        return None
+
+    points.sort(key=lambda p: p[0])
+
     from PIL import Image, ImageDraw
 
     line_stroke = _status_rgb(series_status or points[-1][2], stroke)
-    font_title, font_value, font_label, font_small = _load_chart_fonts()
+    font_title, _font_value, font_label, font_small = _load_chart_fonts(compact=True)
 
     img = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    pad_l, pad_r, pad_t, pad_b = 80, 100, 48, 100
+    pad_l, pad_r, pad_t, pad_b = 48, 72, 14, 48
     if title:
-        draw.text((pad_l, 16), _safe_text(title), fill=(15, 23, 42), font=font_title, anchor="lt")
-        pad_t = 84
+        draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42), font=font_title, anchor="lt")
+        pad_t = 44
 
     chart_w = width - pad_l - pad_r
     chart_h = height - pad_t - pad_b
@@ -663,98 +680,218 @@ def _sparkline_png_bytes(
         except (TypeError, ValueError):
             ref_high = None
 
-    if len(points) == 1:
-        date, value, status = points[0]
-        color = _status_rgb(status, line_stroke)
-        label = _format_diag_value_label(value)
-        if unit:
-            label = f"{label} {unit}"
-        date_label = _safe_text(_format_diag_date_label(date))
-        status_label = (status or "unknown").capitalize()
-        cx, cy = width / 2, pad_t + chart_h / 2 - 24
+    values = [p[1] for p in points]
+    vmin, vmax = min(values), max(values)
+    if ref_low is not None:
+        vmin = min(vmin, ref_low)
+    if ref_high is not None:
+        vmax = max(vmax, ref_high)
+    # Extra headroom so value labels above peaks are not clipped
+    pad = (vmax - vmin) * 0.22 or abs(vmax) * 0.12 or 0.2
+    vmin -= pad * 0.45
+    vmax += pad
+    span = vmax - vmin or 1.0
 
-        badge_w, badge_h = 280, 64
-        bx0, by0 = cx - badge_w / 2, cy + 90
-        draw.rounded_rectangle((bx0, by0, bx0 + badge_w, by0 + badge_h), radius=16, fill=color)
-        draw.text((cx, cy - 10), label, fill=color, font=font_value, anchor="mm")
-        draw.text((cx, cy + 70), date_label, fill=(51, 65, 85), font=font_label, anchor="mm")
-        draw.text((cx, by0 + badge_h / 2), status_label, fill=(255, 255, 255), font=font_label, anchor="mm")
-        if reference and reference.get("label"):
-            draw.text(
-                (cx, by0 + badge_h + 36),
-                _safe_text(f"Reference: {reference['label']}"),
-                fill=(71, 85, 105),
-                font=font_small,
-                anchor="mm",
-            )
-    else:
-        values = [p[1] for p in points]
-        vmin, vmax = min(values), max(values)
-        if ref_low is not None:
-            vmin = min(vmin, ref_low)
-        if ref_high is not None:
-            vmax = max(vmax, ref_high)
-        pad = (vmax - vmin) * 0.14 or abs(vmax) * 0.1 or 0.2
-        vmin -= pad
-        vmax += pad
-        span = vmax - vmin or 1.0
+    def y_for(val: float) -> float:
+        return pad_t + chart_h - ((val - vmin) / span) * chart_h
 
-        def y_for(val: float) -> float:
-            return pad_t + chart_h - ((val - vmin) / span) * chart_h
+    def _day(d: str) -> float:
+        try:
+            return float(datetime.fromisoformat(d[:10]).toordinal())
+        except ValueError:
+            return 0.0
 
-        draw.rectangle((pad_l, pad_t, pad_l + chart_w, pad_t + chart_h), outline=(148, 163, 184), width=3)
+    day_vals = [_day(p[0]) for p in points]
+    t_min, t_max = min(day_vals), max(day_vals)
+    t_span = (t_max - t_min) or 1.0
+    edge_inset = min(56, chart_w * 0.07)
+    usable = max(chart_w - 2 * edge_inset, 1)
 
-        if ref_low is not None or ref_high is not None:
-            top = y_for(ref_high if ref_high is not None else vmax)
-            bottom = y_for(ref_low if ref_low is not None else vmin)
+    def x_for_day(day: float) -> float:
+        return pad_l + edge_inset + ((day - t_min) / t_span) * usable
+
+    draw.rectangle((pad_l, pad_t, pad_l + chart_w, pad_t + chart_h), outline=(148, 163, 184), width=2)
+
+    # Medication milestones (dashed vertical markers)
+    range_events = filter_events_for_range(
+        milestones,
+        start=points[0][0],
+        end=points[-1][0],
+        pad_days=3,
+    )
+    # Also keep events strictly between chart date span (including ends)
+    marker_fill = (100, 116, 139)
+    for mi, ev in enumerate(range_events[:6]):
+        d = str(ev.get("date") or "")[:10]
+        try:
+            day = float(datetime.fromisoformat(d).toordinal())
+        except ValueError:
+            continue
+        if day < t_min or day > t_max:
+            # Allow slight outside only if within pad from filter; clamp to edges
+            if day < t_min - 3 or day > t_max + 3:
+                continue
+            day = min(max(day, t_min), t_max)
+        x = x_for_day(day)
+        # Dashed vertical line
+        y0, y1 = pad_t + 2, pad_t + chart_h - 2
+        dash = 10
+        yy = y0
+        while yy < y1:
+            draw.line((x, yy, x, min(yy + dash, y1)), fill=marker_fill, width=2)
+            yy += dash * 2
+        label = _safe_text(str(ev.get("label") or ""))[:48]
+        if label:
+            # Alternate label vertical position to reduce overlap
+            ly = pad_t + 10 + (mi % 3) * 14
+            draw.text((x + 4, ly), label, fill=marker_fill, font=font_small, anchor="lt")
+
+    if ref_low is not None or ref_high is not None:
+        if ref_low is not None and ref_high is not None:
+            top = y_for(ref_high)
+            bottom = y_for(ref_low)
             y1, y2 = min(top, bottom), max(top, bottom)
             band = tuple(min(255, int(c * 0.18 + 230)) for c in (21, 128, 61))
             draw.rectangle((pad_l + 2, y1, pad_l + chart_w - 2, y2), fill=band)
-            if ref_high is not None:
-                y = y_for(ref_high)
-                draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=4)
-                draw.text(
-                    (pad_l + chart_w + 10, y),
-                    _safe_text(_format_diag_value_label(ref_high)),
-                    fill=(21, 128, 61),
-                    font=font_small,
-                    anchor="lm",
-                )
-            if ref_low is not None:
-                y = y_for(ref_low)
-                draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=4)
-                draw.text(
-                    (pad_l + chart_w + 10, y),
-                    _safe_text(_format_diag_value_label(ref_low)),
-                    fill=(21, 128, 61),
-                    font=font_small,
-                    anchor="lm",
-                )
+        if ref_high is not None:
+            y = y_for(ref_high)
+            draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=2)
+            draw.text(
+                (pad_l + chart_w - 8, y - 4),
+                _safe_text(_format_diag_value_label(ref_high)),
+                fill=(21, 128, 61),
+                font=font_small,
+                anchor="rb",
+            )
+        if ref_low is not None:
+            y = y_for(ref_low)
+            draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=2)
+            draw.text(
+                (pad_l + chart_w - 8, y + 4),
+                _safe_text(_format_diag_value_label(ref_low)),
+                fill=(21, 128, 61),
+                font=font_small,
+                anchor="rt",
+            )
 
-        coords: list[tuple[float, float]] = []
-        for i, (_date, value, _status) in enumerate(points):
-            x = pad_l + (i / (len(points) - 1)) * chart_w
-            y = y_for(value)
-            coords.append((x, y))
-        draw.line(coords, fill=line_stroke, width=8)
-        for i, ((x, y), (date, value, status)) in enumerate(zip(coords, points)):
-            color = _status_rgb(status, line_stroke)
-            r = 12
-            draw.ellipse((x - r, y - r, x + r, y + r), fill=color, outline=(255, 255, 255), width=4)
+    n = len(points)
+    coords: list[tuple[float, float]] = []
+    for i, (date, value, _status) in enumerate(points):
+        x = x_for_day(_day(date))
+        y = y_for(value)
+        coords.append((x, y))
+    draw.line(coords, fill=line_stroke, width=5)
+
+    label_every = 1 if n <= 5 else 2
+    for i, ((x, y), (_date, value, status)) in enumerate(zip(coords, points)):
+        color = _status_rgb(status, line_stroke)
+        r = 8
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=color, outline=(255, 255, 255), width=2)
+        if i % label_every == 0 or i in (0, n - 1):
             val_label = _safe_text(_format_diag_value_label(value))
-            if unit and len(points) <= 4:
-                val_label = f"{val_label} {unit}"
-            y_off = -28 if i % 2 == 0 else -56
-            draw.text((x, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor="mb")
-            date_label = _safe_text(_format_diag_date_label(date))
-            if len(points) > 5:
-                dt = _parse_iso_datetime(date)
-                date_label = dt.strftime("%b %y") if dt else date_label
-            draw.text((x, height - 36), date_label, fill=(51, 65, 85), font=font_small, anchor="mb")
+            if y - pad_t < 36:
+                y_off = 18
+                anchor = "mt"
+            else:
+                y_off = -12 if (i // label_every) % 2 == 0 else -26
+                anchor = "mb"
+            x_off = 0
+            if i == n - 1 and (
+                (ref_high is not None and abs(value - ref_high) < span * 0.03)
+                or (ref_low is not None and abs(value - ref_low) < span * 0.03)
+            ):
+                x_off = -14
+                anchor = "mb"
+                y_off = -12
+            draw.text((x + x_off, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor=anchor)
+
+    prev_date = None
+    for i, ((x, _y), (date, _value, _status)) in enumerate(zip(coords, points)):
+        if date == prev_date:
+            continue
+        prev_date = date
+        date_label = _safe_text(_format_diag_date_label(date, compact=True))
+        if i == 0:
+            anchor = "lb"
+        elif i == n - 1 or date == points[-1][0]:
+            anchor = "rb" if i >= n - 2 else "mb"
+        else:
+            anchor = "mb"
+        draw.text((x, height - 18), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
 
     buf = BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+def _write_single_reading_rows(
+    pdf: FPDF,
+    items: list[dict[str, Any]],
+    *,
+    usable_w: float,
+) -> None:
+    """Compact two-column table for one-off lab values (no chart art)."""
+    if not items:
+        return
+    col_gap = 3.5
+    col_w = (usable_w - col_gap) / 2
+    row_h = 6.4
+    left_x = pdf.l_margin
+    right_x = pdf.l_margin + col_w + col_gap
+
+    for i in range(0, len(items), 2):
+        if pdf.get_y() + row_h + 1.5 > pdf.h - pdf.b_margin:
+            pdf.add_page()
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(14, 116, 144)
+            pdf.cell(0, 6, "Other readings (continued)", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(1)
+
+        y = pdf.get_y()
+        for col, item in enumerate(items[i : i + 2]):
+            x = left_x if col == 0 else right_x
+            name = _safe_text(item.get("name") or "Diagnostic")
+            unit = _safe_text(item.get("unit") or "")
+            latest = item.get("latest") or {}
+            status = item.get("status") or latest.get("status")
+            val = _format_diag_value_label(latest.get("value"))
+            date = _format_diag_date_label(latest.get("recorded_at"), compact=True)
+            unit_bit = f" {unit}" if unit else ""
+            value_text = f"{val}{unit_bit}"
+
+            # Status tick
+            if status in _STATUS_RGB:
+                pdf.set_fill_color(*_status_rgb(str(status)))
+                pdf.rect(x, y + 1.2, 2.0, 2.0, style="F")
+                text_x = x + 2.8
+                text_w = col_w - 2.8
+            else:
+                text_x = x
+                text_w = col_w
+
+            pdf.set_xy(text_x, y)
+            pdf.set_font("Helvetica", "B", 7.5)
+            pdf.set_text_color(15, 23, 42)
+            pdf.cell(text_w * 0.48, 3.4, name[:28], new_x="END", new_y="TOP")
+            pdf.set_font("Helvetica", "", 7.5)
+            pdf.set_text_color(*_status_rgb(status if isinstance(status, str) else None, (51, 65, 85)))
+            pdf.cell(text_w * 0.28, 3.4, _safe_text(value_text)[:16], align="R", new_x="END", new_y="TOP")
+            pdf.set_text_color(100, 100, 100)
+            pdf.cell(text_w * 0.24, 3.4, _safe_text(date), align="R", new_x="LMARGIN", new_y="TOP")
+
+            ref = item.get("reference") or {}
+            if ref.get("label"):
+                pdf.set_xy(text_x, y + 3.2)
+                pdf.set_font("Helvetica", "", 6)
+                pdf.set_text_color(120, 120, 120)
+                pdf.cell(text_w, 2.6, _safe_text(f"Ref {ref['label']}")[:42], new_x="LMARGIN", new_y="TOP")
+
+        pair = items[i : i + 2]
+        pair_h = row_h + (1.2 if any((p.get("reference") or {}).get("label") for p in pair) else 0)
+        pdf.set_y(y + pair_h)
+        pdf.set_draw_color(226, 232, 240)
+        pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+        pdf.ln(0.6)
 
 
 def _write_diagnostics_charts(
@@ -763,6 +900,7 @@ def _write_diagnostics_charts(
     *,
     as_of: str | None = None,
     max_charts: int = 10,
+    milestones: list[dict[str, Any]] | None = None,
 ) -> None:
     """Add a Key diagnostics page with sparkline charts."""
     if not series:
@@ -796,7 +934,8 @@ def _write_diagnostics_charts(
         _safe_text(
             "Blood-test trends use collection / date of service. "
             "Shaded band shows age- and sex-aware reference targets. "
-            "Green = on target; yellow = within 10% beyond bound; red = farther."
+            "Green = on target; yellow = within 10% beyond bound; red = farther. "
+            "Dashed vertical markers show medication starts, dose changes, and stops."
         ),
         h=4,
     )
@@ -805,17 +944,21 @@ def _write_diagnostics_charts(
     pdf.ln(4)
 
     usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-    chart_h_mm = 70
-    row_step = chart_h_mm + 10
+    chart_h_mm = 42
+    row_step = chart_h_mm + 8
     strokes = [(14, 116, 144), (8, 145, 178), (180, 83, 9)]
 
     for index, item in enumerate(ranked):
+        readings = item.get("readings") or []
+        # Sparkline PNG is trends-only; skip one-offs in the assessment digest.
+        if len(readings) <= 1:
+            continue
         if pdf.get_y() + row_step > pdf.h - pdf.b_margin:
             pdf.add_page()
             pdf.set_font("Helvetica", "B", 12)
             pdf.set_text_color(14, 116, 144)
-            pdf.cell(0, 8, "Key diagnostics (continued)", new_x="LMARGIN", new_y="NEXT")
-            pdf.ln(2)
+            pdf.cell(0, 7, "Key diagnostics (continued)", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(1)
 
         x = pdf.l_margin
         y = pdf.get_y()
@@ -824,16 +967,18 @@ def _write_diagnostics_charts(
         status = item.get("status") or (item.get("latest") or {}).get("status")
 
         png = _sparkline_png_bytes(
-            item.get("readings") or [],
+            readings,
             stroke=strokes[index % len(strokes)],
             reference=item.get("reference"),
             series_status=status if isinstance(status, str) else None,
             title=name,
             unit=unit or None,
+            height=380,
+            milestones=milestones,
         )
         if png:
             pdf.image(BytesIO(png), x=x, y=y, w=usable_w, h=chart_h_mm)
-        pdf.set_y(y + row_step)
+            pdf.set_y(y + chart_h_mm + 4)
 
     pdf.ln(2)
 
@@ -858,6 +1003,7 @@ def build_assessment_pdf(
     diagnostic_series: list[dict[str, Any]] | None = None,
     patient_label: str | None = None,
     patient_subline: str | None = None,
+    milestones: list[dict[str, Any]] | None = None,
 ) -> bytes:
     report_timestamp = _format_timestamp(analysis.get("created_at"))
     report_date, report_time = _format_timestamp_parts(analysis.get("created_at"))
@@ -914,6 +1060,7 @@ def build_assessment_pdf(
         pdf,
         diagnostic_series,
         as_of=report_timestamp,
+        milestones=milestones,
     )
 
     _write_section_with_references(
@@ -991,6 +1138,7 @@ def build_diagnostics_pdf(
     *,
     patient_label: str | None = None,
     patient_subline: str | None = None,
+    milestones: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Diagnostics-only PDF with charts, traffic-light status, and export timestamp."""
     now = datetime.now(timezone.utc)
@@ -1006,36 +1154,37 @@ def build_diagnostics_pdf(
         patient_subline=patient_subline,
     )
     pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=28)
-    pdf.set_margins(18, 38, 18)
+    pdf.set_auto_page_break(auto=True, margin=26)
+    pdf.set_margins(14, 36, 14)
     pdf.add_page()
 
-    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(14, 116, 144)
     title = "Key diagnostics"
     if patient_label:
         title = f"Key diagnostics - {_safe_text(patient_label)}"
-    pdf.cell(0, 9, title, new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.cell(0, 7, title, new_x="LMARGIN", new_y="NEXT", align="L")
 
-    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_font("Helvetica", "I", 7.5)
     pdf.set_text_color(80, 80, 80)
     meta = [f"Exported: {exported_at}"]
     if patient_subline:
         meta.append(_safe_text(patient_subline))
-    pdf.cell(0, 5, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 4, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_font("Helvetica", "", 9)
+    pdf.set_font("Helvetica", "", 8)
     _pdf_multiline(
         pdf,
         _safe_text(
-            "Green = on target vs reference. Yellow = within 10% beyond the bound. "
-            "Red = farther than 10%. References are approximate age/sex orientation, not medical advice."
+            "Green = on target. Yellow = within 10% beyond bound. Red = farther. "
+            "Dashed markers = medication starts, dose changes, stops. "
+            "Trend charts first; single readings in the compact table below."
         ),
-        h=4,
+        h=3.5,
     )
     pdf.set_draw_color(14, 165, 233)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(3)
+    pdf.ln(2)
 
     if not series:
         pdf.set_font("Helvetica", "I", 10)
@@ -1043,8 +1192,6 @@ def build_diagnostics_pdf(
         pdf.cell(0, 8, "No diagnostic readings to export.", new_x="LMARGIN", new_y="NEXT")
     else:
         usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-        chart_h_mm = 78
-        row_step = chart_h_mm + 12
         strokes = [(14, 116, 144), (8, 145, 178), (180, 83, 9)]
         ranked = sorted(
             series,
@@ -1055,38 +1202,47 @@ def build_diagnostics_pdf(
                 str(s.get("name") or "").lower(),
             ),
         )
-        for index, item in enumerate(ranked):
-            if pdf.get_y() + row_step > pdf.h - pdf.b_margin:
+        trends: list[dict[str, Any]] = []
+        singles: list[dict[str, Any]] = []
+        for item in ranked:
+            readings = item.get("readings") or []
+            count = len(readings) or int(item.get("point_count") or 0)
+            if count > 1:
+                trends.append(item)
+            else:
+                singles.append(item)
+
+        chart_h_mm = 32
+        for index, item in enumerate(trends):
+            block_h = chart_h_mm + 8
+            if pdf.get_y() + block_h > pdf.h - pdf.b_margin:
                 pdf.add_page()
-                pdf.set_font("Helvetica", "B", 13)
+                pdf.set_font("Helvetica", "B", 11)
                 pdf.set_text_color(14, 116, 144)
-                pdf.cell(0, 8, "Key diagnostics (continued)", new_x="LMARGIN", new_y="NEXT")
-                pdf.ln(2)
+                pdf.cell(0, 6, "Trend charts (continued)", new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(1)
 
             x = pdf.l_margin
-            y = pdf.get_y()
             name = _safe_text(item.get("name") or "Diagnostic")
             unit = _safe_text(item.get("unit") or "")
             latest = item.get("latest") or {}
             status = item.get("status") or latest.get("status")
-
-            # Text summary above chart for quick clinical scan
             latest_val = _format_diag_value_label(latest.get("value"))
-            latest_date = _format_diag_date_label(latest.get("recorded_at"))
+            latest_date = _format_diag_date_label(latest.get("recorded_at"), compact=True)
             unit_bit = f" {unit}" if unit else ""
-            status_bit = f"  |  {str(status).capitalize()}" if status in _STATUS_RGB else ""
+            status_bit = f" | {str(status).capitalize()}" if status in _STATUS_RGB else ""
             ref = item.get("reference") or {}
-            ref_bit = f"  |  Ref {ref['label']}" if ref.get("label") else ""
-            summary = f"Latest: {latest_val}{unit_bit} on {latest_date}{status_bit}{ref_bit}"
+            ref_bit = f" | Ref {ref['label']}" if ref.get("label") else ""
+            summary = f"{latest_val}{unit_bit} · {latest_date}{status_bit}{ref_bit}"
 
-            pdf.set_xy(x, y)
-            pdf.set_font("Helvetica", "B", 13)
+            pdf.set_x(x)
+            pdf.set_font("Helvetica", "B", 8.5)
             pdf.set_text_color(15, 23, 42)
-            pdf.cell(usable_w, 7, name, new_x="LMARGIN", new_y="NEXT")
-            pdf.set_font("Helvetica", "", 11)
+            pdf.cell(usable_w * 0.40, 3.5, name, new_x="END", new_y="TOP")
+            pdf.set_font("Helvetica", "", 7.5)
             pdf.set_text_color(*_status_rgb(status if isinstance(status, str) else None, (71, 85, 105)))
-            pdf.cell(usable_w, 6, _safe_text(summary), new_x="LMARGIN", new_y="NEXT")
-            y_chart = pdf.get_y() + 1
+            pdf.cell(usable_w * 0.60, 3.5, _safe_text(summary), align="R", new_x="LMARGIN", new_y="NEXT")
+            y_chart = pdf.get_y() + 0.2
 
             png = _sparkline_png_bytes(
                 item.get("readings") or [],
@@ -1094,11 +1250,30 @@ def build_diagnostics_pdf(
                 reference=item.get("reference"),
                 series_status=status if isinstance(status, str) else None,
                 unit=unit or None,
+                height=300,
+                milestones=milestones,
             )
-            chart_draw_h = chart_h_mm - 14
             if png:
-                pdf.image(BytesIO(png), x=x, y=y_chart, w=usable_w, h=chart_draw_h)
-            pdf.set_y(y + row_step)
+                pdf.image(BytesIO(png), x=x, y=y_chart, w=usable_w, h=chart_h_mm)
+            pdf.set_y(y_chart + chart_h_mm + 1.8)
+
+        if singles:
+            if pdf.get_y() + 20 > pdf.h - pdf.b_margin:
+                pdf.add_page()
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(14, 116, 144)
+            pdf.cell(0, 6, "Other readings", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(100, 100, 100)
+            pdf.cell(
+                0,
+                3.5,
+                "Single collection points (no trend line yet)",
+                new_x="LMARGIN",
+                new_y="NEXT",
+            )
+            pdf.ln(1)
+            _write_single_reading_rows(pdf, singles, usable_w=usable_w)
 
     buffer = BytesIO()
     pdf.output(buffer)

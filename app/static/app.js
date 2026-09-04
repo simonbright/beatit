@@ -7354,12 +7354,85 @@ function formatMedicationHistory(m) {
     .reverse()
     .map((h) => {
       const dose = [h.dosage, h.frequency].filter(Boolean).join(" · ") || "—";
-      const when = formatJournalDateTime(h.changed_at);
+      const when = h.effective_at
+        ? formatDiagDate(h.effective_at)
+        : formatJournalDateTime(h.changed_at);
       const note = h.note ? ` · ${escapeHtml(h.note)}` : "";
       return `<li><strong>${escapeHtml(dose)}</strong> until ${escapeHtml(when)}${note}</li>`;
     })
     .join("");
   return `<details class="medication-history"><summary>Dosage history (${hist.length})</summary><ul>${items}</ul></details>`;
+}
+
+function medicationChartEvents(medications) {
+  const events = [];
+  const short = (text, max = 42) => {
+    const t = String(text || "").replace(/\s+/g, " ").trim();
+    return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+  };
+  const doseBits = (d, f) => [d, f].filter((x) => x && String(x).trim()).map((x) => String(x).trim()).join(" · ");
+  const dateOnly = (raw) => {
+    const s = String(raw || "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  for (const med of medications || []) {
+    const name = String(med.name || "").trim() || "Medication";
+    const hist = (med.dosage_history || []).filter((h) => h && typeof h === "object");
+    const started = dateOnly(med.started_at);
+    if (started) {
+      const initial = hist.length
+        ? doseBits(hist[0].dosage, hist[0].frequency)
+        : doseBits(med.dosage, med.frequency);
+      events.push({
+        date: started,
+        label: short(`Started ${name}${initial ? ` ${initial}` : ""}`),
+        kind: "start",
+      });
+    }
+    hist.forEach((row, i) => {
+      const effective = dateOnly(row.effective_at) || dateOnly(row.changed_at);
+      if (!effective) return;
+      const oldBits = doseBits(row.dosage, row.frequency) || "?";
+      const newBits =
+        i + 1 < hist.length
+          ? doseBits(hist[i + 1].dosage, hist[i + 1].frequency) || "?"
+          : doseBits(med.dosage, med.frequency) || "?";
+      const note = String(row.note || "").trim();
+      events.push({
+        date: effective,
+        label: short(note ? `${name}: ${note}` : `${name}: ${oldBits} → ${newBits}`),
+        kind: "dose_change",
+      });
+    });
+    const stopped = dateOnly(med.stopped_at);
+    if (stopped && med.status === "stopped") {
+      events.push({ date: stopped, label: short(`Stopped ${name}`), kind: "stop" });
+    }
+  }
+  events.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.label).localeCompare(String(b.label)));
+  const seen = new Set();
+  return events.filter((e) => {
+    const key = `${e.date}|${e.label}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function filterMilestonesForRange(events, start, end, padDays = 3) {
+  if (!events?.length || !start || !end) return [];
+  const toDay = (iso) => {
+    const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
+    return Number.isFinite(d.getTime()) ? d.getTime() : null;
+  };
+  const t0 = toDay(start);
+  const t1 = toDay(end);
+  if (t0 == null || t1 == null) return [];
+  const pad = padDays * 86400000;
+  return events.filter((e) => {
+    const t = toDay(e.date);
+    return t != null && t >= t0 - pad && t <= t1 + pad;
+  });
 }
 
 function formatMedicationIdentityBadge(m) {
@@ -7529,7 +7602,9 @@ function clearMedicationForm() {
   if (started) started.value = "";
   const ended = document.getElementById("med-ended");
   if (ended) ended.value = "";
-  document.querySelector(".med-history-note-wrap")?.classList.add("hidden");
+  const effective = document.getElementById("med-effective-at");
+  if (effective) effective.value = "";
+  document.querySelectorAll(".med-history-note-wrap").forEach((el) => el.classList.add("hidden"));
   const saveBtn = document.getElementById("btn-save-medication");
   if (saveBtn) saveBtn.textContent = "Add medication";
   document.getElementById("btn-cancel-med-edit")?.classList.add("hidden");
@@ -7545,7 +7620,13 @@ function fillMedicationForm(m) {
   document.getElementById("med-started").value = m.started_at ? String(m.started_at).slice(0, 10) : "";
   document.getElementById("med-ended").value = m.stopped_at ? String(m.stopped_at).slice(0, 10) : "";
   document.getElementById("med-history-note").value = "";
-  document.querySelector(".med-history-note-wrap")?.classList.remove("hidden");
+  const effective = document.getElementById("med-effective-at");
+  if (effective) {
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    effective.value = iso;
+  }
+  document.querySelectorAll(".med-history-note-wrap").forEach((el) => el.classList.remove("hidden"));
   const saveBtn = document.getElementById("btn-save-medication");
   if (saveBtn) saveBtn.textContent = "Save changes";
   document.getElementById("btn-cancel-med-edit")?.classList.remove("hidden");
@@ -8209,14 +8290,15 @@ function clientStatusForValue(value, reference) {
   return null;
 }
 
-function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = null } = {}) {
+function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = null, milestones = null } = {}) {
   const points = (readings || [])
     .map((r) => ({
       date: String(r.recorded_at || "").slice(0, 10),
       value: Number(r.value),
       status: r.status || clientStatusForValue(r.value, reference),
     }))
-    .filter((p) => p.date && Number.isFinite(p.value));
+    .filter((p) => p.date && Number.isFinite(p.value))
+    .sort((a, b) => a.date.localeCompare(b.date));
   if (!points.length) {
     return `<div class="diag-chart-plot"><svg class="diag-chart-svg" viewBox="0 0 360 150" role="img"><text x="180" y="75" text-anchor="middle" fill="currentColor" font-size="16">No data</text></svg></div>`;
   }
@@ -8257,10 +8339,30 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   max += pad;
   const span = max - min || 1;
   const yFor = (value) => h - padBottom - ((value - min) / span) * (h - padTop - padBottom);
-  const coords = points.map((p, i) => {
-    const x = padX + (i / (points.length - 1)) * (w - padX * 2);
-    return { ...p, x, y: yFor(p.value) };
-  });
+  const toDay = (iso) => new Date(`${iso}T12:00:00`).getTime();
+  const tMin = toDay(points[0].date);
+  const tMax = toDay(points[points.length - 1].date);
+  const tSpan = tMax - tMin || 1;
+  const xFor = (iso) => padX + ((toDay(iso) - tMin) / tSpan) * (w - padX * 2);
+  const coords = points.map((p) => ({ ...p, x: xFor(p.date), y: yFor(p.value) }));
+
+  let milestoneLayer = "";
+  const inRange = filterMilestonesForRange(milestones, points[0].date, points[points.length - 1].date, 0).slice(0, 6);
+  if (inRange.length) {
+    milestoneLayer = inRange
+      .map((ev, i) => {
+        const x = xFor(ev.date);
+        if (!Number.isFinite(x)) return "";
+        const ly = padTop + 6 + (i % 3) * 12;
+        return `<g class="diag-milestone">
+          <line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(1)}" y2="${(h - padBottom).toFixed(1)}" stroke="#64748b" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.75">
+            <title>${escapeHtml(ev.label)} · ${escapeHtml(formatDiagDate(ev.date))}</title>
+          </line>
+          <text x="${(x + 3).toFixed(1)}" y="${ly.toFixed(1)}" fill="#64748b" font-size="9" opacity="0.9">${escapeHtml(ev.label)}</text>
+        </g>`;
+      })
+      .join("");
+  }
 
   let refLayer = "";
   if (hasRef) {
@@ -8302,6 +8404,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
 
   return `<div class="diag-chart-plot">
     <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
+      ${milestoneLayer}
       ${refLayer}
       <polyline fill="none" stroke="${lineStroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
       ${dots}
@@ -8350,6 +8453,8 @@ function renderDiagnosticsCharts(profile, series) {
     return;
   }
 
+  const milestones = medicationChartEvents(profile?.medications);
+
   wrap.innerHTML = cards
     .map((s) => {
       const unit = s.unit ? ` ${s.unit}` : "";
@@ -8387,7 +8492,7 @@ function renderDiagnosticsCharts(profile, series) {
         <h4 class="diag-chart-title">${escapeHtml(s.name)}</h4>
         <span class="diag-chart-latest" style="color:${stroke}">${escapeHtml(latestLabel)}</span>
       </div>
-      ${buildSparklineSvg(s.readings || [], { stroke, reference: ref })}
+      ${buildSparklineSvg(s.readings || [], { stroke, reference: ref, milestones })}
       <p class="diag-chart-meta">${statusBit ? `${statusBit} ` : ""}${escapeHtml(cat)} · ${s.point_count} reading${
         s.point_count === 1 ? "" : "s"
       } · ${escapeHtml(dateSpan)}</p>
@@ -9044,6 +9149,7 @@ document.getElementById("btn-save-medication")?.addEventListener("click", async 
     let res;
     if (editId) {
       body.history_note = document.getElementById("med-history-note")?.value.trim() || null;
+      body.effective_at = document.getElementById("med-effective-at")?.value || null;
       res = await fetch(`/api/patients/${state.activePatientId}/medications/${editId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
