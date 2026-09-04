@@ -7431,6 +7431,11 @@ function medicationChartEvents(medications) {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     return `${months[d.getMonth()]} ${d.getDate()}`;
   };
+  const nameKey = (name) => String(name || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const dayMs = (iso) => {
+    const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
+    return Number.isFinite(d.getTime()) ? d.getTime() : null;
+  };
   const pushEvent = (ev) => {
     const id = `${ev.date}|${ev.kind}|${ev.medication_id || ""}|${ev.body || ev.label}`;
     events.push({ ...ev, id, label: short(ev.label) });
@@ -7486,15 +7491,61 @@ function medicationChartEvents(medications) {
       });
     }
   }
+
+  // Merge stop + nearby start of the same drug into one dose-change marker
+  const medsById = new Map((medications || []).filter((m) => m?.id).map((m) => [String(m.id), m]));
+  const stops = events.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === "stop");
+  const starts = events.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === "start");
+  const used = new Set();
+  const merged = [];
+  const maxGapMs = 3 * 86400000;
+  for (const { e: stop, i: si } of stops) {
+    if (used.has(si)) continue;
+    const stopT = dayMs(stop.date);
+    if (stopT == null) continue;
+    let best = null;
+    for (const { e: start, i: ti } of starts) {
+      if (used.has(ti)) continue;
+      if (nameKey(start.medication_name) !== nameKey(stop.medication_name)) continue;
+      const startT = dayMs(start.date);
+      if (startT == null) continue;
+      const gap = startT - stopT;
+      if (gap < -86400000 || gap > maxGapMs) continue;
+      const absGap = Math.abs(gap);
+      if (!best || absGap < best.absGap) best = { start, ti, absGap };
+    }
+    if (!best) continue;
+    used.add(si);
+    used.add(best.ti);
+    const stopMed = medsById.get(String(stop.medication_id || "")) || {};
+    const startMed = medsById.get(String(best.start.medication_id || "")) || {};
+    const oldBits = doseBits(stopMed.dosage, stopMed.frequency) || "?";
+    const newBits = doseBits(startMed.dosage, startMed.frequency) || "?";
+    const name = stop.medication_name || best.start.medication_name || "Medication";
+    const when = best.start.date || stop.date;
+    const body = `${name}: ${oldBits} → ${newBits}`;
+    merged.push({
+      date: when,
+      label: short(`${compactDate(when)} · ${body}`),
+      body,
+      kind: "dose_change",
+      medication_id: best.start.medication_id || stop.medication_id || "",
+      medication_name: name,
+      coalesced_from: "stop_start",
+      id: `${when}|dose_change|${best.start.medication_id || stop.medication_id || ""}|${body}`,
+    });
+  }
+  const kept = events.filter((_, i) => !used.has(i)).concat(merged);
+
   const kindOrder = { stop: 0, dose_change: 1, start: 2 };
-  events.sort(
+  kept.sort(
     (a, b) =>
       String(a.date).localeCompare(String(b.date)) ||
       (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9) ||
       String(a.label).localeCompare(String(b.label))
   );
   const seen = new Set();
-  return events.filter((e) => {
+  return kept.filter((e) => {
     if (seen.has(e.id)) return false;
     seen.add(e.id);
     return true;
