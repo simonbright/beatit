@@ -849,7 +849,8 @@ body {
   grid-column: 1 / -1;
 }
 
-#med-import-status.error-text {
+#med-import-status.error-text,
+#diag-import-status.error-text {
   color: var(--danger, #b42318);
 }
 

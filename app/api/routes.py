@@ -15,6 +15,11 @@ from app.services.medication_import import (
     clamp_proposed_medication,
     propose_medications_from_upload,
 )
+from app.services.diagnostic_import import (
+    clamp_proposed_diagnostic,
+    propose_diagnostics_from_document,
+    propose_diagnostics_from_upload,
+)
 from app.services.medication_safety import (
     get_medication_safety,
     run_medication_safety_review,
@@ -2345,6 +2350,129 @@ async def api_delete_patient_diagnostic(patient_id: str, diagnostic_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientDiagnosticConfirmItem(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    value: float
+    recorded_at: str = Field(min_length=8, max_length=20)
+    unit: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default=None, max_length=20)
+
+
+class PatientDiagnosticConfirmRequest(BaseModel):
+    diagnostics: list[PatientDiagnosticConfirmItem] = Field(default_factory=list, max_length=120)
+
+
+class PatientDiagnosticImportFromDocRequest(BaseModel):
+    document_id: str = Field(min_length=1, max_length=120)
+
+
+@router.post("/patients/{patient_id}/diagnostics/import")
+async def api_import_patient_diagnostics(
+    patient_id: str,
+    file: UploadFile = File(...),
+):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    content = await file.read()
+    try:
+        result = await propose_diagnostics_from_upload(
+            patient_id,
+            content,
+            content_type=file.content_type,
+            filename=file.filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/patients/{patient_id}/diagnostics/import/from-document")
+async def api_import_patient_diagnostics_from_document(
+    patient_id: str,
+    body: PatientDiagnosticImportFromDocRequest,
+):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    db, store, _, _, _ = await _get_services()
+    doc = await db.get_document(body.document_id.strip())
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    source_type = str(doc.get("source_type") or "").lower()
+    if source_type not in {"pdf"} and not str(doc.get("file_path") or "").lower().endswith(
+        (".pdf", ".jpg", ".jpeg", ".png", ".webp")
+    ):
+        # Allow image-like uploads stored as pdf source or raw image path
+        meta = doc.get("metadata") or {}
+        orig = str(meta.get("original_filename") or "").lower()
+        if not orig.endswith((".pdf", ".jpg", ".jpeg", ".png", ".webp")):
+            raise HTTPException(
+                status_code=400,
+                detail="Import to Labs supports PDF or image lab reports",
+            )
+    text = await store.read_extracted_text(doc)
+    try:
+        result = await propose_diagnostics_from_document(
+            patient_id,
+            doc,
+            extracted_text=text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/patients/{patient_id}/diagnostics/import/confirm")
+async def api_confirm_patient_diagnostics_import(
+    patient_id: str,
+    body: PatientDiagnosticConfirmRequest,
+):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if not body.diagnostics:
+        raise HTTPException(status_code=400, detail="Select at least one reading to add")
+    added: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for raw in body.diagnostics:
+        clamped = clamp_proposed_diagnostic(raw.model_dump())
+        if clamped is None:
+            errors.append("Skipped an invalid row")
+            continue
+        if not clamped.get("recorded_at"):
+            errors.append(f"Missing date for {clamped.get('name') or 'reading'}")
+            continue
+        try:
+            entry = add_patient_diagnostic(
+                patient_id,
+                name=clamped["name"],
+                value=clamped["value"],
+                recorded_at=clamped["recorded_at"],
+                unit=clamped.get("unit"),
+                notes=clamped.get("notes"),
+                category=clamped.get("category"),
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        added.append(entry)
+    if not added and errors:
+        raise HTTPException(status_code=400, detail=errors[0])
+    profile = get_patient_profile(patient_id)
+    return {
+        "added": added,
+        "added_count": len(added),
+        "errors": errors,
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),

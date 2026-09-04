@@ -5282,6 +5282,15 @@ async function viewDocument(id) {
         `<button type="button" class="btn secondary btn-reextract" data-id="${escapeHtml(doc.id)}">Re-extract / OCR</button>`
       );
     }
+    const canImportLabs =
+      String(doc.source_type || "").toLowerCase() === "pdf" ||
+      String(data.view_kind || "").toLowerCase() === "pdf" ||
+      String(data.view_kind || "").toLowerCase() === "image";
+    if (canImportLabs && state.activePatientId) {
+      links.push(
+        `<button type="button" class="btn primary btn-import-labs" data-id="${escapeHtml(doc.id)}">Import to Labs</button>`
+      );
+    }
     const meta = doc.metadata || {};
     if (meta.needs_ocr || meta.extraction_method === "empty") {
       links.push(
@@ -5552,6 +5561,13 @@ safeOn("#doc-detail-actions", "click", (event) => {
   const reextractBtn = event.target.closest(".btn-reextract");
   if (reextractBtn?.dataset.id) {
     reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
+    return;
+  }
+  const importLabsBtn = event.target.closest(".btn-import-labs");
+  if (importLabsBtn?.dataset.id) {
+    importDiagnosticsFromLibraryDocument(importLabsBtn.dataset.id).catch((e) =>
+      toast(e.message, "error")
+    );
   }
 });
 safeOn("#btn-refresh-docs", "click", () =>
@@ -7242,6 +7258,141 @@ function clearMedImportReview() {
   setMedImportStatus("");
 }
 
+function setDiagImportStatus(text, { error = false } = {}) {
+  const el = document.getElementById("diag-import-status");
+  if (!el) return;
+  if (!text) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    return;
+  }
+  el.textContent = text;
+  el.classList.toggle("error-text", error);
+  el.classList.remove("hidden");
+}
+
+function clearDiagImportReview() {
+  const wrap = document.getElementById("diag-import-review");
+  const list = document.getElementById("diag-import-review-list");
+  if (list) list.innerHTML = "";
+  wrap?.classList.add("hidden");
+  const file = document.getElementById("diag-import-file");
+  if (file) file.value = "";
+  setDiagImportStatus("");
+}
+
+function renderDiagImportReview(data) {
+  const wrap = document.getElementById("diag-import-review");
+  const list = document.getElementById("diag-import-review-list");
+  if (!wrap || !list) return;
+  // Ensure Settings → Profile is visible for review when importing from Library
+  switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-import-review" });
+  const proposed = data.proposed || [];
+  const meta = data.extraction_meta || {};
+  const warnings = data.warnings || [];
+  const method = meta.extraction_method || meta.source || "unknown";
+  const chars = meta.extracted_chars != null ? `${meta.extracted_chars} chars` : "";
+  const bits = [`Extracted via ${method}${chars ? ` · ${chars}` : ""}`];
+  if (meta.title) bits.push(String(meta.title));
+  if (warnings.length) bits.push(warnings.join(" · "));
+  setDiagImportStatus(bits.join(" — "));
+
+  if (!proposed.length) {
+    list.innerHTML = `<p class="muted small">No lab readings detected. Try Re-extract / OCR on the document, or a clearer PDF.</p>`;
+    wrap.classList.remove("hidden");
+    return;
+  }
+
+  list.innerHTML = proposed
+    .map((d, i) => {
+      const dateVal = d.recorded_at ? String(d.recorded_at).slice(0, 10) : "";
+      return `<div class="med-import-row" data-idx="${i}">
+        <label class="med-import-check">
+          <input type="checkbox" class="diag-import-select" checked aria-label="Include ${escapeHtml(d.name || "reading")}">
+        </label>
+        <div class="med-import-row-fields">
+          <label>Name<input type="text" class="diag-import-name" maxlength="120" list="diag-name-presets" value="${escapeHtml(d.name || "")}"></label>
+          <label>Value<input type="number" class="diag-import-value" step="any" value="${escapeHtml(d.value != null ? String(d.value) : "")}"></label>
+          <label>Unit<input type="text" class="diag-import-unit" maxlength="40" list="diag-unit-presets" value="${escapeHtml(d.unit || "")}"></label>
+          <label>Date<input type="date" class="diag-import-date" value="${escapeHtml(dateVal)}"></label>
+          <label class="med-import-span-2">Notes<input type="text" class="diag-import-notes" maxlength="500" value="${escapeHtml(d.notes || "")}"></label>
+        </div>
+      </div>`;
+    })
+    .join("");
+  wrap.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+function collectDiagImportSelected() {
+  const rows = document.querySelectorAll("#diag-import-review-list .med-import-row");
+  const out = [];
+  rows.forEach((row) => {
+    const checked = row.querySelector(".diag-import-select")?.checked;
+    if (!checked) return;
+    const name = row.querySelector(".diag-import-name")?.value.trim();
+    const valueRaw = row.querySelector(".diag-import-value")?.value;
+    const recordedAt = row.querySelector(".diag-import-date")?.value;
+    if (!name || valueRaw === "" || valueRaw == null || !recordedAt) return;
+    const value = Number(valueRaw);
+    if (!Number.isFinite(value)) return;
+    out.push({
+      name,
+      value,
+      unit: row.querySelector(".diag-import-unit")?.value.trim() || null,
+      recorded_at: recordedAt,
+      notes: row.querySelector(".diag-import-notes")?.value.trim() || null,
+    });
+  });
+  return out;
+}
+
+async function confirmDiagImportAndShowCharts() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const diagnostics = collectDiagImportSelected();
+  if (!diagnostics.length) {
+    return toast("Select readings with name, value, and collection date", "error");
+  }
+  const btn = document.getElementById("btn-diag-import-confirm");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api(`/api/patients/${state.activePatientId}/diagnostics/import/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ diagnostics }),
+    });
+    applyProfileResponse(data);
+    clearDiagImportReview();
+    toast(`Added ${data.added_count || diagnostics.length} lab reading(s)`);
+    switchTab("analyze");
+    setHomeSection("diagnostics", { scroll: true });
+  } catch (err) {
+    toast(err.message || "Could not add lab readings", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function importDiagnosticsFromLibraryDocument(docId) {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  if (!docId) return;
+  setDiagImportStatus("Parsing lab results from document…");
+  try {
+    const data = await api(`/api/patients/${state.activePatientId}/diagnostics/import/from-document`, {
+      method: "POST",
+      body: JSON.stringify({ document_id: docId }),
+      timeoutMs: 300000,
+    });
+    renderDiagImportReview(data);
+    toast(`Parsed ${(data.proposed || []).length} lab reading(s)`);
+  } catch (err) {
+    setDiagImportStatus(err.message || "Import failed", { error: true });
+    switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-import-status" });
+    toast(err.message || "Import failed", "error");
+  }
+}
+
 function renderMedImportReview(data) {
   const wrap = document.getElementById("med-import-review");
   const list = document.getElementById("med-import-review-list");
@@ -8706,6 +8857,44 @@ document.getElementById("btn-med-import-confirm")?.addEventListener("click", asy
   } finally {
     if (btn) btn.disabled = false;
   }
+});
+
+document.getElementById("btn-import-diagnostics")?.addEventListener("click", async () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const fileInput = document.getElementById("diag-import-file");
+  const file = fileInput?.files?.[0];
+  if (!file) return toast("Choose a lab PDF or image first", "error");
+  const btn = document.getElementById("btn-import-diagnostics");
+  if (btn) btn.disabled = true;
+  setDiagImportStatus("Extracting and parsing lab readings…");
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const data = await api(`/api/patients/${state.activePatientId}/diagnostics/import`, {
+      method: "POST",
+      body: fd,
+      timeoutMs: 300000,
+    });
+    renderDiagImportReview(data);
+    toast(`Parsed ${(data.proposed || []).length} lab reading(s)`);
+  } catch (err) {
+    setDiagImportStatus(err.message || "Import failed", { error: true });
+    toast(err.message || "Import failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-diag-import-select-all")?.addEventListener("click", () => {
+  document.querySelectorAll("#diag-import-review-list .diag-import-select").forEach((el) => {
+    el.checked = true;
+  });
+});
+
+document.getElementById("btn-diag-import-clear")?.addEventListener("click", () => clearDiagImportReview());
+
+document.getElementById("btn-diag-import-confirm")?.addEventListener("click", () => {
+  confirmDiagImportAndShowCharts().catch((e) => toast(e.message, "error"));
 });
 
 document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", async () => {

@@ -1162,6 +1162,28 @@
 
         <h4 class="patient-measurements-title">Key diagnostics</h4>
         <p class="muted small">Blood tests first (lipids, HbA1c, creatinine, etc.). Use the lab <strong>collection / date of service</strong>, not the print date. Imaging scores (e.g. calcium score) can be added too.</p>
+        <div class="diagnostic-import-block" id="diagnostic-import-block">
+          <p class="muted small">Have a lab PDF or photo? Import it, review the parsed readings, then add what looks right. You can also use <strong>Import to Labs</strong> on a Library document.</p>
+          <div class="medication-import-controls row-between wrap">
+            <label class="medication-import-file-label" for="diag-import-file">
+              <span class="sr-only">Lab results file</span>
+              <input type="file" id="diag-import-file" accept=".pdf,image/jpeg,image/png,image/webp,image/*">
+            </label>
+            <button type="button" class="btn secondary btn-sm" id="btn-import-diagnostics">Import labs</button>
+          </div>
+          <p class="muted small hidden" id="diag-import-status" role="status"></p>
+          <div id="diag-import-review" class="med-import-review hidden" aria-live="polite">
+            <div class="row-between wrap med-import-review-head">
+              <h5 class="med-import-review-title">Review imported lab readings</h5>
+              <div class="med-import-review-actions">
+                <button type="button" class="btn ghost btn-sm" id="btn-diag-import-select-all">Select all</button>
+                <button type="button" class="btn ghost btn-sm" id="btn-diag-import-clear">Clear review</button>
+                <button type="button" class="btn primary btn-sm" id="btn-diag-import-confirm">Add selected</button>
+              </div>
+            </div>
+            <div id="diag-import-review-list" class="med-import-review-list"></div>
+          </div>
+        </div>
         <div class="patient-measurement-form patient-diagnostic-form">
           <label for="diag-name">Name
             <input type="text" id="diag-name" list="diag-name-presets" placeholder="e.g. CA19-9" maxlength="120">
