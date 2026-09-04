@@ -7519,11 +7519,11 @@ function medicationChartEvents(medications) {
     used.add(best.ti);
     const stopMed = medsById.get(String(stop.medication_id || "")) || {};
     const startMed = medsById.get(String(best.start.medication_id || "")) || {};
-    const oldBits = doseBits(stopMed.dosage, stopMed.frequency) || "?";
-    const newBits = doseBits(startMed.dosage, startMed.frequency) || "?";
+    const oldBits = String(stopMed.dosage || "").trim() || "?";
+    const newBits = String(startMed.dosage || "").trim() || "?";
     const name = stop.medication_name || best.start.medication_name || "Medication";
     const when = best.start.date || stop.date;
-    const body = `${name}: ${oldBits} → ${newBits}`;
+    const body = `${name} ${oldBits} → ${newBits}`;
     merged.push({
       date: when,
       label: short(`${compactDate(when)} · ${body}`),
