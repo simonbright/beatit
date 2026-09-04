@@ -389,6 +389,20 @@
               <button type="button" class="btn ghost btn-sm" id="btn-diagnostics-settings" data-nav-settings>Add in Settings</button>
             </div>
           </div>
+          <div id="diagnostics-milestone-controls" class="diag-milestone-controls hidden">
+            <div class="diag-milestone-controls-head">
+              <label class="diag-milestone-master">
+                <input type="checkbox" id="diag-milestones-enabled" checked>
+                <span>Show medication overlays</span>
+              </label>
+              <div class="diag-milestone-bulk">
+                <button type="button" class="btn ghost btn-sm" id="diag-milestones-all">All</button>
+                <button type="button" class="btn ghost btn-sm" id="diag-milestones-none">None</button>
+              </div>
+            </div>
+            <p class="muted small diag-milestone-hint">Pick which starts, stops, and dose changes appear on the charts. Nearby events share space — deselect to declutter.</p>
+            <div id="diag-milestones-list" class="diag-milestones-list" role="group" aria-label="Medication overlay selection"></div>
+          </div>
           <div id="diagnostics-charts" class="diagnostics-charts">
             <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Patient profile.</p>
           </div>
