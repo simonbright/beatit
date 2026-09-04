@@ -732,6 +732,7 @@ function finishAnalysisRun(analysis) {
   renderLatestAssessment(analysis);
   state.analyses = [analysis, ...state.analyses.filter((a) => a.id !== analysis.id)];
   loadChatObservations().catch(() => {});
+  refreshActivePatientProfile().catch(() => {});
   toast(`Assessment saved · ${formatTimestamp(analysis.created_at)}`);
   scrollToAssessmentResults();
 }
@@ -1098,6 +1099,7 @@ const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", 
 
 function setHomeSection(section, { scroll = false } = {}) {
   const next = HOME_SECTIONS.has(section) ? section : "assessment";
+  const changed = state.homeSection !== next;
   state.homeSection = next;
   document.querySelectorAll("#home-subnav [data-home-section]").forEach((btn) => {
     const active = btn.dataset.homeSection === next;
@@ -1108,6 +1110,9 @@ function setHomeSection(section, { scroll = false } = {}) {
     pane.classList.toggle("hidden", pane.dataset.homePane !== next);
   });
   syncStickyHeaderOffset();
+  if (changed && (next === "diagnostics" || next === "journal" || next === "medications")) {
+    refreshActivePatientProfile().catch(() => {});
+  }
   if (scroll) {
     requestAnimationFrame(() => {
       const pane = $(`[data-home-pane="${next}"]`);
@@ -6979,7 +6984,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   }
 
   renderMedicationsSettings(profile);
-  const series = extras.diagnostic_series || groupDiagnosticsClient(profile);
+  const series = resolveDiagnosticSeries(profile, extras);
   renderDiagnosticsCharts(profile, series);
   const journalSeries = extras.journal_series || groupJournalClient(profile);
   renderJournalHome(profile, journalSeries);
@@ -7517,6 +7522,35 @@ function applyProfileResponse(data) {
   });
   const subEl = document.getElementById("header-patient-sub");
   if (subEl) subEl.textContent = formatPatientSubline(data.profile || {});
+}
+
+function resolveDiagnosticSeries(profile, extras = {}) {
+  const fromClient = groupDiagnosticsClient(profile || {});
+  const fromServer = extras.diagnostic_series;
+  if (!Array.isArray(fromServer) || !fromServer.length) return fromClient;
+  const profileCount = (profile?.diagnostics || []).length;
+  const serverCount = fromServer.reduce(
+    (n, s) => n + Number(s.point_count || (s.readings || []).length || 0),
+    0
+  );
+  // Prefer server series (status + reference bands) when it includes all readings.
+  if (serverCount >= profileCount) return fromServer;
+  // Otherwise merge: keep client points, overlay server refs/status by key.
+  const byKey = new Map(fromServer.map((s) => [String(s.key || s.name || "").toLowerCase(), s]));
+  return fromClient.map((s) => {
+    const server = byKey.get(String(s.key || s.name || "").toLowerCase());
+    if (!server) return s;
+    return {
+      ...s,
+      reference: server.reference || s.reference,
+      status: server.status || s.status,
+      unit: s.unit || server.unit,
+      readings: (s.readings || []).map((r, i) => {
+        const sr = (server.readings || []).find((x) => x.id && r.id && x.id === r.id) || (server.readings || [])[i];
+        return sr?.status ? { ...r, status: sr.status } : r;
+      }),
+    };
+  });
 }
 
 function groupDiagnosticsClient(profile) {
@@ -8277,6 +8311,8 @@ document.getElementById("btn-add-diagnostic")?.addEventListener("click", async (
   document.getElementById("diag-notes").value = "";
   applyProfileResponse(data);
   toast("Diagnostic reading added");
+  switchTab("analyze", { skipTabSave: false });
+  setHomeSection("diagnostics", { scroll: true });
 });
 
 document.getElementById("diag-name")?.addEventListener("change", () => {
