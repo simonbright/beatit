@@ -98,18 +98,12 @@ def _coalesce_stop_start_switches(
 
         stop_med = meds_by_id.get(str(stop.get("medication_id") or ""))
         start_med = meds_by_id.get(str(start.get("medication_id") or ""))
-        old_bits = _dose_bits(
-            (stop_med or {}).get("dosage"),
-            (stop_med or {}).get("frequency"),
-        ) or "?"
-        new_bits = _dose_bits(
-            (start_med or {}).get("dosage"),
-            (start_med or {}).get("frequency"),
-        ) or "?"
+        old_bits = str((stop_med or {}).get("dosage") or "").strip() or "?"
+        new_bits = str((start_med or {}).get("dosage") or "").strip() or "?"
         name = str(stop.get("medication_name") or start.get("medication_name") or "Medication")
         # Prefer the new-regimen date for the chart marker
         when = str(start.get("date") or stop.get("date") or "")
-        body = f"{name}: {old_bits} → {new_bits}"
+        body = f"{name} {old_bits} → {new_bits}"
         merged.append(
             {
                 "date": when,

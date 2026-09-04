@@ -8570,44 +8570,45 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   const coords = points.map((p) => ({ ...p, x: xFor(p.date), y: yFor(p.value) }));
 
   let milestoneLayer = "";
+  let milestoneLegend = "";
   const inRange = filterMilestonesForRange(milestones, points[0].date, points[points.length - 1].date, 0);
   if (inRange.length) {
-    // Flatten to one marker per event; nudge X when dates crowd together
-    const markers = inRange.slice(0, 8).map((ev) => ({
+    const markers = inRange.slice(0, 6).map((ev) => ({
       ...ev,
       x: xFor(ev.date),
     }));
     markers.sort((a, b) => a.x - b.x || String(a.date).localeCompare(String(b.date)));
-    const minGap = 14;
+    const minGap = 16;
     for (let i = 1; i < markers.length; i++) {
       if (markers[i].x - markers[i - 1].x < minGap) {
         markers[i].x = Math.min(w - padX, markers[i - 1].x + minGap);
       }
     }
-    for (let i = markers.length - 2; i >= 0; i--) {
-      if (markers[i + 1].x - markers[i].x < minGap) {
-        markers[i].x = Math.max(padX, markers[i + 1].x - minGap);
-      }
-    }
-    const labelStyle =
-      'paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;font-size:8.5px;fill:#475569';
+    // Clear chart markers only (labels live in the HTML legend below — no overlapping SVG text)
+    const accent = "#0f766e";
     milestoneLayer = markers
-      .map((ev, i) => {
+      .map((ev) => {
         const x = ev.x;
         if (!Number.isFinite(x) || x < padX - 2 || x > w - padX + 2) return "";
-        // Alternate labels left/right so adjacent days stay readable
-        const onRight = i % 2 === 0;
-        const lx = onRight ? x + 4 : x - 4;
-        const anchor = onRight ? "start" : "end";
-        const ly = padTop + 10 + Math.floor(i / 2) * 12;
-        return `<g class="diag-milestone">
-          <line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(1)}" y2="${(h - padBottom).toFixed(1)}" stroke="#64748b" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.8">
+        const top = padTop - 2;
+        const bot = h - padBottom;
+        return `<g class="diag-milestone-mark">
+          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${accent}" stroke-width="2" stroke-dasharray="5 4" opacity="0.95">
             <title>${escapeHtml(ev.label)}</title>
           </line>
-          <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" style="${labelStyle}">${escapeHtml(ev.label)}</text>
+          <polygon points="${(x - 5).toFixed(1)},${top} ${(x + 5).toFixed(1)},${top} ${x.toFixed(1)},${(top + 8).toFixed(1)}" fill="${accent}" />
+          <circle cx="${x.toFixed(1)}" cy="${bot}" r="3.2" fill="${accent}" />
         </g>`;
       })
       .join("");
+    milestoneLegend = `<div class="diag-milestone-legend" aria-label="Medication milestones on this chart">
+      ${markers
+        .map(
+          (ev) =>
+            `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}"><span class="diag-milestone-badge-dot" aria-hidden="true"></span>${escapeHtml(ev.label)}</span>`
+        )
+        .join("")}
+    </div>`;
   }
 
   let refLayer = "";
@@ -8652,12 +8653,13 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
 
   return `<div class="diag-chart-plot">
     <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
-      ${milestoneLayer}
       ${refLayer}
       <polyline fill="none" stroke="${lineStroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
       ${dots}
+      ${milestoneLayer}
       ${dateLabels}
     </svg>
+    ${milestoneLegend}
   </div>`;
 }
 

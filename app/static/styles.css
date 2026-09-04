@@ -1192,6 +1192,37 @@ body {
   display: block;
 }
 
+.diag-milestone-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.diag-milestone-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.28rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #0f766e 35%, var(--border));
+  background: color-mix(in srgb, #0f766e 12%, var(--surface));
+  color: #115e59;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.diag-milestone-badge-dot {
+  flex: 0 0 auto;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #0f766e;
+}
+
 .diag-chart-dates {
   display: grid;
   gap: 0.2rem;
