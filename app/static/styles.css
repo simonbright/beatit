@@ -4876,7 +4876,6 @@ textarea { resize: vertical; min-height: 100px; }
   }
 
   .section-subnav {
-    top: 0;
     margin-left: -0.85rem;
     margin-right: -0.85rem;
     padding-left: 0.85rem;
