@@ -332,35 +332,54 @@ async def _audit(
     )
 
 
-async def _maybe_auto_import_lab_charts(
+async def _finalize_clinical_report_document(
     store: DocumentStore,
     doc: dict[str, Any],
-) -> dict[str, Any] | None:
-    """When a PDF is classified as a lab report, auto-confirm chart readings."""
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Auto-import lab charts when applicable, then persist handled/flagged state."""
+    from app.services.clinical_report_handling import refresh_document_handling
+
     meta = doc.get("metadata") or {}
-    if str(meta.get("clinical_report_kind") or "").lower() != "lab":
-        return None
+    kind = str(meta.get("clinical_report_kind") or "").lower()
+    lab_import: dict[str, Any] | None = None
     ctx = get_active_context()
     patient_id = ctx.get("patient_id")
-    if not patient_id:
-        return None
+    profile = get_patient_profile(patient_id) if patient_id else None
+
+    if kind == "lab" and patient_id:
+        text = await store.read_extracted_text(doc)
+        try:
+            lab_import = await auto_confirm_lab_readings_from_document(
+                patient_id,
+                doc,
+                extracted_text=text,
+            )
+            if lab_import.get("profile"):
+                profile = lab_import["profile"]
+        except Exception:
+            lab_import = {
+                "added_count": 0,
+                "proposed_count": 0,
+                "skipped_incomplete": 0,
+                "offer_manual_import": True,
+                "document_id": doc.get("id"),
+                "document_title": doc.get("title"),
+                "warnings": ["Automatic lab import failed — use Import to Labs"],
+                "errors": [],
+            }
+
     text = await store.read_extracted_text(doc)
-    try:
-        return await auto_confirm_lab_readings_from_document(
-            patient_id,
-            doc,
-            extracted_text=text,
-        )
-    except Exception:
-        return {
-            "added_count": 0,
-            "proposed_count": 0,
-            "offer_manual_import": True,
-            "document_id": doc.get("id"),
-            "document_title": doc.get("title"),
-            "warnings": ["Automatic lab import failed — use Import to Labs"],
-            "errors": [],
-        }
+    updated = await refresh_document_handling(
+        store,
+        doc,
+        profile=profile,
+        lab_import=lab_import,
+        extracted_text=text,
+    )
+    if lab_import is not None and updated.get("handling"):
+        lab_import["handling"] = updated["handling"]
+        lab_import["flagged"] = updated["handling"].get("status") == "flagged"
+    return updated, lab_import
 
 
 @router.post("/login")
@@ -619,6 +638,52 @@ async def document_index():
         "total": await db.count_documents(),
         "counts_by_type": await db.document_type_counts(),
     }
+
+
+@router.get("/handling/flagged")
+async def list_handling_flagged():
+    """Labs / diagnostic reports that still need handling."""
+    from app.services.clinical_report_handling import list_flagged_documents_for_patient
+
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
+    if not patient_id:
+        return {"items": [], "count": 0, "critical_count": 0}
+    return await list_flagged_documents_for_patient(
+        patient_id,
+        active_case_id=ctx.get("case_id"),
+    )
+
+
+@router.post("/documents/{doc_id}/handling/dismiss")
+async def dismiss_document_handling_flag(doc_id: str, request: Request):
+    from app.services.clinical_report_handling import dismiss_document_handling
+
+    db, store, _, _, _ = await _get_services()
+    patient_doc = await resolve_active_patient_document(doc_id)
+    if patient_doc and not patient_doc.get("is_active_case"):
+        raise HTTPException(
+            status_code=403,
+            detail="Switch to that focus case to dismiss this flag",
+        )
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    updated = await dismiss_document_handling(store, doc)
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc_id,
+        metadata={
+            "action": "handling_dismiss",
+            "title": updated.get("title"),
+        },
+    )
+    catalog = await _source_catalog(db)
+    updated["source_info"] = catalog.describe_document(updated)
+    return {"document": updated, "ok": True}
 
 
 @router.get("/documents/imaging/facets")
@@ -982,13 +1047,14 @@ async def reextract_document(doc_id: str, request: Request):
             "clinical_report_kind": (updated.get("metadata") or {}).get("clinical_report_kind"),
         },
     )
-    lab_import = await _maybe_auto_import_lab_charts(store, updated)
+    updated, lab_import = await _finalize_clinical_report_document(store, updated)
     catalog = await _source_catalog(db)
     updated["source_info"] = catalog.describe_document(updated)
     text = await store.read_extracted_text(updated)
     payload: dict[str, Any] = {
         "document": updated,
         "extracted_preview": (text or "")[:500],
+        "handling": updated.get("handling"),
     }
     if lab_import is not None:
         payload["lab_import"] = lab_import
@@ -1136,10 +1202,10 @@ async def ingest_pdf_route(
             "clinical_report_kind": (doc.get("metadata") or {}).get("clinical_report_kind"),
         },
     )
-    lab_import = await _maybe_auto_import_lab_charts(store, doc)
+    doc, lab_import = await _finalize_clinical_report_document(store, doc)
     catalog = await _source_catalog(db)
     doc["source_info"] = catalog.describe_document(doc)
-    payload: dict[str, Any] = {"document": doc}
+    payload: dict[str, Any] = {"document": doc, "handling": doc.get("handling")}
     if lab_import is not None:
         payload["lab_import"] = lab_import
     return payload
@@ -2521,6 +2587,25 @@ async def api_confirm_patient_diagnostics_import(
     if not added and errors:
         raise HTTPException(status_code=400, detail=errors[0])
     profile = get_patient_profile(patient_id)
+    if default_doc_id:
+        try:
+            from app.services.clinical_report_handling import refresh_document_handling
+
+            db, store, _, _, _ = await _get_services()
+            src = await db.get_document(default_doc_id)
+            if src:
+                await refresh_document_handling(
+                    store,
+                    src,
+                    profile=profile,
+                    lab_import={
+                        "added_count": len(added),
+                        "proposed_count": len(body.diagnostics),
+                        "skipped_incomplete": 0,
+                    },
+                )
+        except Exception:
+            pass
     return {
         "added": added,
         "added_count": len(added),

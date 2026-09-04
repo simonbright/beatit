@@ -7,6 +7,7 @@ const state = {
   libraryCounts: {},
   libraryView: "documents",
   diagImportSourceDocumentId: null,
+  handlingFlags: { items: [], count: 0, critical_count: 0 },
   homeSection: "assessment",
   settingsSection: "patients",
   selectedIds: new Set(),
@@ -845,6 +846,196 @@ function updateHomeToolbar() {
 
 function updateHomeWorkflow() {
   updateHomeToolbar();
+  renderHandlingAlerts();
+}
+
+async function refreshHandlingFlags() {
+  try {
+    const data = await api("/api/handling/flagged");
+    state.handlingFlags = {
+      items: data.items || [],
+      count: data.count || 0,
+      critical_count: data.critical_count || 0,
+    };
+  } catch {
+    state.handlingFlags = { items: [], count: 0, critical_count: 0 };
+  }
+  renderHandlingAlerts();
+  renderFlaggedList();
+  return state.handlingFlags;
+}
+
+function renderHandlingAlerts() {
+  const banner = $("#handling-alerts");
+  const text = $("#handling-alerts-text");
+  const countEl = $("#flagged-subtab-count");
+  const flags = state.handlingFlags || { items: [], count: 0, critical_count: 0 };
+  const count = flags.count || 0;
+  const critical = flags.critical_count || 0;
+
+  if (countEl) {
+    if (count > 0) {
+      countEl.textContent = String(count);
+      countEl.classList.remove("hidden");
+      countEl.classList.toggle("is-critical", critical > 0);
+    } else {
+      countEl.textContent = "";
+      countEl.classList.add("hidden");
+      countEl.classList.remove("is-critical");
+    }
+  }
+
+  if (!banner || !text) return;
+  const onHome = $("#panel-analyze")?.classList.contains("active");
+  const onFlagged = state.homeSection === "flagged";
+  if (!onHome || !count || onFlagged) {
+    banner.classList.add("hidden");
+    return;
+  }
+  banner.classList.remove("hidden");
+  banner.classList.toggle("handling-alerts-critical", critical > 0);
+  if (critical > 0) {
+    text.textContent =
+      count === 1
+        ? "1 lab or diagnostic report still needs handling before it can be trusted in analysis."
+        : `${count} lab/diagnostic reports still need handling (${critical} critical).`;
+  } else {
+    text.textContent =
+      count === 1
+        ? "1 report is flagged for review."
+        : `${count} reports are flagged for review.`;
+  }
+}
+
+function renderFlaggedList() {
+  const list = $("#flagged-list");
+  if (!list) return;
+  const items = state.handlingFlags?.items || [];
+  if (!items.length) {
+    list.innerHTML = `<p class="muted small">No flagged reports. Labs and diagnostic PDFs are clear.</p>`;
+    return;
+  }
+  list.innerHTML = items
+    .map((item) => {
+      const severity = item.severity === "critical" ? "critical" : "warning";
+      const kind = item.kind_label
+        ? `<span class="badge badge-report-kind">${escapeHtml(item.kind_label)}</span>`
+        : "";
+      const reasons = (item.reason_labels || [])
+        .map((r) => `<span class="flagged-reason">${escapeHtml(r)}</span>`)
+        .join("");
+      const actions = (item.actions || [])
+        .map((a) => {
+          const cls =
+            a.id === "dismiss"
+              ? "btn ghost btn-sm"
+              : a.id === "import_labs" || a.id === "reextract"
+                ? "btn primary btn-sm"
+                : "btn secondary btn-sm";
+          return `<button type="button" class="${cls} btn-flagged-action" data-action="${escapeHtml(a.id)}" data-id="${escapeHtml(item.document_id)}">${escapeHtml(a.label)}</button>`;
+        })
+        .join("");
+      return `<article class="flagged-item flagged-${severity}" data-id="${escapeHtml(item.document_id)}">
+        <div class="flagged-item-main">
+          <div class="flagged-item-heading">
+            <strong>${escapeHtml(item.title || "Untitled")}</strong>
+            ${kind}
+            <span class="badge badge-flag-${severity}">${severity === "critical" ? "Needs handling" : "Review"}</span>
+          </div>
+          <p class="flagged-item-message">${escapeHtml(item.message || "Needs review")}</p>
+          <div class="flagged-reasons">${reasons}</div>
+        </div>
+        <div class="flagged-item-actions">${actions}</div>
+      </article>`;
+    })
+    .join("");
+}
+
+async function handleFlaggedAction(action, docId) {
+  if (!docId) return;
+  if (action === "view") {
+    await viewDocument(docId);
+    return;
+  }
+  if (action === "reextract") {
+    await reextractDocument(docId);
+    await refreshHandlingFlags();
+    return;
+  }
+  if (action === "import_labs") {
+    await importDiagnosticsFromLibraryDocument(docId);
+    await refreshHandlingFlags();
+    return;
+  }
+  if (action === "dismiss") {
+    if (!confirm("Dismiss this flag? Only do this after you have reviewed the report.")) return;
+    await api(`/api/documents/${encodeURIComponent(docId)}/handling/dismiss`, {
+      method: "POST",
+    });
+    toast("Flag dismissed");
+    await refreshHandlingFlags();
+  }
+}
+
+function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
+  const flagged =
+    labImport?.flagged ||
+    handling?.status === "flagged" ||
+    (labImport?.handling && labImport.handling.status === "flagged");
+  if (!labImport) {
+    if (flagged) {
+      toast("Report flagged — review under Flagged", "error");
+      refreshHandlingFlags().then(() => setHomeSection("flagged", { scroll: true }));
+      return;
+    }
+    if (fallbackToast) toast(fallbackToast);
+    return;
+  }
+  const n = labImport.added_count || 0;
+  const title = labImport.document_title || "lab report";
+  if (n > 0 && !flagged) {
+    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}`);
+    if (typeof applyProfileResponse === "function") {
+      try {
+        applyProfileResponse(labImport);
+      } catch {
+        /* ignore */
+      }
+    }
+    switchTab("analyze");
+    if (typeof setHomeSection === "function") {
+      setHomeSection("diagnostics", { scroll: true });
+    }
+    refreshHandlingFlags().catch(() => {});
+    return;
+  }
+  if (n > 0 && flagged) {
+    toast(`Added ${n} reading(s) from ${title} — some items still need review`, "error");
+    if (typeof applyProfileResponse === "function") {
+      try {
+        applyProfileResponse(labImport);
+      } catch {
+        /* ignore */
+      }
+    }
+    refreshHandlingFlags().then(() => {
+      switchTab("analyze");
+      setHomeSection("flagged", { scroll: true });
+    });
+    return;
+  }
+  toast(
+    flagged
+      ? `Lab report flagged — open Flagged to Import to Labs or re-extract`
+      : labImport.offer_manual_import
+        ? "Tagged as lab report — open Flagged or Import to Labs to finish"
+        : fallbackToast || "Lab report processed",
+    "error"
+  );
+  refreshHandlingFlags().then(() => {
+    switchTab("analyze");
+    setHomeSection("flagged", { scroll: true });
+  });
 }
 
 function renderHomeState(hasAssessment) {
@@ -1054,6 +1245,7 @@ function switchTab(name, options = {}) {
   if (name === "analyze") {
     loadLatestAssessment();
     loadChatObservations().catch(() => {});
+    refreshHandlingFlags().catch(() => {});
     setHomeSection(state.homeSection || "assessment");
   }
   if (name === "options-chat") loadOptionsChatPanel();
@@ -1095,7 +1287,15 @@ function setLibraryView(view) {
   }
 }
 
-const HOME_SECTIONS = new Set(["assessment", "journal", "medications", "diagnostics", "gaps", "run"]);
+const HOME_SECTIONS = new Set([
+  "assessment",
+  "journal",
+  "medications",
+  "diagnostics",
+  "flagged",
+  "gaps",
+  "run",
+]);
 const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", "llm", "audit"]);
 
 function setHomeSection(section, { scroll = false } = {}) {
@@ -1113,6 +1313,9 @@ function setHomeSection(section, { scroll = false } = {}) {
   syncStickyHeaderOffset();
   if (changed && (next === "diagnostics" || next === "journal" || next === "medications")) {
     refreshActivePatientProfile().catch(() => {});
+  }
+  if (changed && next === "flagged") {
+    refreshHandlingFlags().catch(() => {});
   }
   if (scroll) {
     requestAnimationFrame(() => {
@@ -2021,38 +2224,6 @@ function clinicalReportKindBadge(doc) {
     libraryTypeLabel(`kind:${kind}`) ||
     kind;
   return `<span class="badge badge-report-kind" title="Clinical report type">${escapeHtml(label)}</span>`;
-}
-
-function notifyLabImportResult(labImport, { fallbackToast } = {}) {
-  if (!labImport) {
-    if (fallbackToast) toast(fallbackToast);
-    return;
-  }
-  const n = labImport.added_count || 0;
-  const title = labImport.document_title || "lab report";
-  if (n > 0) {
-    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}`);
-    if (typeof applyProfileResponse === "function") {
-      try {
-        applyProfileResponse(labImport);
-      } catch {
-        /* ignore */
-      }
-    }
-    switchTab("analyze");
-    if (typeof setHomeSection === "function") {
-      setHomeSection("diagnostics", { scroll: true });
-    }
-    return;
-  }
-  if (labImport.offer_manual_import) {
-    toast(
-      "Tagged as lab report — open the document and use Import to Labs to review readings",
-      "error"
-    );
-    return;
-  }
-  if (fallbackToast) toast(fallbackToast);
 }
 
 function findDocumentById(id) {
@@ -3521,6 +3692,10 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
       ? `<span class="badge" title="Text recovered with OCR">OCR</span>`
       : "";
   const reportBadge = clinicalReportKindBadge(doc);
+  const handlingBadge =
+    String(meta.handling_status || "").toLowerCase() === "flagged"
+      ? `<span class="badge badge-flagged" title="${escapeHtml(meta.handling_message || "Needs handling")}">Flagged</span>`
+      : "";
   const reextractBtn =
     editable && String(doc.source_type || "").toLowerCase() === "pdf"
       ? `<button type="button" class="btn ghost btn-reextract" data-id="${doc.id}" title="Re-run text extraction / OCR">Re-extract</button>`
@@ -3537,6 +3712,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
         ${sourceBadge}
         <strong>${escapeHtml(displayName)}</strong>
         ${reportBadge}
+        ${handlingBadge}
         ${ocrBadge}
       </div>
       ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
@@ -5437,6 +5613,7 @@ async function deleteDocument(id) {
   const page = Math.min(state.libraryPage, maxPage);
   toast("Document deleted");
   await refreshLibrary({ page, sourceType: state.libraryFilter });
+  refreshHandlingFlags().catch(() => {});
 }
 
 async function reextractDocument(id) {
@@ -5451,12 +5628,17 @@ async function reextractDocument(id) {
       });
       const method = data.document?.metadata?.extraction_method || "unknown";
       const needs = data.document?.metadata?.needs_ocr;
-      if (needs) {
-        toast("Still little text — OCR tools may be unavailable, or the scan is unreadable", "error");
-      } else if (data.lab_import) {
+      const handling = data.handling || data.document?.handling;
+      if (data.lab_import || handling?.status === "flagged") {
         notifyLabImportResult(data.lab_import, {
-          fallbackToast: `Re-extracted (${method})`,
+          fallbackToast: needs
+            ? "Still little text — flagged for OCR review"
+            : `Re-extracted (${method})`,
+          handling,
         });
+      } else if (needs) {
+        toast("Still little text — OCR tools may be unavailable, or the scan is unreadable", "error");
+        await refreshHandlingFlags();
       } else {
         const kindLabel = data.document?.metadata?.clinical_report_kind_label;
         toast(
@@ -5464,6 +5646,7 @@ async function reextractDocument(id) {
             ? `Re-extracted (${method}) · tagged as ${kindLabel}`
             : `Re-extracted (${method})`
         );
+        await refreshHandlingFlags();
       }
       await loadDocuments();
       await loadDocumentIndex();
@@ -5607,9 +5790,11 @@ async function loadInitialData() {
       loadLatestAssessment(),
       loadCustomTasks(),
       loadChatObservations(),
+      refreshHandlingFlags(),
     ]);
   } finally {
     updateHomeToolbar();
+    renderHandlingAlerts();
   }
   restoreActiveTab();
   resumeActiveAnalysisJobInBackground();
@@ -5623,6 +5808,20 @@ $$(".tab").forEach((tab) =>
 );
 
 safeOn("#btn-dismiss-upload", "click", dismissUploadResult);
+safeOn("#btn-flagged-refresh", "click", () => {
+  refreshHandlingFlags().catch((e) => toast(e.message, "error"));
+});
+safeOn("#flagged-list", "click", (event) => {
+  const btn = event.target.closest(".btn-flagged-action");
+  if (!btn?.dataset?.id || !btn.dataset.action) return;
+  handleFlaggedAction(btn.dataset.action, btn.dataset.id).catch((e) =>
+    toast(e.message || "Action failed", "error")
+  );
+});
+safeOn("#btn-handling-alerts-open", "click", () => {
+  switchTab("analyze");
+  setHomeSection("flagged", { scroll: true });
+});
 safeOn("#btn-close-detail", "click", () => closeDocumentDetail());
 safeOn("#doc-detail-actions", "click", (event) => {
   const reextractBtn = event.target.closest(".btn-reextract");
@@ -5812,6 +6011,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
         let failed = 0;
         let lastDoc = null;
         let lastLabImport = null;
+        let lastHandling = null;
         for (let i = 0; i < files.length; i++) {
           if (isCancelled()) return;
           const file = files[i];
@@ -5828,6 +6028,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
             if (isCancelled()) return;
             lastDoc = data.document;
             if (data.lab_import) lastLabImport = data.lab_import;
+            lastHandling = data.handling || data.document?.handling || lastHandling;
             ok += 1;
           } catch (err) {
             failed += 1;
@@ -5844,11 +6045,14 @@ safeOn("#btn-ingest-pdf", "click", async () => {
           delete pdfTitle.dataset.userEdited;
         }
         if (lastDoc) showUploadResult(lastDoc);
+        const shouldOpenFlagged =
+          lastHandling?.status === "flagged" || lastLabImport?.flagged;
         if (ok && !failed) {
-          if (lastLabImport) {
+          if (lastLabImport || shouldOpenFlagged) {
             notifyLabImportResult(lastLabImport, {
               fallbackToast:
                 ok === 1 ? `PDF uploaded · ${files[0].name}` : `${ok} PDFs uploaded`,
+              handling: lastHandling,
             });
           } else {
             const kindLabel = lastDoc?.metadata?.clinical_report_kind_label;
@@ -5859,17 +6063,23 @@ safeOn("#btn-ingest-pdf", "click", async () => {
                   : `PDF uploaded · ${files[0].name}`
                 : `${ok} PDFs uploaded`
             );
+            await refreshHandlingFlags();
           }
         } else if (ok && failed) {
           toast(`${ok} uploaded, ${failed} failed`, "error");
+          await refreshHandlingFlags();
         } else {
           toast("PDF upload failed", "error");
         }
         if (ok) {
-          if (!(lastLabImport && lastLabImport.added_count > 0)) {
+          const openedFlagged =
+            shouldOpenFlagged ||
+            (lastLabImport && !(lastLabImport.added_count > 0 && !lastLabImport.flagged));
+          if (!openedFlagged && !(lastLabImport && lastLabImport.added_count > 0)) {
             await openLibraryAfterIngest();
           } else {
             await loadDocumentIndex();
+            await refreshHandlingFlags();
           }
         }
       },
@@ -7461,6 +7671,7 @@ async function confirmDiagImportAndShowCharts() {
     toast(`Added ${data.added_count || diagnostics.length} lab reading(s)`);
     switchTab("analyze");
     setHomeSection("diagnostics", { scroll: true });
+    refreshHandlingFlags().catch(() => {});
   } catch (err) {
     toast(err.message || "Could not add lab readings", "error");
   } finally {

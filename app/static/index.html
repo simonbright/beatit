@@ -270,6 +270,11 @@
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="section-subtab-label">Labs</span>
         </button>
+        <button type="button" class="section-subtab" data-home-section="flagged" role="tab" aria-selected="false" title="Flagged reports needing handling">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v18M6 4h10l-2 3 2 3H6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="section-subtab-label">Flagged</span>
+          <span id="flagged-subtab-count" class="section-subtab-count hidden" aria-hidden="true"></span>
+        </button>
         <button type="button" class="section-subtab" data-home-section="gaps" role="tab" aria-selected="false" title="Open items">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Gaps</span>
@@ -280,6 +285,13 @@
         </button>
               </div>
       </nav>
+
+      <div id="handling-alerts" class="handling-alerts hidden" role="alert" aria-live="polite">
+        <div class="handling-alerts-inner">
+          <p id="handling-alerts-text" class="handling-alerts-text"></p>
+          <button type="button" class="btn secondary btn-sm" id="btn-handling-alerts-open" data-home-section="flagged">Review flagged</button>
+        </div>
+      </div>
 
       <div id="home-pane-assessment" class="section-pane" data-home-pane="assessment">
         <div id="analyze-results-section" class="analyze-results-section hidden">
@@ -379,6 +391,21 @@
           </div>
           <div id="diagnostics-charts" class="diagnostics-charts">
             <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Patient profile.</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="home-pane-flagged" class="section-pane hidden" data-home-pane="flagged">
+        <div class="card flagged-card" id="flagged-card">
+          <div class="row-between wrap">
+            <div>
+              <h3>Flagged reports</h3>
+              <p class="muted small">Labs and factual diagnostic reports must be handled or explicitly dismissed. Items stay here until charts are updated, OCR succeeds, or you dismiss after review.</p>
+            </div>
+            <button type="button" class="btn ghost btn-sm" id="btn-flagged-refresh">Refresh</button>
+          </div>
+          <div id="flagged-list" class="flagged-list">
+            <p class="muted small">No flagged reports.</p>
           </div>
         </div>
       </div>
