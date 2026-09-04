@@ -84,6 +84,17 @@ class DocumentStore:
         return await self.db.delete_document(doc_id)
 
     async def get_corpus(self, document_ids: list[str] | None = None) -> list[dict[str, Any]]:
+        """Build corpus for analysis/chat.
+
+        Prefer patient-wide documents (all focuses for the active patient).
+        Fall back to the active case DB when no patient context exists.
+        """
+        from app.services.patient_documents import get_active_patient_corpus
+
+        patient_corpus = await get_active_patient_corpus(document_ids)
+        if patient_corpus is not None:
+            return patient_corpus
+
         docs = await self.db.list_documents()
         if document_ids:
             id_set = set(document_ids)

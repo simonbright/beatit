@@ -179,12 +179,16 @@ class AssessmentPDF(FPDF):
         report_time: str,
         report_type: str | None,
         exported_at: str | None = None,
+        patient_label: str | None = None,
+        patient_subline: str | None = None,
     ):
         super().__init__()
         self.report_date = report_date
         self.report_time = report_time
         self.report_type = report_type
         self.exported_at = exported_at
+        self.patient_label = (patient_label or "").strip() or None
+        self.patient_subline = (patient_subline or "").strip() or None
 
     def header(self) -> None:
         _draw_duck_logo(self, 16, 9, 1.15)
@@ -195,7 +199,8 @@ class AssessmentPDF(FPDF):
         self.set_x(40)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(80, 80, 80)
-        self.cell(0, 5, "Oncology Case Analysis", new_x="LMARGIN", new_y="NEXT")
+        subtitle = self.patient_label or "Patient Care Workspace"
+        self.cell(0, 5, _safe_text(subtitle), new_x="LMARGIN", new_y="NEXT")
 
         self.set_xy(118, 11)
         self.set_font("Helvetica", "", 9)
@@ -238,9 +243,13 @@ class AssessmentPDF(FPDF):
             self.cell(0, 3, _safe_text(f"Exported {self.exported_at}"), align="C", new_x="LMARGIN", new_y="NEXT")
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(60, 60, 60)
-        self.cell(0, 4, "Medical Confidential - Susan Brajtman", align="C", new_x="LMARGIN", new_y="NEXT")
-        self.set_font("Helvetica", "", 8)
-        self.cell(0, 4, "sbrajtman@gmail.com  1-613-614-7536", align="C", new_x="LMARGIN", new_y="NEXT")
+        confidential = "Medical Confidential"
+        if self.patient_label:
+            confidential = f"Medical Confidential - {self.patient_label}"
+        self.cell(0, 4, _safe_text(confidential), align="C", new_x="LMARGIN", new_y="NEXT")
+        if self.patient_subline:
+            self.set_font("Helvetica", "", 8)
+            self.cell(0, 4, _safe_text(self.patient_subline), align="C", new_x="LMARGIN", new_y="NEXT")
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(100, 100, 100)
         self.cell(0, 4, f"Page {self.page_no()}/{{nb}} · {APP_NAME} v{APP_VERSION}", align="C")
@@ -504,6 +513,293 @@ def _expand_appendix_with_scope_documents(
     return expanded
 
 
+def _format_diag_date_label(iso: str | None) -> str:
+    raw = str(iso or "")[:10]
+    dt = _parse_iso_datetime(raw)
+    if not dt:
+        return raw or "-"
+    # Use day without leading zero via manual format (portable)
+    return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+
+
+def _format_diag_value_label(value: Any) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return str(value) if value is not None else ""
+    if n != n:  # NaN
+        return ""
+    if abs(n - round(n)) < 1e-9:
+        return str(int(round(n)))
+    abs_n = abs(n)
+    if abs_n >= 100:
+        return f"{n:.0f}"
+    if abs_n >= 10:
+        return f"{n:.1f}"
+    text = f"{n:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+_STATUS_RGB = {
+    "green": (21, 128, 61),
+    "yellow": (202, 138, 4),
+    "red": (185, 28, 28),
+}
+
+
+def _status_rgb(status: str | None, fallback: tuple[int, int, int] = (14, 116, 144)) -> tuple[int, int, int]:
+    if not status:
+        return fallback
+    return _STATUS_RGB.get(str(status).lower(), fallback)
+
+
+def _sparkline_png_bytes(
+    readings: list[dict[str, Any]],
+    *,
+    width: int = 980,
+    height: int = 250,
+    stroke: tuple[int, int, int] = (14, 116, 144),
+    reference: dict[str, Any] | None = None,
+    series_status: str | None = None,
+) -> bytes | None:
+    """Render a simple sparkline PNG for embedding in the PDF."""
+    points: list[tuple[str, float, str | None]] = []
+    for row in readings or []:
+        date = str(row.get("recorded_at") or "")[:10]
+        try:
+            value = float(row.get("value"))
+        except (TypeError, ValueError):
+            continue
+        if not date:
+            continue
+        status = row.get("status")
+        if isinstance(status, str):
+            status = status.lower()
+        else:
+            status = None
+        points.append((date, value, status))
+    if not points:
+        return None
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    line_stroke = _status_rgb(series_status or points[-1][2], stroke)
+
+    img = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 18)
+        font_sm = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 15)
+        font_xs = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 12)
+    except OSError:
+        font = ImageFont.load_default()
+        font_sm = font
+        font_xs = font
+
+    pad_l, pad_r, pad_t, pad_b = 36, 52, 36, 56
+    chart_w = width - pad_l - pad_r
+    chart_h = height - pad_t - pad_b
+
+    ref_low = None
+    ref_high = None
+    if reference:
+        try:
+            if reference.get("low") is not None:
+                ref_low = float(reference["low"])
+        except (TypeError, ValueError):
+            ref_low = None
+        try:
+            if reference.get("high") is not None:
+                ref_high = float(reference["high"])
+        except (TypeError, ValueError):
+            ref_high = None
+
+    if len(points) == 1:
+        date, value, status = points[0]
+        color = _status_rgb(status, line_stroke)
+        label = _format_diag_value_label(value)
+        date_label = _safe_text(_format_diag_date_label(date))
+        draw.text((width / 2, height / 2 - 22), label, fill=color, font=font, anchor="mm")
+        draw.text((width / 2, height / 2 + 8), date_label, fill=(100, 116, 139), font=font_sm, anchor="mm")
+        if reference and reference.get("label"):
+            draw.text(
+                (width / 2, height / 2 + 32),
+                _safe_text(str(reference["label"])),
+                fill=(100, 116, 139),
+                font=font_xs,
+                anchor="mm",
+            )
+    else:
+        values = [p[1] for p in points]
+        vmin, vmax = min(values), max(values)
+        if ref_low is not None:
+            vmin = min(vmin, ref_low)
+        if ref_high is not None:
+            vmax = max(vmax, ref_high)
+        pad = (vmax - vmin) * 0.08 or abs(vmax) * 0.05 or 0.2
+        vmin -= pad
+        vmax += pad
+        span = vmax - vmin or 1.0
+
+        def y_for(val: float) -> float:
+            return pad_t + chart_h - ((val - vmin) / span) * chart_h
+
+        if ref_low is not None or ref_high is not None:
+            top = y_for(ref_high if ref_high is not None else vmax)
+            bottom = y_for(ref_low if ref_low is not None else vmin)
+            y1, y2 = min(top, bottom), max(top, bottom)
+            band = tuple(min(255, int(c * 0.25 + 220)) for c in line_stroke)
+            draw.rectangle(
+                (pad_l, y1, pad_l + chart_w, y2),
+                fill=band,
+            )
+            if ref_high is not None:
+                y = y_for(ref_high)
+                draw.line((pad_l, y, pad_l + chart_w, y), fill=line_stroke, width=2)
+                draw.text(
+                    (pad_l + chart_w + 4, y),
+                    _safe_text(_format_diag_value_label(ref_high)),
+                    fill=line_stroke,
+                    font=font_xs,
+                    anchor="lm",
+                )
+            if ref_low is not None:
+                y = y_for(ref_low)
+                draw.line((pad_l, y, pad_l + chart_w, y), fill=line_stroke, width=2)
+                draw.text(
+                    (pad_l + chart_w + 4, y),
+                    _safe_text(_format_diag_value_label(ref_low)),
+                    fill=line_stroke,
+                    font=font_xs,
+                    anchor="lm",
+                )
+
+        coords: list[tuple[float, float]] = []
+        for i, (_date, value, _status) in enumerate(points):
+            x = pad_l + (i / (len(points) - 1)) * chart_w
+            y = y_for(value)
+            coords.append((x, y))
+        draw.line(coords, fill=line_stroke, width=4)
+        for i, ((x, y), (date, value, status)) in enumerate(zip(coords, points)):
+            color = _status_rgb(status, line_stroke)
+            r = 5
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
+            val_label = _safe_text(_format_diag_value_label(value))
+            draw.text((x, y - 14), val_label, fill=(30, 41, 59), font=font_sm, anchor="mb")
+            date_label = _safe_text(_format_diag_date_label(date))
+            draw.text((x, height - 14), date_label, fill=(100, 116, 139), font=font_xs, anchor="mb")
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _write_diagnostics_charts(
+    pdf: FPDF,
+    series: list[dict[str, Any]] | None,
+    *,
+    as_of: str | None = None,
+    max_charts: int = 10,
+) -> None:
+    """Add a Key diagnostics page with sparkline charts."""
+    if not series:
+        return
+
+    # Prefer multi-point blood trends; keep a modest page count
+    ranked = sorted(
+        series,
+        key=lambda s: (
+            0 if (s.get("category") or "") == "blood" else 1,
+            0 if int(s.get("point_count") or 0) > 1 else 1,
+            -int(s.get("point_count") or 0),
+            str(s.get("name") or "").lower(),
+        ),
+    )[:max_charts]
+    if not ranked:
+        return
+
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(14, 116, 144)
+    pdf.cell(0, 10, "Key diagnostics", new_x="LMARGIN", new_y="NEXT", align="L")
+    if as_of:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(0, 5, f"As of {_safe_text(as_of)}", new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(80, 80, 80)
+    _pdf_multiline(
+        pdf,
+        _safe_text(
+            "Blood-test trends use collection / date of service. "
+            "Shaded band shows age- and sex-aware reference targets. "
+            "Green = on target; yellow = within 10% beyond bound; red = farther."
+        ),
+        h=4,
+    )
+    pdf.set_draw_color(14, 165, 233)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(4)
+
+    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+    col_w = (usable_w - 4) / 2
+    chart_h_mm = 38
+    gap = 4
+    row_step = chart_h_mm + 16
+    strokes = [(14, 116, 144), (8, 145, 178), (180, 83, 9)]
+    row_y: float | None = None
+
+    for index, item in enumerate(ranked):
+        col = index % 2
+        if col == 0:
+            if pdf.get_y() + row_step > pdf.h - pdf.b_margin:
+                pdf.add_page()
+                pdf.set_font("Helvetica", "B", 12)
+                pdf.set_text_color(14, 116, 144)
+                pdf.cell(0, 8, "Key diagnostics (continued)", new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(2)
+            row_y = pdf.get_y()
+
+        x = pdf.l_margin + col * (col_w + gap)
+        y = row_y if row_y is not None else pdf.get_y()
+
+        name = _safe_text(item.get("name") or "Diagnostic")
+        unit = _safe_text(item.get("unit") or "")
+        latest = item.get("latest") or {}
+        latest_val = _format_diag_value_label(latest.get("value"))
+        latest_date = _format_diag_date_label(latest.get("recorded_at"))
+        unit_bit = f" {unit}" if unit else ""
+        status = item.get("status") or latest.get("status")
+        status_bit = f" · {str(status).capitalize()}" if status in _STATUS_RGB else ""
+        sub = f"{latest_val}{unit_bit} · {latest_date}{status_bit}" if latest_val else latest_date
+        ref = item.get("reference") or {}
+        if ref.get("label"):
+            sub = f"{sub} · Ref {ref['label']}" if sub else f"Ref {ref['label']}"
+
+        pdf.set_xy(x, y)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(30, 41, 59)
+        pdf.cell(col_w, 5, name, new_x="RIGHT", new_y="TOP")
+        pdf.set_xy(x, y + 5)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*_status_rgb(status if isinstance(status, str) else None, (80, 80, 80)))
+        pdf.cell(col_w, 4, _safe_text(sub), new_x="RIGHT", new_y="TOP")
+
+        png = _sparkline_png_bytes(
+            item.get("readings") or [],
+            stroke=strokes[index % len(strokes)],
+            reference=item.get("reference"),
+            series_status=status if isinstance(status, str) else None,
+        )
+        if png:
+            pdf.image(BytesIO(png), x=x, y=y + 10, w=col_w, h=chart_h_mm)
+
+        if col == 1 or index == len(ranked) - 1:
+            pdf.set_y((row_y or y) + row_step)
+
+    pdf.ln(2)
+
+
 def _response_body_for_pdf(analysis: dict[str, Any]) -> str:
     """Full assessment text for PDF, with executive summary removed when possible."""
     response = (analysis.get("response") or "").strip()
@@ -521,6 +817,9 @@ def build_assessment_pdf(
     *,
     patient_context: str | None = None,
     catalog: SourceCatalog | None = None,
+    diagnostic_series: list[dict[str, Any]] | None = None,
+    patient_label: str | None = None,
+    patient_subline: str | None = None,
 ) -> bytes:
     report_timestamp = _format_timestamp(analysis.get("created_at"))
     report_date, report_time = _format_timestamp_parts(analysis.get("created_at"))
@@ -543,6 +842,8 @@ def build_assessment_pdf(
         report_time=report_time,
         report_type=report_type,
         exported_at=exported_at,
+        patient_label=patient_label,
+        patient_subline=patient_subline,
     )
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=28)
@@ -570,6 +871,13 @@ def build_assessment_pdf(
         as_of=report_timestamp,
         include_section_references=False,
     )
+
+    _write_diagnostics_charts(
+        pdf,
+        diagnostic_series,
+        as_of=report_timestamp,
+    )
+
     _write_section_with_references(
         pdf,
         response_title,
@@ -621,3 +929,145 @@ def assessment_pdf_filename(
     if analysis.get("analysis_type") == "query":
         return f"beatit-custom-task-{stamp}.pdf"
     return f"beatit-assessment-{stamp}.pdf"
+
+
+def diagnostics_pdf_filename(
+    *,
+    patient_label: str | None = None,
+    exported_at: datetime | None = None,
+) -> str:
+    stamp = _format_filename_stamp(
+        (exported_at or datetime.now(timezone.utc)).isoformat()
+    )
+    slug = ""
+    if patient_label:
+        slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
+    if slug:
+        return f"beatit-diagnostics-{slug}-{stamp}.pdf"
+    return f"beatit-diagnostics-{stamp}.pdf"
+
+
+def build_diagnostics_pdf(
+    series: list[dict[str, Any]],
+    *,
+    patient_label: str | None = None,
+    patient_subline: str | None = None,
+) -> bytes:
+    """Diagnostics-only PDF with charts, traffic-light status, and export timestamp."""
+    now = datetime.now(timezone.utc)
+    exported_at = _format_timestamp(now.isoformat())
+    report_date, report_time = _format_timestamp_parts(now.isoformat())
+
+    pdf = AssessmentPDF(
+        report_date=report_date,
+        report_time=report_time,
+        report_type="Diagnostics export",
+        exported_at=exported_at,
+        patient_label=patient_label,
+        patient_subline=patient_subline,
+    )
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=28)
+    pdf.set_margins(18, 38, 18)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(14, 116, 144)
+    title = "Key diagnostics"
+    if patient_label:
+        title = f"Key diagnostics - {_safe_text(patient_label)}"
+    pdf.cell(0, 9, title, new_x="LMARGIN", new_y="NEXT", align="L")
+
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(80, 80, 80)
+    meta = [f"Exported: {exported_at}"]
+    if patient_subline:
+        meta.append(_safe_text(patient_subline))
+    pdf.cell(0, 5, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 9)
+    _pdf_multiline(
+        pdf,
+        _safe_text(
+            "Green = on target vs reference. Yellow = within 10% beyond the bound. "
+            "Red = farther than 10%. References are approximate age/sex orientation, not medical advice."
+        ),
+        h=4,
+    )
+    pdf.set_draw_color(14, 165, 233)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(3)
+
+    if not series:
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 8, "No diagnostic readings to export.", new_x="LMARGIN", new_y="NEXT")
+    else:
+        usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+        col_w = (usable_w - 4) / 2
+        chart_h_mm = 40
+        gap = 4
+        row_step = chart_h_mm + 18
+        strokes = [(14, 116, 144), (8, 145, 178), (180, 83, 9)]
+        row_y: float | None = None
+        ranked = sorted(
+            series,
+            key=lambda s: (
+                0 if (s.get("category") or "") == "blood" else 1,
+                0 if int(s.get("point_count") or 0) > 1 else 1,
+                -int(s.get("point_count") or 0),
+                str(s.get("name") or "").lower(),
+            ),
+        )
+        for index, item in enumerate(ranked):
+            col = index % 2
+            if col == 0:
+                if pdf.get_y() + row_step > pdf.h - pdf.b_margin:
+                    pdf.add_page()
+                    pdf.set_font("Helvetica", "B", 12)
+                    pdf.set_text_color(14, 116, 144)
+                    pdf.cell(0, 8, "Key diagnostics (continued)", new_x="LMARGIN", new_y="NEXT")
+                    pdf.ln(2)
+                row_y = pdf.get_y()
+
+            x = pdf.l_margin + col * (col_w + gap)
+            y = row_y if row_y is not None else pdf.get_y()
+
+            name = _safe_text(item.get("name") or "Diagnostic")
+            unit = _safe_text(item.get("unit") or "")
+            latest = item.get("latest") or {}
+            latest_val = _format_diag_value_label(latest.get("value"))
+            latest_date = _format_diag_date_label(latest.get("recorded_at"))
+            unit_bit = f" {unit}" if unit else ""
+            status = item.get("status") or latest.get("status")
+            status_bit = f" · {str(status).capitalize()}" if status in _STATUS_RGB else ""
+            sub = f"{latest_val}{unit_bit} · {latest_date}{status_bit}" if latest_val else latest_date
+            ref = item.get("reference") or {}
+            if ref.get("label"):
+                sub = f"{sub} · Ref {ref['label']}" if sub else f"Ref {ref['label']}"
+
+            pdf.set_xy(x, y)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(30, 41, 59)
+            pdf.cell(col_w, 5, name, new_x="RIGHT", new_y="TOP")
+            pdf.set_xy(x, y + 5)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*_status_rgb(status if isinstance(status, str) else None, (80, 80, 80)))
+            pdf.cell(col_w, 4, _safe_text(sub), new_x="RIGHT", new_y="TOP")
+
+            png = _sparkline_png_bytes(
+                item.get("readings") or [],
+                stroke=strokes[index % len(strokes)],
+                reference=item.get("reference"),
+                series_status=status if isinstance(status, str) else None,
+            )
+            if png:
+                pdf.image(BytesIO(png), x=x, y=y + 10, w=col_w, h=chart_h_mm)
+
+            if col == 1 or index == len(ranked) - 1:
+                pdf.set_y((row_y or y) + row_step)
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()

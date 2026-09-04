@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BeatIt — Oncology Case Analysis</title>
+  <title>BeatIt — Patient Care Workspace</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/favicon.png" type="image/png">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -30,18 +30,59 @@
     <div class="header-inner">
       <div class="brand">
         <a href="/" class="brand-duck-link" aria-label="BeatIt home">
-          <img src="/static/favicon.svg" alt="" class="brand-duck" width="52" height="52">
+          <img src="/static/favicon.svg" alt="" class="brand-duck" width="40" height="40">
         </a>
         <div>
           <h1>BeatIt</h1>
-          <p class="subtitle">Oncology case analysis</p>
+          <p class="subtitle">Patient Care Workspace</p>
+        </div>
+      </div>
+      <div class="header-patient" id="header-patient">
+        <button type="button" class="patient-photo-btn" id="btn-patient-photo" title="Add or change patient photo" aria-label="Add or change patient photo">
+          <img id="header-patient-photo" class="patient-photo-img hidden" alt="">
+          <span id="header-patient-initials" class="patient-photo-initials">?</span>
+        </button>
+        <input type="file" id="input-patient-photo" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
+        <div class="header-patient-meta">
+          <h2 class="header-patient-name" id="header-patient-name">No patient</h2>
+          <p class="header-patient-sub" id="header-patient-sub"></p>
+          <div class="header-patient-controls">
+            <label class="header-select-wrap hidden" id="header-patient-select-wrap">
+              <span class="sr-only">Patient</span>
+              <select id="header-patient-select" aria-label="Switch patient"></select>
+            </label>
+            <label class="header-select-wrap" id="header-case-select-wrap">
+              <span>Case</span>
+              <select id="header-case-select" aria-label="Switch case"></select>
+            </label>
+          </div>
         </div>
       </div>
       <div class="header-actions">
-        <button type="button" class="btn secondary header-export-btn hidden" id="btn-export-pdf" title="Download assessment as PDF">
+        <button type="button" class="btn secondary header-export-btn header-export-text hidden" id="btn-export-pdf" title="Download assessment as PDF">
           Export PDF
         </button>
+        <button type="button" class="header-icon-btn header-export-icon hidden" id="btn-export-pdf-icon" title="Download assessment as PDF" aria-label="Export PDF">
+          <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M14 2v6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M12 18v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M9 15l3 3 3-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <div class="status-pill hidden" id="llm-status" aria-live="polite"></div>
+        <button type="button" class="header-icon-btn" id="btn-journal" aria-label="How are you?" title="How are you?">
+          <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button type="button" class="header-icon-btn" id="btn-howto" aria-label="How to use BeatIt" title="How to">
+          <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="17" r="1" fill="currentColor"/>
+          </svg>
+        </button>
         <button type="button" class="header-icon-btn theme-toggle" id="theme-toggle" aria-label="Switch to day theme" title="Toggle day/night theme">
           <span class="theme-icon theme-icon-sun" aria-hidden="true">☀</span>
           <span class="theme-icon theme-icon-moon" aria-hidden="true">☾</span>
@@ -56,30 +97,80 @@
       </div>
     </div>
     <nav class="header-nav" aria-label="Main navigation">
-      <div class="tabs header-tabs" role="tablist">
-        <button class="tab active" data-tab="analyze" role="tab" aria-selected="true">Home</button>
-        <button class="tab" data-tab="options-chat" role="tab">AI Chat</button>
-        <button class="tab" data-tab="custom-tasks" role="tab">Custom Tasks</button>
-        <button class="tab" data-tab="ingest" role="tab">Add data</button>
-        <button class="tab" data-tab="library" role="tab">Library</button>
-        <button class="tab" data-tab="imaging" role="tab">Imaging</button>
-        <button class="tab" data-tab="history" role="tab">History</button>
-        <button class="tab" data-tab="howto" role="tab">How to</button>
-        <button class="tab" data-tab="settings" role="tab">Settings</button>
+      <div class="tabs header-tabs header-tabs-icons" role="tablist">
+        <button class="tab tab-icon active" data-tab="analyze" role="tab" aria-selected="true" title="Home" aria-label="Home">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="tab-icon-label">Home</span>
+        </button>
+        <button class="tab tab-icon" data-tab="options-chat" role="tab" title="AI Chat" aria-label="AI Chat">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="tab-icon-label">Chat</span>
+        </button>
+        <button class="tab tab-icon" data-tab="custom-tasks" role="tab" title="Custom Tasks" aria-label="Custom Tasks">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="tab-icon-label">Tasks</span>
+        </button>
+        <button class="tab tab-icon" data-tab="library" role="tab" title="Library" aria-label="Library">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span class="tab-icon-label">Library</span>
+        </button>
+        <button class="tab tab-icon" data-tab="history" role="tab" title="History" aria-label="History">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="tab-icon-label">History</span>
+        </button>
+        <button class="tab tab-icon" data-tab="settings" role="tab" title="Settings" aria-label="Settings">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="tab-icon-label">Settings</span>
+        </button>
       </div>
     </nav>
   </header>
 
-  <!-- Patient / Case context bar -->
-  <div id="case-context-bar" class="case-context-bar">
-    <span class="case-context-label">
-      <strong id="case-ctx-patient">—</strong>
-      <span class="case-ctx-sep">›</span>
-      <strong id="case-ctx-case">—</strong>
-    </span>
-    <button type="button" class="btn ghost btn-xs" id="btn-switch-case" title="Switch patient or case">Switch</button>
-    <button type="button" class="btn ghost btn-xs" id="btn-new-patient" title="New patient">+ Patient</button>
-    <button type="button" class="btn ghost btn-xs" id="btn-new-case" title="New case for current patient">+ Case</button>
+  <!-- How are you? quick log -->
+  <div id="modal-journal" class="modal-overlay hidden">
+    <div class="modal-card modal-journal-card">
+      <div class="row-between wrap">
+        <h3>How are you?</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-journal">Close</button>
+      </div>
+      <p class="muted small">Log a symptom, feeling, or med with a date and time. Patient-wide by default.</p>
+      <div class="journal-chip-block">
+        <p class="journal-chip-label muted small">How I feel</p>
+        <div class="journal-chips" id="journal-feeling-chips" role="group" aria-label="Feeling and symptom chips"></div>
+        <p class="journal-chip-label muted small">What I did</p>
+        <div class="journal-chips" id="journal-action-chips" role="group" aria-label="Action chips"></div>
+      </div>
+      <div class="journal-severity-row" id="journal-severity-row">
+        <span class="muted small">Severity</span>
+        <div class="journal-severity" id="journal-severity" role="group" aria-label="Severity 1 to 5">
+          <button type="button" class="journal-sev-btn" data-sev="1" title="Mild">1</button>
+          <button type="button" class="journal-sev-btn" data-sev="2">2</button>
+          <button type="button" class="journal-sev-btn" data-sev="3" title="Moderate">3</button>
+          <button type="button" class="journal-sev-btn" data-sev="4">4</button>
+          <button type="button" class="journal-sev-btn" data-sev="5" title="Severe">5</button>
+        </div>
+        <button type="button" class="btn ghost btn-sm" id="btn-journal-clear-sev">Clear</button>
+      </div>
+      <label class="journal-text-label" for="journal-text">Details
+        <input type="text" id="journal-text" maxlength="500" placeholder="e.g. 500mg aspirin, worse lying down…" autocomplete="off">
+      </label>
+      <div class="journal-meta-row">
+        <label class="journal-check">
+          <input type="checkbox" id="journal-link-case">
+          Link to this case
+        </label>
+        <details class="journal-when-details">
+          <summary class="muted small">Change time</summary>
+          <label for="journal-when">When
+            <input type="datetime-local" id="journal-when">
+          </label>
+        </details>
+      </div>
+      <div class="journal-actions">
+        <button type="button" class="btn primary" id="btn-journal-log">Log now</button>
+        <span class="muted small" id="journal-selected-hint">Pick a chip or type a note</span>
+      </div>
+    </div>
   </div>
 
   <!-- New Patient modal -->
@@ -103,6 +194,19 @@
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btn-cancel-new-case">Cancel</button>
         <button type="button" class="btn primary" id="btn-confirm-new-case">Create & Switch</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename Case modal -->
+  <div id="modal-rename-case" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3>Rename case</h3>
+      <p class="muted small" id="rename-case-hint">Changes the display name only. Library and assessments stay the same.</p>
+      <label>Case name<br><input type="text" id="input-rename-case-label" class="input" placeholder="e.g. Chronic Fatigue"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btn-cancel-rename-case">Cancel</button>
+        <button type="button" class="btn primary" id="btn-confirm-rename-case">Save</button>
       </div>
     </div>
   </div>
@@ -178,6 +282,47 @@
             <p class="source-legend-note">Inline tags point to the numbered <strong>References</strong> list at the bottom — each Doc is a different library file, not a generic badge.</p>
           </div>
         </details>
+
+        <div class="card journal-card" id="journal-card">
+          <div class="row-between wrap">
+            <div>
+              <h3>How you have been</h3>
+              <p class="muted small">Recent self-reports and trends. Use the heart in the header to log how you feel.</p>
+            </div>
+            <button type="button" class="btn secondary btn-sm" id="btn-journal-open-home">Log now</button>
+          </div>
+          <div id="journal-recent" class="journal-recent"></div>
+          <div id="journal-charts" class="journal-charts"></div>
+        </div>
+
+        <div class="card medications-card" id="medications-card">
+          <div class="row-between wrap">
+            <div>
+              <h3>Medications</h3>
+              <p class="muted small">Active prescriptions for this patient. Dosage changes keep a history.</p>
+            </div>
+            <button type="button" class="btn ghost btn-sm" id="btn-medications-settings">Manage in Settings</button>
+          </div>
+          <div id="medications-home-list" class="medications-home-list">
+            <p class="muted small">No active medications yet.</p>
+          </div>
+        </div>
+
+        <div class="card diagnostics-card" id="diagnostics-card">
+          <div class="row-between wrap">
+            <div>
+              <h3>Key diagnostics</h3>
+              <p class="muted small">Blood-test trends with collection dates. Green = on target; yellow = within 10% of the bound; red = farther. Dashed lines are age- and sex-aware references. Hover a metric for what it means; open the link for a reliable source.</p>
+            </div>
+            <div class="diagnostics-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with date and time stamp">Export PDF</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-diagnostics-settings" data-nav-settings>Add in Settings</button>
+            </div>
+          </div>
+          <div id="diagnostics-charts" class="diagnostics-charts">
+            <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Patient profile.</p>
+          </div>
+        </div>
 
         <div class="card open-items-card" id="open-items-card">
           <h3>Open items</h3>
@@ -351,7 +496,7 @@
             <h3>Sessions</h3>
             <button type="button" class="btn primary btn-sm" id="btn-options-chat-new">New chat</button>
           </div>
-          <p class="muted small">Deep, guided discussion of treatment options. Uses your library scope and the current Home assessment.</p>
+          <p class="muted small">Deep, guided discussion of treatment options. Uses your library scope and the current Home assessment. Ask it to read a document by name; use <strong>Update Home</strong> on a reply to refresh the main assessment.</p>
           <div id="options-chat-session-list" class="options-chat-session-list">
             <p class="muted">No chats yet.</p>
           </div>
@@ -488,84 +633,6 @@
       </div>
     </section>
 
-    <!-- INGEST -->
-    <section id="panel-ingest" class="panel">
-      <div class="ingest-grid">
-        <article class="card">
-          <h3>Clinical notes / text</h3>
-          <label>Title<input type="text" id="text-title" placeholder="e.g. Oncologist visit notes — June 2026"></label>
-          <label>Content<textarea id="text-content" rows="8" placeholder="Paste pathology, imaging summaries, consult notes…"></textarea></label>
-          <button class="btn primary" id="btn-ingest-text">Save text</button>
-        </article>
-
-        <article class="card">
-          <h3>Web page or URL</h3>
-          <label>URL<input type="url" id="url-input" placeholder="https://…"></label>
-          <label>Title (optional)<input type="text" id="url-title" placeholder="Auto-detected from page"></label>
-          <button class="btn primary" id="btn-ingest-url">Fetch &amp; store</button>
-        </article>
-
-        <article class="card">
-          <h3>YouTube</h3>
-          <label>Video URL<input type="url" id="youtube-input" placeholder="https://youtube.com/watch?v=…"></label>
-          <label>Title (optional)<input type="text" id="youtube-title"></label>
-          <p class="muted small">Uses available captions/transcripts. Videos without captions cannot be ingested yet.</p>
-          <button class="btn primary" id="btn-ingest-youtube">Ingest transcript</button>
-        </article>
-
-        <article class="card">
-          <h3>Facebook reel / video</h3>
-          <label>Video URL<input type="url" id="facebook-input" placeholder="https://www.facebook.com/reel/…"></label>
-          <label>Title (optional)<input type="text" id="facebook-title"></label>
-          <label>Notes (optional)<textarea id="facebook-notes" rows="3" placeholder="Clinical context or manual notes to include with the transcript"></textarea></label>
-          <p class="muted small">Downloads the public video and any available English captions. Private or login-only videos may not work.</p>
-          <button class="btn primary" id="btn-ingest-facebook">Ingest Facebook video</button>
-        </article>
-
-        <article class="card">
-          <h3>PDF document</h3>
-          <label class="file-label btn primary file-picker-btn">
-            <input type="file" id="pdf-file" accept=".pdf,application/pdf" hidden>
-            Choose PDF file
-          </label>
-          <label>Title<input type="text" id="pdf-title" placeholder="Defaults to the PDF filename"></label>
-          <button class="btn primary" id="btn-ingest-pdf">Upload PDF</button>
-        </article>
-
-        <article class="card">
-          <h3>Video file</h3>
-          <label>Title (optional)<input type="text" id="video-title"></label>
-          <label>Notes / transcript (optional)<textarea id="video-notes" rows="4" placeholder="Manual notes until transcription is connected"></textarea></label>
-          <label class="file-label">
-            <input type="file" id="video-file" accept="video/*">
-            <span>Choose video file</span>
-          </label>
-          <button class="btn primary" id="btn-ingest-video">Upload video</button>
-        </article>
-
-        <article class="card ingest-card-wide">
-          <h3>DICOM / medical imaging</h3>
-          <p class="muted small">Upload <strong>.dcm</strong> / <strong>.dicom</strong> slices, extensionless DICOM files from a CD/study folder, JPEG/PNG exports, or ZIP archives. DICOM files can be viewed in the Library after upload.</p>
-          <label>Title prefix (optional)<input type="text" id="imaging-title-prefix" placeholder="e.g. CT abdomen — June 2026"></label>
-          <label>Clinical notes (optional)<textarea id="imaging-notes" rows="3" placeholder="Study context, comparison notes, or findings summary for analysis"></textarea></label>
-          <div class="imaging-picker-actions">
-            <label class="btn secondary file-picker-btn">
-              <input type="file" id="imaging-files" multiple accept=".dcm,.dicom,.jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.webp,.nii,.mha,.mhd,.zip,application/dicom,application/zip,image/*" hidden>
-              Choose DICOM / image files
-            </label>
-            <label class="btn secondary file-picker-btn">
-              <input type="file" id="imaging-folder" webkitdirectory multiple accept=".dcm,.dicom,application/dicom" hidden>
-              Choose DICOM folder
-            </label>
-            <button type="button" class="btn ghost" id="btn-clear-imaging">Clear selection</button>
-          </div>
-          <div id="imaging-selection" class="imaging-selection hidden" aria-live="polite"></div>
-          <div id="imaging-upload-progress" class="loading hidden" role="status"></div>
-          <button class="btn primary" id="btn-ingest-imaging" disabled>Upload imaging</button>
-        </article>
-      </div>
-    </section>
-
     <!-- LIBRARY -->
     <section id="panel-library" class="panel">
       <div class="card hidden doc-detail-card" id="doc-detail">
@@ -589,10 +656,101 @@
         </div>
       </div>
 
+      <details class="card library-add-panel" id="library-add-panel">
+        <summary class="library-add-summary">
+          <span class="library-add-summary-title">Add documents</span>
+          <span class="muted small">Text, PDF, URL, YouTube, imaging, and more</span>
+        </summary>
+        <div class="ingest-grid">
+          <article class="card">
+            <h3>Clinical notes / text</h3>
+            <label>Title<input type="text" id="text-title" placeholder="e.g. Oncologist visit notes — June 2026"></label>
+            <label>Content<textarea id="text-content" rows="8" placeholder="Paste pathology, imaging summaries, consult notes…"></textarea></label>
+            <button class="btn primary" id="btn-ingest-text">Save text</button>
+          </article>
+
+          <article class="card">
+            <h3>Web page or URL</h3>
+            <label>URL<input type="url" id="url-input" placeholder="https://…"></label>
+            <label>Title (optional)<input type="text" id="url-title" placeholder="Auto-detected from page"></label>
+            <button class="btn primary" id="btn-ingest-url">Fetch &amp; store</button>
+          </article>
+
+          <article class="card">
+            <h3>YouTube</h3>
+            <label>Video URL<input type="url" id="youtube-input" placeholder="https://youtube.com/watch?v=…"></label>
+            <label>Title (optional)<input type="text" id="youtube-title"></label>
+            <p class="muted small">Uses available captions/transcripts. Videos without captions cannot be ingested yet.</p>
+            <button class="btn primary" id="btn-ingest-youtube">Ingest transcript</button>
+          </article>
+
+          <article class="card">
+            <h3>Facebook reel / video</h3>
+            <label>Video URL<input type="url" id="facebook-input" placeholder="https://www.facebook.com/reel/…"></label>
+            <label>Title (optional)<input type="text" id="facebook-title"></label>
+            <label>Notes (optional)<textarea id="facebook-notes" rows="3" placeholder="Clinical context or manual notes to include with the transcript"></textarea></label>
+            <p class="muted small">Downloads the public video and any available English captions. Private or login-only videos may not work.</p>
+            <button class="btn primary" id="btn-ingest-facebook">Ingest Facebook video</button>
+          </article>
+
+          <article class="card">
+            <h3>PDF documents</h3>
+            <label class="file-label btn primary file-picker-btn">
+              <input type="file" id="pdf-file" accept=".pdf,application/pdf" multiple hidden>
+              Choose PDF files
+            </label>
+            <label>Title (optional, single file only)<input type="text" id="pdf-title" placeholder="Defaults to each PDF filename"></label>
+            <p class="muted small">Select one or more PDFs. Each file is stored under its own filename unless you set a title for a single upload.</p>
+            <button class="btn primary" id="btn-ingest-pdf">Upload PDFs</button>
+          </article>
+
+          <article class="card">
+            <h3>Video file</h3>
+            <label>Title (optional)<input type="text" id="video-title"></label>
+            <label>Notes / transcript (optional)<textarea id="video-notes" rows="4" placeholder="Manual notes until transcription is connected"></textarea></label>
+            <label class="file-label">
+              <input type="file" id="video-file" accept="video/*">
+              <span>Choose video file</span>
+            </label>
+            <button class="btn primary" id="btn-ingest-video">Upload video</button>
+          </article>
+
+          <article class="card ingest-card-wide">
+            <h3>DICOM / medical imaging</h3>
+            <p class="muted small">Upload <strong>.dcm</strong> / <strong>.dicom</strong> slices, extensionless DICOM files from a CD/study folder, JPEG/PNG exports, or ZIP archives. DICOM files can be viewed in the Library after upload.</p>
+            <label>Title prefix (optional)<input type="text" id="imaging-title-prefix" placeholder="e.g. CT abdomen — June 2026"></label>
+            <label>Clinical notes (optional)<textarea id="imaging-notes" rows="3" placeholder="Study context, comparison notes, or findings summary for analysis"></textarea></label>
+            <div class="imaging-picker-actions">
+              <label class="btn secondary file-picker-btn">
+                <input type="file" id="imaging-files" multiple accept=".dcm,.dicom,.jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.webp,.nii,.mha,.mhd,.zip,application/dicom,application/zip,image/*" hidden>
+                Choose DICOM / image files
+              </label>
+              <label class="btn secondary file-picker-btn">
+                <input type="file" id="imaging-folder" webkitdirectory multiple accept=".dcm,.dicom,application/dicom" hidden>
+                Choose DICOM folder
+              </label>
+              <button type="button" class="btn ghost" id="btn-clear-imaging">Clear selection</button>
+            </div>
+            <div id="imaging-selection" class="imaging-selection hidden" aria-live="polite"></div>
+            <div id="imaging-upload-progress" class="loading hidden" role="status"></div>
+            <button class="btn primary" id="btn-ingest-imaging" disabled>Upload imaging</button>
+          </article>
+        </div>
+      </details>
+
+      <div class="library-subnav" role="tablist" aria-label="Library views">
+        <button type="button" class="library-subtab active" data-library-view="documents" role="tab" aria-selected="true">Documents</button>
+        <button type="button" class="library-subtab" data-library-view="imaging" role="tab" aria-selected="false">Imaging</button>
+      </div>
+
+      <div id="library-view-documents">
       <div class="card">
         <div class="row-between wrap">
           <h3>Stored documents</h3>
-          <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
+          <div class="row wrap library-header-actions">
+            <button type="button" class="btn primary" id="btn-library-add">Add documents</button>
+            <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
+          </div>
         </div>
         <p class="muted small">Check items to include in assessments, or leave none selected to use everything. Filter by type — DICOM / imaging is grouped by upload folder and study date. Run analysis from here once your selection is ready.</p>
         <div class="library-toolbar">
@@ -606,7 +764,7 @@
         </div>
 
         <div id="imaging-filter-card" class="imaging-filter-card hidden">
-          <p class="muted small">DICOM slices are grouped by upload folder and study date. Use the <button type="button" class="btn-link" data-nav-imaging>Imaging</button> tab to filter slices and run a separate vision analysis.</p>
+          <p class="muted small">DICOM slices are grouped by upload folder and study date. Switch to the <button type="button" class="btn-link" data-nav-imaging>Imaging</button> view to filter slices and run vision analysis.</p>
         </div>
 
         <div class="library-selection-bar" id="library-selection-bar">
@@ -640,16 +798,15 @@
           <button type="button" class="btn secondary" id="btn-library-next">Next</button>
         </div>
       </div>
-    </section>
+      </div>
 
-    <!-- IMAGING ANALYSIS -->
-    <section id="panel-imaging" class="panel">
+      <div id="library-view-imaging" class="hidden">
       <div class="card imaging-analysis-card">
         <div class="row-between wrap">
           <h3>Imaging analysis</h3>
-          <button type="button" class="btn ghost btn-sm" data-nav-library-imaging>View in Library</button>
+          <button type="button" class="btn ghost btn-sm" data-nav-library-imaging>View imaging files</button>
         </div>
-        <p class="muted small imaging-analysis-intro">Separate from the overall analysis on Home. Upload DICOM to the Library, filter slices here, run vision analysis, review the report, then choose whether to include it in the overall assessment.</p>
+        <p class="muted small imaging-analysis-intro">Separate from the overall analysis on Home. Upload DICOM via Add documents, filter slices here, run vision analysis, review the report, then choose whether to include it in the overall assessment.</p>
 
         <div class="imaging-analysis-steps">
           <div class="imaging-analysis-step">
@@ -684,6 +841,7 @@
           </div>
         </div>
       </div>
+      </div>
     </section>
 
     <!-- HISTORY -->
@@ -705,10 +863,10 @@
         <p class="muted howto-lead">BeatIt builds an oncology case assessment from your stored documents. Start with the three steps below, then explore each tab when you need it.</p>
 
         <div class="workflow-steps howto-quickstart" aria-label="Quick start">
-          <button type="button" class="workflow-step" data-howto-nav="ingest">
+          <button type="button" class="workflow-step" data-howto-nav="library" data-howto-open-add="1">
             <span class="workflow-step-num">Step 1</span>
-            <span class="workflow-step-label">Add data</span>
-            <span class="workflow-step-hint">Notes, PDFs, imaging, URLs, transcripts</span>
+            <span class="workflow-step-label">Library</span>
+            <span class="workflow-step-hint">Add notes, PDFs, imaging — then review</span>
           </button>
           <button type="button" class="workflow-step" data-howto-nav="settings">
             <span class="workflow-step-num">Step 2</span>
@@ -787,29 +945,19 @@
       </details>
 
       <details class="card howto-section">
-        <summary class="howto-section-summary">Add data — build the case library</summary>
+        <summary class="howto-section-summary">Library — documents &amp; uploads</summary>
         <div class="howto-section-body">
-          <p>Everything you upload is stored and used in analysis:</p>
+          <p>Everything you store lives here. Use <strong>Add documents</strong> to bring in:</p>
           <ul>
             <li><strong>Clinical notes</strong> — paste visit notes, pathology, imaging summaries.</li>
             <li><strong>PDFs &amp; URLs</strong> — reports and web pages.</li>
-            <li><strong>DICOM / imaging</strong> — upload <code>.dcm</code> or <code>.dicom</code> slices (or a whole study folder), then view them in the Library.</li>
+            <li><strong>DICOM / imaging</strong> — upload <code>.dcm</code> or <code>.dicom</code> slices (or a whole study folder).</li>
             <li><strong>YouTube</strong> — caption-based transcripts when available.</li>
           </ul>
-          <p class="muted small">After upload, check the Library tab to confirm content was extracted correctly.</p>
-          <div class="howto-go">
-            <button type="button" class="btn secondary" data-howto-nav="ingest">Go to Add data</button>
-          </div>
-        </div>
-      </details>
-
-      <details class="card howto-section">
-        <summary class="howto-section-summary">Library — stored documents</summary>
-        <div class="howto-section-body">
-          <p>All ingested files and notes live here. Open a document to read extracted text, set a <strong>citation display name</strong> (how it appears in assessments), or remove it.</p>
-          <p class="muted small">Colored source tags in assessments link back to Library entries when the source is a stored document.</p>
+          <p>Open a document to read extracted text, set a <strong>citation display name</strong>, or remove it.</p>
           <div class="howto-go">
             <button type="button" class="btn secondary" data-howto-nav="library">Go to Library</button>
+            <button type="button" class="btn ghost" data-howto-nav="library" data-howto-open-add="1">Add documents</button>
           </div>
         </div>
       </details>
@@ -847,6 +995,148 @@
 
     <!-- SETTINGS -->
     <section id="panel-settings" class="panel">
+      <div class="card settings-card">
+        <h3>Patients &amp; cases</h3>
+        <p class="muted">Each person is a patient. Each condition or workup is a separate case with its own library and assessments. Switch from the header, or add them here.</p>
+        <div class="settings-identity-row">
+          <div class="settings-identity-current">
+            <p class="muted small">Current patient</p>
+            <p class="settings-identity-name" id="settings-current-patient">—</p>
+            <p class="muted small">Current case</p>
+            <p class="settings-identity-name" id="settings-current-case">—</p>
+          </div>
+          <div class="settings-identity-actions">
+            <button type="button" class="btn primary js-new-patient">Add patient</button>
+            <button type="button" class="btn secondary js-new-case">Add case</button>
+            <button type="button" class="btn ghost" id="btn-rename-case-settings">Rename case</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>Patient profile</h3>
+        <p class="muted">Basic demographics for the current patient. Date of birth and gender stay fixed; height and weight can be recorded over time.</p>
+        <div class="patient-profile-grid">
+          <label for="profile-dob">Date of birth
+            <input type="date" id="profile-dob">
+          </label>
+          <label for="profile-gender">Gender
+            <select id="profile-gender">
+              <option value="">Not set</option>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+              <option value="other">Other</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+        </div>
+        <div class="row-between wrap settings-actions">
+          <span class="muted small" id="profile-age-hint">Used in analysis prompts for the active patient</span>
+          <button type="button" class="btn primary" id="btn-save-profile">Save demographics</button>
+        </div>
+
+        <h4 class="patient-measurements-title">Height &amp; weight</h4>
+        <p class="muted small">Add a new entry whenever measurements change. Latest values are included in analysis.</p>
+        <div class="patient-measurement-form">
+          <label for="measure-date">Date
+            <input type="date" id="measure-date">
+          </label>
+          <label for="measure-height">Height (cm)
+            <input type="number" id="measure-height" min="40" max="272" step="0.1" placeholder="e.g. 165">
+          </label>
+          <label for="measure-weight">Weight (kg)
+            <input type="number" id="measure-weight" min="2" max="400" step="0.1" placeholder="e.g. 70">
+          </label>
+          <label for="measure-notes">Notes
+            <input type="text" id="measure-notes" maxlength="200" placeholder="Optional">
+          </label>
+          <button type="button" class="btn secondary" id="btn-add-measurement">Add measurement</button>
+        </div>
+        <div id="patient-measurements-list" class="patient-measurements-list"></div>
+
+        <h4 class="patient-measurements-title">Key diagnostics</h4>
+        <p class="muted small">Blood tests first (lipids, HbA1c, creatinine, etc.). Use the lab <strong>collection / date of service</strong>, not the print date. Imaging scores (e.g. calcium score) can be added too.</p>
+        <div class="patient-measurement-form patient-diagnostic-form">
+          <label for="diag-name">Name
+            <input type="text" id="diag-name" list="diag-name-presets" placeholder="e.g. CA19-9" maxlength="120">
+            <datalist id="diag-name-presets"></datalist>
+          </label>
+          <label for="diag-value">Value
+            <input type="number" id="diag-value" step="any" placeholder="e.g. 42">
+          </label>
+          <label for="diag-unit">Unit
+            <input type="text" id="diag-unit" list="diag-unit-presets" placeholder="e.g. U/mL" maxlength="40">
+            <datalist id="diag-unit-presets"></datalist>
+          </label>
+          <label for="diag-date">Date
+            <input type="date" id="diag-date">
+          </label>
+          <label for="diag-notes">Notes
+            <input type="text" id="diag-notes" maxlength="200" placeholder="Optional">
+          </label>
+          <button type="button" class="btn secondary" id="btn-add-diagnostic">Add reading</button>
+        </div>
+        <div id="patient-diagnostics-list" class="patient-measurements-list"></div>
+
+        <h4 class="patient-measurements-title">Self-reports</h4>
+        <p class="muted small">Feelings, symptoms, one-off meds taken, and notes. Usually logged from Home; manage the full list here.</p>
+        <div id="patient-journal-list" class="patient-measurements-list"></div>
+
+        <h4 class="patient-measurements-title" id="medications-settings-heading">Medications</h4>
+        <p class="muted small">Ongoing prescriptions for this patient. Changing dosage or frequency keeps the previous values as history. Conditions / illnesses are optional free-text tags.</p>
+        <div class="medication-import-block" id="medication-import-block">
+          <p class="muted small">Have a printed or photo list? Import a PDF or image, review the parsed rows, then add what looks right.</p>
+          <div class="medication-import-controls row-between wrap">
+            <label class="medication-import-file-label" for="med-import-file">
+              <span class="sr-only">Medications list file</span>
+              <input type="file" id="med-import-file" accept=".pdf,image/jpeg,image/png,image/webp,image/*">
+            </label>
+            <button type="button" class="btn secondary btn-sm" id="btn-import-medications">Import list</button>
+          </div>
+          <p class="muted small hidden" id="med-import-status" role="status"></p>
+          <div id="med-import-review" class="med-import-review hidden" aria-live="polite">
+            <div class="row-between wrap med-import-review-head">
+              <h5 class="med-import-review-title">Review imported medications</h5>
+              <div class="med-import-review-actions">
+                <button type="button" class="btn ghost btn-sm" id="btn-med-import-select-all">Select all</button>
+                <button type="button" class="btn ghost btn-sm" id="btn-med-import-clear">Clear review</button>
+                <button type="button" class="btn primary btn-sm" id="btn-med-import-confirm">Add selected</button>
+              </div>
+            </div>
+            <div id="med-import-review-list" class="med-import-review-list"></div>
+          </div>
+        </div>
+        <div class="patient-measurement-form patient-medication-form" id="medication-form">
+          <input type="hidden" id="med-edit-id" value="">
+          <label for="med-name">Name
+            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin" autocomplete="off">
+          </label>
+          <label for="med-dosage">Dosage
+            <input type="text" id="med-dosage" maxlength="80" placeholder="e.g. 20 mg" autocomplete="off">
+          </label>
+          <label for="med-frequency">Frequency
+            <input type="text" id="med-frequency" maxlength="80" placeholder="e.g. once daily" autocomplete="off">
+          </label>
+          <label for="med-started">Started
+            <input type="date" id="med-started">
+          </label>
+          <label for="med-conditions" class="med-span-2">Conditions / illnesses
+            <input type="text" id="med-conditions" maxlength="240" placeholder="Optional — comma-separated, e.g. high cholesterol, cardiac risk" autocomplete="off">
+          </label>
+          <label for="med-notes" class="med-span-2">Notes
+            <input type="text" id="med-notes" maxlength="500" placeholder="Optional" autocomplete="off">
+          </label>
+          <label for="med-history-note" class="med-span-2 med-history-note-wrap hidden">Change note
+            <input type="text" id="med-history-note" maxlength="200" placeholder="Optional note when changing dosage" autocomplete="off">
+          </label>
+          <div class="med-form-actions med-span-2">
+            <button type="button" class="btn secondary" id="btn-save-medication">Add medication</button>
+            <button type="button" class="btn ghost hidden" id="btn-cancel-med-edit">Cancel edit</button>
+          </div>
+        </div>
+        <div id="patient-medications-list" class="patient-measurements-list"></div>
+      </div>
+
       <div class="card settings-card">
         <h3>Clinical reviewer context</h3>
         <p class="muted">Persona and synthesis instructions for every analysis. Default: medical oncologist. Controls how the model reads and integrates all selected documents.</p>
@@ -944,7 +1234,7 @@
     <button type="button" class="btn btn-sm primary" data-action="pin-excerpt">Pin excerpt</button>
     <button type="button" class="btn btn-sm secondary" data-action="save-excerpt-library">Save to library</button>
     <button type="button" class="btn btn-sm ghost" data-action="copy-excerpt">Copy</button>
-    <button type="button" class="btn btn-sm ghost" data-action="send-excerpt-ingest">Add data</button>
+    <button type="button" class="btn btn-sm ghost" data-action="send-excerpt-ingest">Add to Library</button>
   </div>
 
   <script src="/static/app.js"></script>

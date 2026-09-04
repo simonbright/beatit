@@ -5,6 +5,7 @@ const state = {
   libraryFilter: "",
   libraryTotal: 0,
   libraryCounts: {},
+  libraryView: "documents",
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
@@ -21,6 +22,11 @@ const state = {
   chatObservations: [],
   chatObservationsPendingCount: 0,
   chatSelectionContext: { excerpt: "", messageId: null },
+  activePatientId: null,
+  activeCaseId: null,
+  diagnosticPresets: [],
+  journalPresets: [],
+  journalDraft: { kind: "note", label: "", severity: null },
   analysisJobId: null,
   auditEvents: [],
   auditOffset: 0,
@@ -74,6 +80,21 @@ function toggleTheme() {
 function initTheme() {
   applyTheme(getTheme());
   $("#theme-toggle")?.addEventListener("click", toggleTheme);
+$("#btn-howto")?.addEventListener("click", () => {
+  switchTab("howto");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+document.querySelectorAll("[data-library-view]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const view = btn.dataset.libraryView;
+    if (!view) return;
+    if (!$("#panel-library")?.classList.contains("active")) {
+      switchTab("library", { libraryView: view, skipLibraryLoad: view === "imaging" });
+      return;
+    }
+    setLibraryView(view);
+  });
+});
 }
 
 function toast(message, type = "success") {
@@ -583,10 +604,10 @@ function bindPdfFileInput() {
 
   input.addEventListener("change", () => {
     const label = input.closest(".file-label");
-    const file = input.files[0];
+    const files = Array.from(input.files || []);
     if (label) {
       let nameEl = label.querySelector(".file-name");
-      if (!file) {
+      if (!files.length) {
         nameEl?.remove();
         if (titleInput && titleInput.dataset.userEdited !== "1") titleInput.value = "";
         return;
@@ -596,10 +617,18 @@ function bindPdfFileInput() {
         nameEl.className = "file-name";
         label.appendChild(nameEl);
       }
-      nameEl.textContent = `Selected: ${file.name}`;
+      nameEl.textContent =
+        files.length === 1
+          ? `Selected: ${files[0].name}`
+          : `Selected: ${files.length} PDFs`;
     }
-    if (file && titleInput && titleInput.dataset.userEdited !== "1") {
-      titleInput.value = defaultPdfTitle(file);
+    if (titleInput && titleInput.dataset.userEdited !== "1") {
+      titleInput.value = files.length === 1 ? defaultPdfTitle(files[0]) : "";
+      titleInput.disabled = files.length > 1;
+      titleInput.placeholder =
+        files.length > 1
+          ? "Uses each PDF filename"
+          : "Defaults to each PDF filename";
     }
   });
 }
@@ -758,7 +787,9 @@ function scrollToCustomTaskDetail() {
 function updateHomeToolbar() {
   const hasAssessment = Boolean(state.latestAnalysis);
   const onHome = $("#panel-analyze")?.classList.contains("active");
-  $("#btn-export-pdf")?.classList.toggle("hidden", !(hasAssessment && onHome));
+  const show = hasAssessment && onHome;
+  $("#btn-export-pdf")?.classList.toggle("hidden", !show);
+  $("#btn-export-pdf-icon")?.classList.toggle("hidden", !show);
 }
 
 function updateHomeWorkflow() {
@@ -845,7 +876,8 @@ function initHowToNavigation() {
       scrollToOpenItems();
       return;
     }
-    switchTab(target);
+    const openAdd = btn.dataset.howtoOpenAdd === "1";
+    switchTab(target, openAdd ? { openAdd: true } : {});
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 }
@@ -933,20 +965,34 @@ function resumeActiveAnalysisJobInBackground() {
 }
 
 function switchTab(name, options = {}) {
+  // Legacy: Add data tab folded into Library
+  if (name === "ingest") {
+    name = "library";
+    options = { ...options, openAdd: true };
+  }
+  // Imaging is a Library sub-view
+  if (name === "imaging") {
+    name = "library";
+    options = { ...options, libraryView: "imaging" };
+  }
   if (!VALID_TABS.has(name)) return;
+  const navTab = MAIN_NAV_TABS.has(name) ? name : null;
   $$(".tab").forEach((t) => {
-    const active = t.dataset.tab === name;
+    const active = navTab != null && t.dataset.tab === navTab;
     t.classList.toggle("active", active);
     t.setAttribute("aria-selected", active ? "true" : "false");
   });
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${name}`));
   if (!options.skipTabSave) {
-    persistActiveTab(name);
+    persistActiveTab(name === "howto" ? "howto" : navTab || name);
   }
-  if (name === "library" && !options.skipLibraryLoad) {
-    loadDocuments().catch((e) => toast(e.message, "error"));
+  if (name === "library") {
+    if (!options.skipLibraryLoad) {
+      loadDocuments().catch((e) => toast(e.message, "error"));
+    }
+    setLibraryView(options.libraryView || state.libraryView || "documents");
+    if (options.openAdd) openLibraryAddPanel();
   }
-  if (name === "imaging") loadImagingPanel();
   if (name === "history") loadHistory();
   if (name === "analyze") {
     loadLatestAssessment();
@@ -958,10 +1004,44 @@ function switchTab(name, options = {}) {
   updateHomeToolbar();
 }
 
+function setLibraryView(view) {
+  const next = view === "imaging" ? "imaging" : "documents";
+  state.libraryView = next;
+  document.querySelectorAll("[data-library-view]").forEach((btn) => {
+    const active = btn.dataset.libraryView === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  $("#library-view-documents")?.classList.toggle("hidden", next !== "documents");
+  $("#library-view-imaging")?.classList.toggle("hidden", next !== "imaging");
+  if (next === "imaging") {
+    loadImagingPanel().catch((e) => toast(e.message, "error"));
+  }
+}
+
+function openLibraryAddPanel({ focusText = false } = {}) {
+  setLibraryView("documents");
+  const panel = document.getElementById("library-add-panel");
+  if (!panel) return;
+  panel.open = true;
+  requestAnimationFrame(() => {
+    scrollToElement(panel);
+    if (focusText) $("#text-content")?.focus();
+  });
+}
+
+function closeLibraryAddPanel() {
+  const panel = document.getElementById("library-add-panel");
+  if (panel) panel.open = false;
+}
+
 function applyTabUi(name) {
+  if (name === "imaging") name = "library";
+  if (name === "ingest") name = "library";
   if (!VALID_TABS.has(name)) return;
+  const navTab = MAIN_NAV_TABS.has(name) ? name : null;
   $$(".tab").forEach((t) => {
-    const active = t.dataset.tab === name;
+    const active = navTab != null && t.dataset.tab === navTab;
     t.classList.toggle("active", active);
     t.setAttribute("aria-selected", active ? "true" : "false");
   });
@@ -970,9 +1050,11 @@ function applyTabUi(name) {
 
 function readSavedTabName() {
   const hash = window.location.hash.replace(/^#/, "").trim();
+  if (hash === "ingest") return "library";
   if (hash && VALID_TABS.has(hash)) return hash;
   try {
     const saved = sessionStorage.getItem(TAB_STORAGE_KEY);
+    if (saved === "ingest") return "library";
     if (saved && VALID_TABS.has(saved)) return saved;
   } catch {
     /* ignore */
@@ -1757,11 +1839,18 @@ const VALID_TABS = new Set([
   "analyze",
   "options-chat",
   "custom-tasks",
-  "ingest",
   "library",
   "imaging",
   "history",
   "howto",
+  "settings",
+]);
+const MAIN_NAV_TABS = new Set([
+  "analyze",
+  "options-chat",
+  "custom-tasks",
+  "library",
+  "history",
   "settings",
 ]);
 const IMAGING_VISION_SLICE_LIMIT = 3;
@@ -1916,6 +2005,7 @@ function renderDocInclusionBadges(docId) {
   const inc = getAssessmentInclusion(docId);
   const badges = [];
   const isNew = isNewForNextAssessment(docId);
+  const hasPrior = Boolean(state.latestAnalysis);
 
   if (isNew) {
     badges.push(
@@ -1932,11 +2022,12 @@ function renderDocInclusionBadges(docId) {
       '<span class="doc-status-badge doc-status-cited" title="Cited inline in the assessment text">Cited</span>'
     );
   }
-  if (inc.explicitSelection && inc.inNextScope && !inc.inLastAssessment && !isNew) {
+  // Only show selected/excluded when there is a prior assessment to compare against
+  if (hasPrior && inc.explicitSelection && inc.inNextScope && !inc.inLastAssessment && !isNew) {
     badges.push(
       '<span class="doc-status-badge doc-status-selected" title="Selected for the next analysis run">Selected for next run</span>'
     );
-  } else if (inc.explicitSelection && !inc.inNextScope) {
+  } else if (hasPrior && inc.explicitSelection && !inc.inNextScope) {
     badges.push(
       '<span class="doc-status-badge doc-status-excluded" title="Excluded from the next analysis run">Excluded</span>'
     );
@@ -2296,7 +2387,9 @@ function renderAssessmentScopeCard() {
     }
     nextEl.innerHTML =
       parts.join("") ||
-      (total ? `<p class="muted small">All library documents will be included.</p>` : "");
+      (total
+        ? `<p class="muted small">All library documents will be included.</p>`
+        : "");
   }
 
   if (lastEl) {
@@ -3222,6 +3315,7 @@ function toggleImagingGroupSelection(groupKey, selected) {
 function renderLibraryDocItem(doc, { compact = false } = {}) {
   const selected = state.selectedIds.has(doc.id);
   const meta = doc.metadata || {};
+  const editable = doc.is_active_case !== false;
   const excerpt = meta.page_count
     ? `${meta.page_count} pages`
     : doc.source_type === "imaging"
@@ -3241,14 +3335,28 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
   const displayName = info.display_name || doc.title;
   const inclusionBadges = renderDocInclusionBadges(doc.id);
   const newClass = isNewForNextAssessment(doc.id) ? " doc-item-new" : "";
+  const metaNeedsOcr = Boolean(meta.needs_ocr) || String(meta.extraction_method || "") === "empty";
+  const ocrBadge = metaNeedsOcr
+    ? `<span class="badge badge-warn" title="Scanned/image PDF — little or no text extracted">Needs OCR</span>`
+    : meta.extraction_method === "ocr"
+      ? `<span class="badge" title="Text recovered with OCR">OCR</span>`
+      : "";
+  const reextractBtn =
+    editable && String(doc.source_type || "").toLowerCase() === "pdf"
+      ? `<button type="button" class="btn ghost btn-reextract" data-id="${doc.id}" title="Re-run text extraction / OCR">Re-extract</button>`
+      : "";
+  const deleteBtn = editable
+    ? `<button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>`
+    : `<span class="muted small">Switch focus to edit</span>`;
   return `
-    <article class="doc-item ${selected ? "selected" : ""}${compact ? " doc-item-compact" : ""}${newClass}" data-id="${doc.id}">
+    <article class="doc-item ${selected ? "selected" : ""}${compact ? " doc-item-compact" : ""}${newClass}${editable ? "" : " doc-item-readonly"}" data-id="${doc.id}">
       <div class="doc-item-heading">
         <label class="doc-select-check" title="Include in assessment">
           <input type="checkbox" class="doc-select-input" data-id="${doc.id}"${selected ? " checked" : ""}>
         </label>
         ${sourceBadge}
         <strong>${escapeHtml(displayName)}</strong>
+        ${ocrBadge}
       </div>
       ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
       ${!compact && displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
@@ -3260,10 +3368,11 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
       ${paths ? `<div class="doc-paths">${paths}</div>` : ""}
       <div class="doc-actions">
         <button class="btn ghost btn-view" data-id="${doc.id}">View</button>
+        ${reextractBtn}
         <button class="btn secondary btn-select" data-id="${doc.id}">
           ${selected ? "Deselect" : "Select for analysis"}
         </button>
-        <button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>
+        ${deleteBtn}
       </div>
     </article>`;
 }
@@ -3287,7 +3396,7 @@ function renderImagingLibraryGroups() {
   }
 
   if (!imagingDocs.length) {
-    list.innerHTML = `<p class="muted">No DICOM or imaging files yet. Upload a study folder from Add data.</p>`;
+    list.innerHTML = `<p class="muted">No DICOM or imaging files yet. Use <strong>Add documents</strong> in Library to upload a study folder.</p>`;
     pagination?.classList.add("hidden");
     renderLibrarySelectionControls();
     return;
@@ -3501,11 +3610,11 @@ function imagingMatchIds() {
 }
 
 function scrollToImagingPanel() {
-  $("#panel-imaging")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#library-view-imaging")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function goToImagingPanel() {
-  switchTab("imaging");
+  switchTab("library", { libraryView: "imaging", skipLibraryLoad: true });
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -3514,7 +3623,7 @@ function goToLibraryForImagingFilter() {
 }
 
 function goToLibraryImagingType() {
-  switchTab("library", { skipLibraryLoad: true });
+  switchTab("library", { libraryView: "documents", skipLibraryLoad: true });
   (async () => {
     const typeFilter = $("#library-type-filter");
     if (typeFilter && typeFilter.value !== "imaging") {
@@ -3588,7 +3697,7 @@ async function loadDocumentIndex() {
   await loadImagingFacets().catch(() => {});
   renderImagingWorkflowSummary();
   renderVisionReportsPanel();
-  if ($("#panel-imaging")?.classList.contains("active")) {
+  if ($("#library-view-imaging") && !$("#library-view-imaging").classList.contains("hidden")) {
     renderImagingSlicePicker();
   }
   if ($("#panel-library")?.classList.contains("active")) {
@@ -3604,6 +3713,8 @@ async function refreshLibrary(options = {}) {
 async function openLibraryAfterIngest() {
   await refreshLibrary({ page: 1 });
   switchTab("library", { skipLibraryLoad: true });
+  // Keep add panel open so multi-upload workflows stay convenient
+  openLibraryAddPanel();
 }
 
 async function loadDocuments(options = {}) {
@@ -4900,8 +5011,10 @@ async function exportAssessmentPdf() {
     return toast("No assessment to export", "error");
   }
 
-  const btn = $("#btn-export-pdf");
-  if (btn) btn.disabled = true;
+  const btns = [$("#btn-export-pdf"), $("#btn-export-pdf-icon")].filter(Boolean);
+  btns.forEach((btn) => {
+    btn.disabled = true;
+  });
 
   try {
     const result = await downloadAnalysisPdf(state.latestAnalysis.id, {
@@ -4914,7 +5027,9 @@ async function exportAssessmentPdf() {
   } catch (err) {
     toast(err.message, "error");
   } finally {
-    if (btn) btn.disabled = false;
+    btns.forEach((btn) => {
+      btn.disabled = false;
+    });
   }
 }
 
@@ -5037,6 +5152,19 @@ async function viewDocument(id) {
         `<a class="btn ghost" href="${escapeHtml(data.source_url)}" target="_blank" rel="noopener">Open source URL</a>`
       );
     }
+    if (String(doc.source_type || "").toLowerCase() === "pdf") {
+      links.push(
+        `<button type="button" class="btn secondary btn-reextract" data-id="${escapeHtml(doc.id)}">Re-extract / OCR</button>`
+      );
+    }
+    const meta = doc.metadata || {};
+    if (meta.needs_ocr || meta.extraction_method === "empty") {
+      links.push(
+        `<span class="muted small">This looks like a scanned/image PDF. Re-extract runs OCR so analysis and chat can read it.</span>`
+      );
+    } else if (meta.extraction_method === "ocr") {
+      links.push(`<span class="muted small">Text was recovered with OCR (${meta.extracted_chars || "?"} chars).</span>`);
+    }
     actionsEl.innerHTML = links.join("") || '<span class="muted small">No original file stored for this item.</span>';
   }
 
@@ -5117,6 +5245,60 @@ async function deleteDocument(id) {
   const page = Math.min(state.libraryPage, maxPage);
   toast("Document deleted");
   await refreshLibrary({ page, sourceType: state.libraryFilter });
+}
+
+async function reextractDocument(id) {
+  await withBackgroundTask({
+    id: `reextract-${id}-${Date.now()}`,
+    label: "Re-extracting PDF / OCR…",
+    run: async ({ setDetail }) => {
+      setDetail("Running text extraction and OCR if needed…");
+      const data = await api(`/api/documents/${encodeURIComponent(id)}/reextract`, {
+        method: "POST",
+        timeoutMs: 600000,
+      });
+      const method = data.document?.metadata?.extraction_method || "unknown";
+      const needs = data.document?.metadata?.needs_ocr;
+      if (needs) {
+        toast("Still little text — OCR tools may be unavailable, or the scan is unreadable", "error");
+      } else {
+        toast(`Re-extracted (${method})`);
+      }
+      await loadDocuments();
+      await loadDocumentIndex();
+      if (state.activeDocumentId === id) {
+        await viewDocument(id);
+      }
+    },
+  });
+}
+
+async function applyChatReplyToHome(messageId) {
+  if (!state.optionsChatSessionId) {
+    toast("No active chat session", "error");
+    return;
+  }
+  if (state.analysisRunning) {
+    toast("An analysis is already running", "error");
+    return;
+  }
+  if (!confirm("Pin this chat reply and update the Home assessment?")) return;
+  const selected = [...state.selectedIds];
+  const data = await api("/api/options-chat/apply-to-home", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: state.optionsChatSessionId,
+      message_id: messageId,
+      document_ids: selected.length ? selected : null,
+    }),
+  });
+  toast("Home assessment update started");
+  await loadChatObservations();
+  switchTab("analyze");
+  if (data.job?.id) {
+    setAnalysisRunning(true, data.job.id, data.job.job_type || "baseline");
+    resumeActiveAnalysisJobInBackground();
+  }
 }
 
 async function runAnalysis({ query = "", baseline = false, summarize = false, assessmentGuidance = "" } = {}) {
@@ -5217,11 +5399,18 @@ $$(".tab").forEach((tab) =>
 
 safeOn("#btn-dismiss-upload", "click", dismissUploadResult);
 safeOn("#btn-close-detail", "click", () => closeDocumentDetail());
+safeOn("#doc-detail-actions", "click", (event) => {
+  const reextractBtn = event.target.closest(".btn-reextract");
+  if (reextractBtn?.dataset.id) {
+    reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
+  }
+});
 safeOn("#btn-refresh-docs", "click", () =>
   refreshLibrary({ page: state.libraryPage, sourceType: state.libraryFilter }).catch((e) =>
     toast(e.message, "error")
   )
 );
+safeOn("#btn-library-add", "click", () => openLibraryAddPanel());
 safeOn("#library-type-filter", "change", (event) => {
   const sourceType = event.target.value;
   loadDocuments({ page: 1, sourceType }).catch((e) => toast(e.message, "error"));
@@ -5261,6 +5450,11 @@ safeOn("#documents-list", "click", (event) => {
   const viewBtn = event.target.closest(".btn-view");
   if (viewBtn?.dataset.id) {
     viewDocument(viewBtn.dataset.id);
+    return;
+  }
+  const reextractBtn = event.target.closest(".btn-reextract");
+  if (reextractBtn?.dataset.id) {
+    reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
     return;
   }
   const selectBtn = event.target.closest(".btn-select");
@@ -5370,29 +5564,60 @@ safeOn("#btn-ingest-facebook", "click", async () => {
 
 safeOn("#btn-ingest-pdf", "click", async () => {
   try {
-    const file = $("#pdf-file").files[0];
-    if (!file) return toast("Choose a PDF file", "error");
+    const files = Array.from($("#pdf-file")?.files || []);
+    if (!files.length) return toast("Choose one or more PDF files", "error");
+    const customTitle =
+      files.length === 1 ? ($("#pdf-title").value.trim() || "") : "";
+    const total = files.length;
     await withBackgroundTask({
       id: `upload-pdf-${Date.now()}`,
-      label: `Uploading PDF: ${file.name}`,
+      label:
+        total === 1
+          ? `Uploading PDF: ${files[0].name}`
+          : `Uploading ${total} PDFs`,
       run: async ({ setDetail, isCancelled }) => {
-        setDetail("Processing document…");
-        const fd = new FormData();
-        fd.append("file", file);
-        const title = $("#pdf-title").value.trim();
-        if (title) fd.append("title", title);
-        const data = await api("/api/ingest/pdf", { method: "POST", body: fd, timeoutMs: 600000 });
-        if (isCancelled()) return;
-        showUploadResult(data.document);
+        let ok = 0;
+        let failed = 0;
+        let lastDoc = null;
+        for (let i = 0; i < files.length; i++) {
+          if (isCancelled()) return;
+          const file = files[i];
+          setDetail(`Processing ${i + 1} of ${total}: ${file.name}`);
+          try {
+            const fd = new FormData();
+            fd.append("file", file);
+            if (customTitle) fd.append("title", customTitle);
+            const data = await api("/api/ingest/pdf", {
+              method: "POST",
+              body: fd,
+              timeoutMs: 600000,
+            });
+            if (isCancelled()) return;
+            lastDoc = data.document;
+            ok += 1;
+          } catch (err) {
+            failed += 1;
+            console.error(`PDF upload failed for ${file.name}`, err);
+          }
+        }
         $("#pdf-file").value = "";
         $("#pdf-file").closest(".file-label")?.querySelector(".file-name")?.remove();
         const pdfTitle = $("#pdf-title");
         if (pdfTitle) {
           pdfTitle.value = "";
+          pdfTitle.disabled = false;
+          pdfTitle.placeholder = "Defaults to each PDF filename";
           delete pdfTitle.dataset.userEdited;
         }
-        toast(`PDF uploaded · ${file.name}`);
-        await openLibraryAfterIngest();
+        if (lastDoc) showUploadResult(lastDoc);
+        if (ok && !failed) {
+          toast(ok === 1 ? `PDF uploaded · ${files[0].name}` : `${ok} PDFs uploaded`);
+        } else if (ok && failed) {
+          toast(`${ok} uploaded, ${failed} failed`, "error");
+        } else {
+          toast("PDF upload failed", "error");
+        }
+        if (ok) await openLibraryAfterIngest();
       },
     });
   } catch (e) {
@@ -5728,6 +5953,9 @@ $("#btn-audit-load-more")?.addEventListener("click", () => loadAuditTrail(false)
 $("#btn-export-pdf")?.addEventListener("click", () =>
   exportAssessmentPdf()
 );
+$("#btn-export-pdf-icon")?.addEventListener("click", () =>
+  exportAssessmentPdf()
+);
 $("#btn-investigate-item")?.addEventListener("click", () =>
   investigateSelectedOpenItem()
 );
@@ -5868,15 +6096,15 @@ async function saveExcerptToLibrary(excerpt, messageId = null) {
 function sendExcerptToIngest(excerpt, titleHint = "") {
   const text = (excerpt || "").trim();
   if (!text) return;
-  switchTab("ingest");
+  switchTab("library", { openAdd: true });
   const titleEl = $("#text-title");
   const contentEl = $("#text-content");
   if (titleEl && !titleEl.value.trim()) {
     titleEl.value = titleHint || "Chat excerpt";
   }
   if (contentEl) contentEl.value = text;
-  contentEl?.focus();
-  toast("Paste into Add data — review title and save");
+  openLibraryAddPanel({ focusText: true });
+  toast("Ready in Library → Add documents — review title and save");
 }
 
 function optionsChatScopeNote() {
@@ -5956,12 +6184,13 @@ function renderOptionsChatMessages() {
       const streaming = msg.streaming ? " streaming" : "";
       const pinBtn =
         role === "assistant" && !msg.streaming && msg.id
-          ? `<button type="button" class="btn ghost btn-sm options-chat-pin-whole" data-message-id="${escapeHtml(msg.id)}" title="Pin whole reply">Pin reply</button>`
+          ? `<button type="button" class="btn ghost btn-sm options-chat-pin-whole" data-message-id="${escapeHtml(msg.id)}" title="Pin whole reply">Pin reply</button>
+             <button type="button" class="btn secondary btn-sm options-chat-apply-home" data-message-id="${escapeHtml(msg.id)}" title="Pin this reply and update the Home assessment">Update Home</button>`
           : "";
       return `<article class="options-chat-bubble ${role}${streaming}" data-message-id="${escapeHtml(msg.id || "")}">
         <div class="options-chat-bubble-head row-between wrap">
           <span class="options-chat-role">${label}</span>
-          ${pinBtn}
+          <span class="options-chat-bubble-actions">${pinBtn}</span>
         </div>
         <div class="options-chat-body">${body}</div>
       </article>`;
@@ -6179,6 +6408,11 @@ $("#options-chat-session-list")?.addEventListener("click", (event) => {
 });
 
 $("#options-chat-messages")?.addEventListener("click", (event) => {
+  const applyBtn = event.target.closest(".options-chat-apply-home");
+  if (applyBtn?.dataset.messageId) {
+    applyChatReplyToHome(applyBtn.dataset.messageId).catch((e) => toast(e.message, "error"));
+    return;
+  }
   const pinBtn = event.target.closest(".options-chat-pin-whole");
   if (pinBtn?.dataset.messageId) {
     const msg = (state.optionsChatMessages || []).find((m) => m.id === pinBtn.dataset.messageId);
@@ -6327,58 +6561,1110 @@ bindFileInput("#video-file");
 // Patient / Case management
 // ------------------------------------------------------------------
 
+function patientInitials(label) {
+  const parts = String(label || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function fillSelect(select, items, selectedId) {
+  if (!select) return;
+  select.innerHTML = "";
+  for (const item of items) {
+    const opt = document.createElement("option");
+    opt.value = item.id;
+    opt.textContent = item.label;
+    if (item.id === selectedId) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+async function activatePatientCase(patientId, caseId) {
+  const res = await fetch("/api/cases/activate", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ patient_id: patientId, case_id: caseId }),
+  });
+  if (!res.ok) {
+    alert("Could not switch case");
+    return;
+  }
+  location.reload();
+}
+
 async function loadCaseContext() {
   try {
-    const r = await fetch("/api/cases/active");
-    const ctx = await r.json();
-    const pEl = document.getElementById("case-ctx-patient");
-    const cEl = document.getElementById("case-ctx-case");
-    if (pEl) pEl.textContent = ctx.patient_label || "No patient";
-    if (cEl) cEl.textContent = ctx.case_label || "No case";
+    const r = await fetch("/api/patients");
+    const data = await r.json();
+    const ctx = data.active || {};
+    const patients = data.patients || [];
+    const nameEl = document.getElementById("header-patient-name");
+    const subEl = document.getElementById("header-patient-sub");
+    const initialsEl = document.getElementById("header-patient-initials");
+    const photoEl = document.getElementById("header-patient-photo");
+    const photoBtn = document.getElementById("btn-patient-photo");
+    const patientSelectWrap = document.getElementById("header-patient-select-wrap");
+    const patientSelect = document.getElementById("header-patient-select");
+    const caseSelect = document.getElementById("header-case-select");
+    const settingsPatient = document.getElementById("settings-current-patient");
+    const settingsCase = document.getElementById("settings-current-case");
+
+    const label = ctx.patient_label || "No patient";
+    if (nameEl) nameEl.textContent = label;
+    if (initialsEl) initialsEl.textContent = patientInitials(label);
+    if (settingsPatient) settingsPatient.textContent = label;
+    if (settingsCase) settingsCase.textContent = ctx.case_label || "No case";
+
+    if (photoEl && photoBtn) {
+      if (ctx.photo_url) {
+        photoEl.src = ctx.photo_url;
+        photoEl.alt = label;
+        photoEl.classList.remove("hidden");
+        photoBtn.classList.add("has-photo");
+      } else {
+        photoEl.removeAttribute("src");
+        photoEl.classList.add("hidden");
+        photoBtn.classList.remove("has-photo");
+      }
+    }
+
+    if (patients.length > 1) {
+      patientSelectWrap?.classList.remove("hidden");
+      fillSelect(patientSelect, patients, ctx.patient_id);
+    } else {
+      patientSelectWrap?.classList.add("hidden");
+    }
+
+    const activePatient = patients.find((p) => p.id === ctx.patient_id);
+    const cases = activePatient?.cases || ctx.cases || [];
+    fillSelect(caseSelect, cases.length ? cases : [{ id: "", label: "No cases yet" }], ctx.case_id);
+    if (caseSelect) caseSelect.disabled = !cases.length;
+
+    state.activePatientId = ctx.patient_id || null;
+    state.activeCaseId = ctx.case_id || null;
+    if (ctx.patient_id) {
+      await refreshActivePatientProfile();
+    } else {
+      renderPatientProfile({}, null);
+    }
+    if (subEl && !ctx.patient_id) subEl.textContent = "";
   } catch { /* ignore */ }
+}
+
+function ageFromDob(dob) {
+  if (!dob) return null;
+  const d = new Date(`${String(dob).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - d.getFullYear();
+  const m = today.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function formatPatientSubline(profile) {
+  const bits = [];
+  const age = ageFromDob(profile.date_of_birth);
+  if (age != null) bits.push(`Age ${age}`);
+  if (profile.gender) bits.push(String(profile.gender));
+  return bits.join(" · ");
+}
+
+function bmiFor(heightCm, weightKg) {
+  const h = Number(heightCm);
+  const w = Number(weightKg);
+  if (!(h > 0) || !(w > 0)) return null;
+  const bmi = w / ((h / 100) ** 2);
+  return Number.isFinite(bmi) ? bmi.toFixed(1) : null;
+}
+
+function renderPatientProfile(profile, patientId, extras = {}) {
+  const dobEl = document.getElementById("profile-dob");
+  const genderEl = document.getElementById("profile-gender");
+  const hintEl = document.getElementById("profile-age-hint");
+  const listEl = document.getElementById("patient-measurements-list");
+  const diagListEl = document.getElementById("patient-diagnostics-list");
+  const journalListEl = document.getElementById("patient-journal-list");
+  const medListEl = document.getElementById("patient-medications-list");
+  const measureDate = document.getElementById("measure-date");
+  const diagDate = document.getElementById("diag-date");
+  const presets = extras.diagnostic_presets || state.diagnosticPresets || [];
+  if (presets.length) state.diagnosticPresets = presets;
+  if (extras.journal_presets?.length) state.journalPresets = extras.journal_presets;
+
+  const nameList = document.getElementById("diag-name-presets");
+  const unitList = document.getElementById("diag-unit-presets");
+  if (nameList) {
+    nameList.innerHTML = (state.diagnosticPresets || [])
+      .map((p) => `<option value="${escapeHtml(p.name)}"></option>`)
+      .join("");
+  }
+  if (unitList) {
+    const units = [...new Set((state.diagnosticPresets || []).map((p) => p.unit).filter(Boolean))];
+    unitList.innerHTML = units.map((u) => `<option value="${escapeHtml(u)}"></option>`).join("");
+  }
+
+  if (!patientId) {
+    if (dobEl) dobEl.value = "";
+    if (genderEl) genderEl.value = "";
+    if (hintEl) hintEl.textContent = "Select or create a patient first";
+    if (listEl) listEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    if (diagListEl) diagListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    if (journalListEl) journalListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    if (medListEl) medListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    renderDiagnosticsCharts(null, []);
+    renderJournalHome(null, []);
+    renderMedicationsHome(null);
+    return;
+  }
+  if (dobEl) dobEl.value = profile.date_of_birth ? String(profile.date_of_birth).slice(0, 10) : "";
+  if (genderEl) genderEl.value = profile.gender || "";
+  const age = ageFromDob(profile.date_of_birth);
+  if (hintEl) {
+    hintEl.textContent = age != null
+      ? `Age ${age} · used in analysis prompts for the active patient`
+      : "Used in analysis prompts for the active patient";
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  if (measureDate && !measureDate.value) measureDate.value = today;
+  if (diagDate && !diagDate.value) diagDate.value = today;
+
+  const measurements = profile.measurements || [];
+  if (listEl) {
+    if (!measurements.length) {
+      listEl.innerHTML = "<p class='muted small'>No measurements yet.</p>";
+    } else {
+      listEl.innerHTML = measurements.map((m) => {
+        const parts = [];
+        if (m.height_cm != null) parts.push(`${m.height_cm} cm`);
+        if (m.weight_kg != null) parts.push(`${m.weight_kg} kg`);
+        const bmi = bmiFor(m.height_cm, m.weight_kg);
+        if (bmi) parts.push(`BMI ${bmi}`);
+        if (m.notes) parts.push(m.notes);
+        return `<div class="patient-measurement-row" data-id="${escapeHtml(m.id)}">
+          <div><strong>${escapeHtml(m.recorded_at || "")}</strong> · ${escapeHtml(parts.join(" · ") || "—")}</div>
+          <button type="button" class="btn ghost btn-sm btn-delete-measurement" data-id="${escapeHtml(m.id)}">Remove</button>
+        </div>`;
+      }).join("");
+    }
+  }
+
+  const diagnostics = profile.diagnostics || [];
+  if (diagListEl) {
+    if (!diagnostics.length) {
+      diagListEl.innerHTML = "<p class='muted small'>No diagnostic readings yet.</p>";
+    } else {
+      diagListEl.innerHTML = diagnostics.map((d) => {
+        const unit = d.unit ? ` ${d.unit}` : "";
+        const note = d.notes ? ` · ${d.notes}` : "";
+        return `<div class="patient-measurement-row" data-id="${escapeHtml(d.id)}">
+          <div><strong>${escapeHtml(d.name || "")}</strong> · ${escapeHtml(String(d.value))}${escapeHtml(unit)} · ${escapeHtml(d.recorded_at || "")}${escapeHtml(note)}</div>
+          <button type="button" class="btn ghost btn-sm btn-delete-diagnostic" data-id="${escapeHtml(d.id)}">Remove</button>
+        </div>`;
+      }).join("");
+    }
+  }
+
+  const journal = profile.journal || [];
+  if (journalListEl) {
+    if (!journal.length) {
+      journalListEl.innerHTML = "<p class='muted small'>No self-reports yet. Log from Home → How are you?</p>";
+    } else {
+      journalListEl.innerHTML = journal.map((j) => formatJournalListRow(j)).join("");
+    }
+  }
+
+  renderMedicationsSettings(profile);
+  const series = extras.diagnostic_series || groupDiagnosticsClient(profile);
+  renderDiagnosticsCharts(profile, series);
+  const journalSeries = extras.journal_series || groupJournalClient(profile);
+  renderJournalHome(profile, journalSeries);
+  renderMedicationsHome(profile);
+}
+
+function parseConditionsInput(raw) {
+  return String(raw || "")
+    .split(/[,;]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function formatMedicationDoseLine(m) {
+  const bits = [];
+  if (m.dosage) bits.push(m.dosage);
+  if (m.frequency) bits.push(m.frequency);
+  return bits.join(" · ") || "Dosage not set";
+}
+
+function formatMedicationConditions(m) {
+  const conditions = m.conditions || [];
+  if (!conditions.length) return "";
+  return `<div class="medication-conditions">${conditions
+    .map((c) => `<span class="medication-condition-chip">${escapeHtml(c)}</span>`)
+    .join("")}</div>`;
+}
+
+function formatMedicationHistory(m) {
+  const hist = m.dosage_history || [];
+  if (!hist.length) return "";
+  const items = [...hist]
+    .reverse()
+    .map((h) => {
+      const dose = [h.dosage, h.frequency].filter(Boolean).join(" · ") || "—";
+      const when = formatJournalDateTime(h.changed_at);
+      const note = h.note ? ` · ${escapeHtml(h.note)}` : "";
+      return `<li><strong>${escapeHtml(dose)}</strong> until ${escapeHtml(when)}${note}</li>`;
+    })
+    .join("");
+  return `<details class="medication-history"><summary>Dosage history (${hist.length})</summary><ul>${items}</ul></details>`;
+}
+
+function renderMedicationsHome(profile) {
+  const el = document.getElementById("medications-home-list");
+  if (!el) return;
+  if (!profile) {
+    el.innerHTML = `<p class="muted small">Select a patient to see medications.</p>`;
+    return;
+  }
+  const active = (profile.medications || []).filter((m) => (m.status || "active") === "active");
+  if (!active.length) {
+    el.innerHTML = `<p class="muted small">No active medications yet. Add them in Settings.</p>`;
+    return;
+  }
+  el.innerHTML = active
+    .map((m) => {
+      const started = m.started_at ? ` · since ${escapeHtml(formatDiagDate(m.started_at))}` : "";
+      return `<div class="medication-home-row">
+        <div class="medication-row-main">
+          <strong>${escapeHtml(m.name || "")}</strong>
+          <p class="medication-row-meta">${escapeHtml(formatMedicationDoseLine(m))}${started}</p>
+          ${formatMedicationConditions(m)}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderMedicationsSettings(profile) {
+  const el = document.getElementById("patient-medications-list");
+  if (!el) return;
+  const meds = profile?.medications || [];
+  if (!meds.length) {
+    el.innerHTML = `<p class="muted small">No medications yet.</p>`;
+    return;
+  }
+  const active = meds.filter((m) => (m.status || "active") === "active");
+  const stopped = meds.filter((m) => m.status === "stopped");
+  const rowHtml = (m, { stopped: isStopped } = {}) => {
+    const started = m.started_at ? `Started ${formatDiagDate(m.started_at)}` : "";
+    const stoppedBit = m.stopped_at ? `Stopped ${formatDiagDate(m.stopped_at)}` : "";
+    const notes = m.notes ? escapeHtml(m.notes) : "";
+    const meta = [formatMedicationDoseLine(m), started, stoppedBit, notes].filter(Boolean).join(" · ");
+    const actions = isStopped
+      ? `<button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`
+      : `<button type="button" class="btn ghost btn-sm btn-edit-medication" data-id="${escapeHtml(m.id)}">Edit</button>
+         <button type="button" class="btn ghost btn-sm btn-stop-medication" data-id="${escapeHtml(m.id)}">Stop</button>
+         <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
+    return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
+      <div class="medication-row-main">
+        <strong>${escapeHtml(m.name || "")}</strong>
+        <p class="medication-row-meta">${escapeHtml(meta)}</p>
+        ${formatMedicationConditions(m)}
+        ${formatMedicationHistory(m)}
+      </div>
+      <div class="medication-row-actions">${actions}</div>
+    </div>`;
+  };
+  let html = active.map((m) => rowHtml(m)).join("");
+  if (stopped.length) {
+    html += `<h5 class="medication-stopped-heading">Stopped</h5>`;
+    html += stopped.map((m) => rowHtml(m, { stopped: true })).join("");
+  }
+  el.innerHTML = html || `<p class="muted small">No medications yet.</p>`;
+}
+
+function clearMedicationForm() {
+  const idEl = document.getElementById("med-edit-id");
+  if (idEl) idEl.value = "";
+  ["med-name", "med-dosage", "med-frequency", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  const started = document.getElementById("med-started");
+  if (started) started.value = "";
+  document.querySelector(".med-history-note-wrap")?.classList.add("hidden");
+  const saveBtn = document.getElementById("btn-save-medication");
+  if (saveBtn) saveBtn.textContent = "Add medication";
+  document.getElementById("btn-cancel-med-edit")?.classList.add("hidden");
+}
+
+function fillMedicationForm(m) {
+  document.getElementById("med-edit-id").value = m.id || "";
+  document.getElementById("med-name").value = m.name || "";
+  document.getElementById("med-dosage").value = m.dosage || "";
+  document.getElementById("med-frequency").value = m.frequency || "";
+  document.getElementById("med-conditions").value = (m.conditions || []).join(", ");
+  document.getElementById("med-notes").value = m.notes || "";
+  document.getElementById("med-started").value = m.started_at ? String(m.started_at).slice(0, 10) : "";
+  document.getElementById("med-history-note").value = "";
+  document.querySelector(".med-history-note-wrap")?.classList.remove("hidden");
+  const saveBtn = document.getElementById("btn-save-medication");
+  if (saveBtn) saveBtn.textContent = "Save changes";
+  document.getElementById("btn-cancel-med-edit")?.classList.remove("hidden");
+  document.getElementById("med-name")?.focus();
+}
+
+function setMedImportStatus(text, { error = false } = {}) {
+  const el = document.getElementById("med-import-status");
+  if (!el) return;
+  if (!text) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    return;
+  }
+  el.textContent = text;
+  el.classList.toggle("error-text", error);
+  el.classList.remove("hidden");
+}
+
+function clearMedImportReview() {
+  const wrap = document.getElementById("med-import-review");
+  const list = document.getElementById("med-import-review-list");
+  if (list) list.innerHTML = "";
+  wrap?.classList.add("hidden");
+  const file = document.getElementById("med-import-file");
+  if (file) file.value = "";
+  setMedImportStatus("");
+}
+
+function renderMedImportReview(data) {
+  const wrap = document.getElementById("med-import-review");
+  const list = document.getElementById("med-import-review-list");
+  if (!wrap || !list) return;
+  const proposed = data.proposed || [];
+  const meta = data.extraction_meta || {};
+  const warnings = data.warnings || [];
+  const method = meta.extraction_method || "unknown";
+  const chars = meta.extracted_chars != null ? `${meta.extracted_chars} chars` : "";
+  const bits = [`Extracted via ${method}${chars ? ` · ${chars}` : ""}`];
+  if (warnings.length) bits.push(warnings.join(" · "));
+  setMedImportStatus(bits.join(" — "));
+
+  if (!proposed.length) {
+    list.innerHTML = `<p class="muted small">No medications detected. Try a clearer photo or PDF.</p>`;
+    wrap.classList.remove("hidden");
+    return;
+  }
+
+  list.innerHTML = proposed
+    .map((m, i) => {
+      const conditions = Array.isArray(m.conditions) ? m.conditions.join(", ") : m.conditions || "";
+      return `<div class="med-import-row" data-idx="${i}">
+        <label class="med-import-check">
+          <input type="checkbox" class="med-import-select" checked aria-label="Include ${escapeHtml(m.name || "medication")}">
+        </label>
+        <div class="med-import-row-fields">
+          <label>Name<input type="text" class="med-import-name" maxlength="120" value="${escapeHtml(m.name || "")}"></label>
+          <label>Dosage<input type="text" class="med-import-dosage" maxlength="80" value="${escapeHtml(m.dosage || "")}"></label>
+          <label>Frequency<input type="text" class="med-import-frequency" maxlength="80" value="${escapeHtml(m.frequency || "")}"></label>
+          <label>Started<input type="date" class="med-import-started" value="${escapeHtml(m.started_at ? String(m.started_at).slice(0, 10) : "")}"></label>
+          <label class="med-import-span-2">Conditions<input type="text" class="med-import-conditions" maxlength="240" value="${escapeHtml(conditions)}"></label>
+          <label class="med-import-span-2">Notes<input type="text" class="med-import-notes" maxlength="500" value="${escapeHtml(m.notes || "")}"></label>
+        </div>
+      </div>`;
+    })
+    .join("");
+  wrap.classList.remove("hidden");
+  wrap.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function collectMedImportSelected() {
+  const rows = document.querySelectorAll("#med-import-review-list .med-import-row");
+  const out = [];
+  rows.forEach((row) => {
+    const checked = row.querySelector(".med-import-select")?.checked;
+    if (!checked) return;
+    const name = row.querySelector(".med-import-name")?.value.trim();
+    if (!name) return;
+    out.push({
+      name,
+      dosage: row.querySelector(".med-import-dosage")?.value.trim() || null,
+      frequency: row.querySelector(".med-import-frequency")?.value.trim() || null,
+      conditions: parseConditionsInput(row.querySelector(".med-import-conditions")?.value),
+      notes: row.querySelector(".med-import-notes")?.value.trim() || null,
+      started_at: row.querySelector(".med-import-started")?.value || null,
+    });
+  });
+  return out;
+}
+
+function formatJournalDateTime(iso) {
+  const raw = String(iso || "");
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    const day = raw.slice(0, 10);
+    return day || "—";
+  }
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} · ${hh}:${mm}`;
+}
+
+function formatJournalListRow(j) {
+  const sev = j.severity != null ? ` · sev ${j.severity}/5` : "";
+  const text = j.text ? ` · ${j.text}` : "";
+  const caseBit = j.case_id ? " · case-linked" : "";
+  return `<div class="patient-measurement-row" data-id="${escapeHtml(j.id)}">
+    <div><span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span><strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${escapeHtml(text)} · ${escapeHtml(formatJournalDateTime(j.recorded_at))}${escapeHtml(caseBit)}</div>
+    <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Remove</button>
+  </div>`;
+}
+
+function defaultJournalPresets() {
+  return [
+    { label: "Weak", kind: "feeling" },
+    { label: "Headache", kind: "symptom" },
+    { label: "Nauseous", kind: "symptom" },
+    { label: "Dizzy", kind: "symptom" },
+    { label: "Fatigue", kind: "symptom" },
+    { label: "Pain", kind: "symptom" },
+    { label: "Anxiety", kind: "feeling" },
+    { label: "Took medication", kind: "medication" },
+    { label: "Ate", kind: "note" },
+    { label: "Slept", kind: "note" },
+    { label: "Note", kind: "note" },
+  ];
+}
+
+function ensureJournalChips() {
+  const feelingEl = document.getElementById("journal-feeling-chips");
+  const actionEl = document.getElementById("journal-action-chips");
+  if (!feelingEl || !actionEl) return;
+  const presets = state.journalPresets.length ? state.journalPresets : defaultJournalPresets();
+  const sig = presets.map((p) => `${p.kind}:${p.label}`).join("|");
+  if (feelingEl.dataset.sig === sig) return;
+  const feelings = presets.filter((p) => p.kind === "symptom" || p.kind === "feeling");
+  const actions = presets.filter((p) => p.kind === "medication" || p.kind === "note");
+  const chipHtml = (p) =>
+    `<button type="button" class="journal-chip" data-kind="${escapeHtml(p.kind)}" data-label="${escapeHtml(p.label)}">${escapeHtml(p.label)}</button>`;
+  feelingEl.innerHTML = feelings.map(chipHtml).join("");
+  actionEl.innerHTML = actions.map(chipHtml).join("");
+  feelingEl.dataset.sig = sig;
+  actionEl.dataset.sig = sig;
+}
+
+function updateJournalDraftUi() {
+  const draft = state.journalDraft || { kind: "note", label: "", severity: null };
+  document.querySelectorAll(".journal-chip").forEach((btn) => {
+    const on =
+      btn.dataset.label === draft.label && btn.dataset.kind === draft.kind;
+    btn.classList.toggle("is-selected", on);
+  });
+  document.querySelectorAll(".journal-sev-btn").forEach((btn) => {
+    btn.classList.toggle("is-selected", String(draft.severity || "") === btn.dataset.sev);
+  });
+  const severityRow = document.getElementById("journal-severity-row");
+  if (severityRow) {
+    const show = draft.kind === "symptom" || draft.kind === "feeling";
+    severityRow.classList.toggle("hidden", !show);
+  }
+  const hint = document.getElementById("journal-selected-hint");
+  if (hint) {
+    if (draft.label) {
+      const sev = draft.severity ? ` · severity ${draft.severity}` : "";
+      hint.textContent = `${draft.label}${sev}`;
+    } else {
+      hint.textContent = "Pick a chip or type a note";
+    }
+  }
+}
+
+function groupJournalClient(profile) {
+  const groups = new Map();
+  for (const row of profile?.journal || []) {
+    const label = String(row.label || "").trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        name: label,
+        label,
+        kind: row.kind || "note",
+        entries: [],
+      });
+    }
+    const g = groups.get(key);
+    if ((row.kind === "symptom" || row.kind === "feeling") && g.kind !== "symptom" && g.kind !== "feeling") {
+      g.kind = row.kind;
+    }
+    g.entries.push({
+      id: row.id,
+      recorded_at: row.recorded_at,
+      day: String(row.recorded_at || "").slice(0, 10),
+      severity: row.severity != null ? Number(row.severity) : null,
+      kind: row.kind,
+      text: row.text,
+    });
+  }
+  return [...groups.values()]
+    .map((g) => {
+      const entries = [...g.entries].sort((a, b) =>
+        String(a.recorded_at || "").localeCompare(String(b.recorded_at || ""))
+      );
+      const byDay = new Map();
+      for (const e of entries) {
+        if (!e.day) continue;
+        if (!byDay.has(e.day)) byDay.set(e.day, []);
+        byDay.get(e.day).push(e);
+      }
+      const readings = [...byDay.keys()].sort().map((day) => {
+        const rows = byDay.get(day);
+        const sevs = rows.map((r) => r.severity).filter((v) => v != null && Number.isFinite(v));
+        if (sevs.length) {
+          return {
+            recorded_at: day,
+            value: Math.round((sevs.reduce((a, b) => a + b, 0) / sevs.length) * 100) / 100,
+            count: rows.length,
+            metric: "severity_avg",
+          };
+        }
+        return { recorded_at: day, value: rows.length, count: rows.length, metric: "count" };
+      });
+      return {
+        ...g,
+        readings,
+        latest: readings[readings.length - 1] || null,
+        point_count: readings.length,
+        entry_count: entries.length,
+        unit: readings.some((r) => r.metric === "severity_avg") ? "sev" : "count",
+      };
+    })
+    .sort((a, b) => {
+      const kindRank = (k) => (k === "symptom" || k === "feeling" ? 0 : 1);
+      return kindRank(a.kind) - kindRank(b.kind) || b.entry_count - a.entry_count || a.name.localeCompare(b.name);
+    })
+    .slice(0, 8);
+}
+
+function renderJournalHome(profile, series) {
+  ensureJournalChips();
+  updateJournalDraftUi();
+  const recentEl = document.getElementById("journal-recent");
+  const chartsEl = document.getElementById("journal-charts");
+  if (!recentEl || !chartsEl) return;
+
+  if (!profile) {
+    recentEl.innerHTML = `<p class="muted small">Select a patient to log how you feel.</p>`;
+    chartsEl.innerHTML = "";
+    return;
+  }
+
+  const entries = profile.journal || [];
+  if (!entries.length) {
+    recentEl.innerHTML = `<p class="muted small">Nothing logged yet — tap a chip and Log now.</p>`;
+  } else {
+    recentEl.innerHTML = entries
+      .slice(0, 10)
+      .map((j) => {
+        const sev = j.severity != null ? ` · ${j.severity}/5` : "";
+        const text = j.text ? ` · ${escapeHtml(j.text)}` : "";
+        return `<div class="journal-recent-row">
+          <div class="journal-recent-main">
+            <span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span>
+            <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${text}
+            <div class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}${j.case_id ? " · case-linked" : ""}</div>
+          </div>
+          <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Remove</button>
+        </div>`;
+      })
+      .join("");
+  }
+
+  const cards = series || [];
+  if (!cards.length) {
+    chartsEl.innerHTML = "";
+    return;
+  }
+  chartsEl.innerHTML = cards
+    .map((s) => {
+      const unitLabel = s.unit === "sev" ? "avg severity" : "reports/day";
+      const latest = s.latest;
+      const latestLabel = latest
+        ? `${formatDiagValue(latest.value)} ${unitLabel} · ${formatDiagDate(latest.recorded_at)}`
+        : "—";
+      return `<article class="journal-chart-card">
+        <div class="journal-chart-head">
+          <h4 class="journal-chart-title">${escapeHtml(s.name || s.label)}</h4>
+          <span class="muted small">${escapeHtml(latestLabel)}</span>
+        </div>
+        ${buildSparklineSvg(s.readings || [], { stroke: "var(--accent-warm, var(--accent))" })}
+        <p class="journal-chart-meta">${escapeHtml(s.kind || "note")} · ${s.entry_count || 0} log${(s.entry_count || 0) === 1 ? "" : "s"} · ${unitLabel}</p>
+      </article>`;
+    })
+    .join("");
+}
+
+function applyProfileResponse(data) {
+  renderPatientProfile(data.profile || {}, state.activePatientId, {
+    diagnostic_series: data.diagnostic_series,
+    diagnostic_presets: data.diagnostic_presets,
+    journal_series: data.journal_series,
+    journal_presets: data.journal_presets,
+  });
+  const subEl = document.getElementById("header-patient-sub");
+  if (subEl) subEl.textContent = formatPatientSubline(data.profile || {});
+}
+
+function groupDiagnosticsClient(profile) {
+  const groups = new Map();
+  for (const row of profile.diagnostics || []) {
+    const name = String(row.name || "").trim();
+    if (!name || row.value == null) continue;
+    const key = name.toLowerCase();
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        name,
+        unit: row.unit || null,
+        category: row.category || "blood",
+        readings: [],
+      });
+    }
+    const g = groups.get(key);
+    if (row.unit && !g.unit) g.unit = row.unit;
+    if (row.category === "blood") g.category = "blood";
+    g.readings.push({
+      id: row.id,
+      recorded_at: String(row.recorded_at || "").slice(0, 10),
+      value: row.value,
+      notes: row.notes,
+    });
+  }
+  return [...groups.values()]
+    .map((g) => {
+      const readings = [...g.readings].sort((a, b) =>
+        String(a.recorded_at || "").localeCompare(String(b.recorded_at || ""))
+      );
+      return {
+        ...g,
+        readings,
+        latest: readings[readings.length - 1] || null,
+        point_count: readings.length,
+      };
+    })
+    .sort((a, b) => {
+      const catRank = (c) => (c === "blood" ? 0 : c === "vital" ? 1 : c === "imaging" ? 2 : 3);
+      const multi = (s) => (s.point_count > 1 ? 0 : 1);
+      return (
+        catRank(a.category) - catRank(b.category) ||
+        multi(a) - multi(b) ||
+        b.point_count - a.point_count ||
+        a.name.localeCompare(b.name)
+      );
+    });
+}
+
+function weightSeriesFromProfile(profile) {
+  const points = (profile?.measurements || [])
+    .filter((m) => m.weight_kg != null)
+    .map((m) => ({
+      recorded_at: String(m.recorded_at || "").slice(0, 10),
+      value: Number(m.weight_kg),
+      id: m.id,
+    }))
+    .sort((a, b) => String(a.recorded_at || "").localeCompare(String(b.recorded_at || "")));
+  if (!points.length) return null;
+  return {
+    key: "weight",
+    name: "Weight",
+    unit: "kg",
+    readings: points,
+    latest: points[points.length - 1],
+    point_count: points.length,
+  };
+}
+
+function bmiSeriesFromProfile(profile) {
+  const points = (profile?.measurements || [])
+    .map((m) => {
+      const bmi = bmiFor(m.height_cm, m.weight_kg);
+      if (bmi == null) return null;
+      return {
+        recorded_at: String(m.recorded_at || "").slice(0, 10),
+        value: Number(bmi),
+        id: m.id,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(a.recorded_at || "").localeCompare(String(b.recorded_at || "")));
+  if (!points.length) return null;
+  return {
+    key: "bmi",
+    name: "BMI",
+    unit: "",
+    readings: points,
+    latest: points[points.length - 1],
+    point_count: points.length,
+  };
+}
+
+function formatDiagDate(iso) {
+  const raw = String(iso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || "—";
+  const d = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return raw;
+  // Explicit parts avoid locale truncation in tight SVG/HTML layouts
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+function formatDiagDateAxis(iso) {
+  const raw = String(iso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || "—";
+  const d = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return raw;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // Compact but complete: Nov 14 · 2026
+  return `${months[d.getMonth()]} ${d.getDate()} · ${d.getFullYear()}`;
+}
+
+function formatDiagValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value ?? "");
+  if (Number.isInteger(n)) return String(n);
+  const abs = Math.abs(n);
+  if (abs >= 100) return n.toFixed(0);
+  if (abs >= 10) return n.toFixed(1);
+  return String(parseFloat(n.toFixed(2)));
+}
+
+function formatReferenceMeta(ref) {
+  if (!ref) return "";
+  const bits = [ref.label].filter(Boolean);
+  if (ref.note) bits.push(ref.note);
+  return bits.join(" · ");
+}
+
+function statusColor(status) {
+  if (status === "green") return "#15803d";
+  if (status === "yellow") return "#ca8a04";
+  if (status === "red") return "#b91c1c";
+  return "var(--accent)";
+}
+
+function statusLabel(status) {
+  if (status === "green") return "On target";
+  if (status === "yellow") return "Near target (±10%)";
+  if (status === "red") return "Off target";
+  return "";
+}
+
+function clientStatusForValue(value, reference) {
+  if (value == null || !reference) return null;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return null;
+  const low = reference.low != null && Number.isFinite(Number(reference.low)) ? Number(reference.low) : null;
+  const high = reference.high != null && Number.isFinite(Number(reference.high)) ? Number(reference.high) : null;
+  const direction = reference.direction || "range";
+  const band = (distance, threshold) => {
+    if (!threshold) return Math.abs(distance) > 0 ? "yellow" : "green";
+    const pct = Math.abs(distance) / Math.abs(threshold);
+    if (pct <= 1e-9) return "green";
+    if (pct <= 0.1) return "yellow";
+    return "red";
+  };
+  if (direction === "lower_better" && high != null) {
+    if (v <= high) return "green";
+    return band(v - high, high);
+  }
+  if (direction === "higher_better" && low != null) {
+    if (v >= low) return "green";
+    return band(low - v, low);
+  }
+  if (low != null && high != null) {
+    if (v >= low && v <= high) return "green";
+    if (v < low) return band(low - v, low);
+    return band(v - high, high);
+  }
+  if (high != null) {
+    if (v <= high) return "green";
+    return band(v - high, high);
+  }
+  if (low != null) {
+    if (v >= low) return "green";
+    return band(low - v, low);
+  }
+  return null;
+}
+
+function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = null } = {}) {
+  const points = (readings || [])
+    .map((r) => ({
+      date: String(r.recorded_at || "").slice(0, 10),
+      value: Number(r.value),
+      status: r.status || clientStatusForValue(r.value, reference),
+    }))
+    .filter((p) => p.date && Number.isFinite(p.value));
+  if (!points.length) {
+    return `<div class="diag-chart-plot"><svg class="diag-chart-svg" viewBox="0 0 360 150" role="img"><text x="180" y="75" text-anchor="middle" fill="currentColor" font-size="16">No data</text></svg></div>`;
+  }
+
+  const refLow = reference && Number.isFinite(Number(reference.low)) ? Number(reference.low) : null;
+  const refHigh = reference && Number.isFinite(Number(reference.high)) ? Number(reference.high) : null;
+  const hasRef = refLow != null || refHigh != null;
+  const latestStatus = points[points.length - 1]?.status;
+  const lineStroke = latestStatus ? statusColor(latestStatus) : stroke;
+
+  if (points.length === 1) {
+    const p = points[0];
+    const color = statusColor(p.status);
+    const refLine = hasRef
+      ? `<text x="180" y="128" text-anchor="middle" fill="currentColor" font-size="13" opacity="0.75">${escapeHtml(reference.label || "Reference")}</text>`
+      : "";
+    return `<div class="diag-chart-plot">
+      <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Single reading">
+        <text x="180" y="58" text-anchor="middle" fill="${color}" font-size="36" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
+        <text x="180" y="92" text-anchor="middle" fill="currentColor" font-size="15" opacity="0.85">${escapeHtml(formatDiagDate(p.date))}</text>
+        ${refLine}
+      </svg>
+    </div>`;
+  }
+
+  const padX = 32;
+  const padTop = 28;
+  const padBottom = 20;
+  const w = 360;
+  const h = 150;
+  const values = points.map((p) => p.value);
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (refLow != null) min = Math.min(min, refLow);
+  if (refHigh != null) max = Math.max(max, refHigh);
+  const pad = (max - min) * 0.08 || Math.abs(max) * 0.05 || 0.2;
+  min -= pad;
+  max += pad;
+  const span = max - min || 1;
+  const yFor = (value) => h - padBottom - ((value - min) / span) * (h - padTop - padBottom);
+  const coords = points.map((p, i) => {
+    const x = padX + (i / (points.length - 1)) * (w - padX * 2);
+    return { ...p, x, y: yFor(p.value) };
+  });
+
+  let refLayer = "";
+  if (hasRef) {
+    const bandTop = yFor(refHigh != null ? refHigh : max);
+    const bandBottom = yFor(refLow != null ? refLow : min);
+    const y1 = Math.min(bandTop, bandBottom);
+    const y2 = Math.max(bandTop, bandBottom);
+    refLayer = `<rect x="${padX}" y="${y1.toFixed(1)}" width="${(w - padX * 2).toFixed(1)}" height="${Math.max(2, y2 - y1).toFixed(1)}" fill="${lineStroke}" opacity="0.10"></rect>`;
+    if (refHigh != null) {
+      const y = yFor(refHigh);
+      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="${lineStroke}" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.55"></line>`;
+    }
+    if (refLow != null) {
+      const y = yFor(refLow);
+      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="${lineStroke}" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.55"></line>`;
+    }
+  }
+
+  const poly = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
+  const dots = coords
+    .map((c) => {
+      const label = formatDiagValue(c.value);
+      const fill = statusColor(c.status);
+      const valueY = c.y - 12;
+      return `<g>
+        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4.2" fill="${fill}">
+          <title>${escapeHtml(formatDiagDate(c.date))}: ${escapeHtml(label)}${c.status ? ` (${statusLabel(c.status)})` : ""}</title>
+        </circle>
+        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="13" font-weight="700">${escapeHtml(label)}</text>
+      </g>`;
+    })
+    .join("");
+
+  const dateRow = `<div class="diag-chart-dates" style="grid-template-columns: repeat(${coords.length}, 1fr);">
+    ${coords
+      .map((c) => `<span class="diag-chart-date">${escapeHtml(formatDiagDate(c.date))}</span>`)
+      .join("")}
+  </div>`;
+
+  return `<div class="diag-chart-plot">
+    <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
+      ${refLayer}
+      <polyline fill="none" stroke="${lineStroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
+      ${dots}
+    </svg>
+    ${dateRow}
+  </div>`;
+}
+
+function renderDiagnosticsCharts(profile, series) {
+  const wrap = document.getElementById("diagnostics-charts");
+  if (!wrap) return;
+  const bloodFirst = [...(series || [])];
+  const extras = [];
+  const weight = weightSeriesFromProfile(profile);
+  const bmi = bmiSeriesFromProfile(profile);
+  if (weight && weight.point_count >= 2) extras.push({ ...weight, category: "vital" });
+  if (bmi && bmi.point_count >= 2) {
+    const ref = {
+      low: 18.5,
+      high: 24.9,
+      label: "Healthy 18.5–24.9",
+      direction: "range",
+      note: "WHO adult BMI",
+      meaning: "Body mass index relates weight to height. It is a screening tool, not a complete health measure.",
+      info_url: "https://medlineplus.gov/ency/article/007196.htm",
+      info_source: "MedlinePlus",
+    };
+    const readings = (bmi.readings || []).map((r) => ({
+      ...r,
+      status: clientStatusForValue(r.value, ref),
+    }));
+    const latest = readings[readings.length - 1] || null;
+    extras.push({
+      ...bmi,
+      category: "vital",
+      reference: ref,
+      readings,
+      latest,
+      status: latest?.status || null,
+    });
+  }
+
+  const cards = [...bloodFirst, ...extras];
+  if (!cards.length) {
+    wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
+    return;
+  }
+
+  wrap.innerHTML = cards
+    .map((s) => {
+      const unit = s.unit ? ` ${s.unit}` : "";
+      const latest = s.latest;
+      const status = s.status || latest?.status || clientStatusForValue(latest?.value, s.reference);
+      const latestLabel = latest
+        ? `${formatDiagValue(latest.value)}${unit} · ${formatDiagDate(latest.recorded_at)}`
+        : "—";
+      const stroke = statusColor(status);
+      const cat = s.category === "imaging" ? "Imaging" : s.category === "vital" ? "Vitals" : "Blood";
+      const dateSpan =
+        s.point_count > 1
+          ? `${formatDiagDate(s.readings[0].recorded_at)} → ${formatDiagDate(s.readings[s.readings.length - 1].recorded_at)}`
+          : formatDiagDate(latest?.recorded_at);
+      const ref = s.reference || null;
+      const meaning = ref?.meaning || "";
+      const infoUrl = ref?.info_url || "";
+      const infoSource = ref?.info_source || "Learn more";
+      const statusBit = status
+        ? `<span class="diag-status-pill diag-status-${status}" title="${escapeHtml(statusLabel(status))}">${escapeHtml(
+            statusLabel(status)
+          )}</span>`
+        : "";
+      const infoLink = infoUrl
+        ? `<a class="diag-chart-info-link" href="${escapeHtml(infoUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(
+            meaning || `Open ${infoSource}`
+          )}">What is this? · ${escapeHtml(infoSource)}</a>`
+        : meaning
+          ? `<span class="diag-chart-info-link muted" title="${escapeHtml(meaning)}">What is this?</span>`
+          : "";
+      return `<article class="diag-chart-card diag-status-card-${status || "none"}" data-category="${escapeHtml(
+        s.category || "blood"
+      )}" title="${escapeHtml(meaning || s.name)}">
+      <div class="diag-chart-head">
+        <h4 class="diag-chart-title">${escapeHtml(s.name)}</h4>
+        <span class="diag-chart-latest" style="color:${stroke}">${escapeHtml(latestLabel)}</span>
+      </div>
+      ${buildSparklineSvg(s.readings || [], { stroke, reference: ref })}
+      <p class="diag-chart-meta">${statusBit ? `${statusBit} ` : ""}${escapeHtml(cat)} · ${s.point_count} reading${
+        s.point_count === 1 ? "" : "s"
+      } · ${escapeHtml(dateSpan)}</p>
+      ${
+        ref
+          ? `<p class="diag-chart-ref">Ref: ${escapeHtml(ref.label || "")}${
+              ref.note ? ` · ${escapeHtml(ref.note)}` : ""
+            }</p>`
+          : ""
+      }
+      ${infoLink ? `<p class="diag-chart-info">${infoLink}</p>` : ""}
+    </article>`;
+    })
+    .join("");
+}
+
+async function refreshActivePatientProfile() {
+  if (!state.activePatientId) {
+    renderDiagnosticsCharts(null, []);
+    renderJournalHome(null, []);
+    return;
+  }
+  const r = await fetch(`/api/patients/${state.activePatientId}/profile`);
+  if (!r.ok) return;
+  const data = await r.json();
+  applyProfileResponse(data);
 }
 
 function showModal(id) { document.getElementById(id)?.classList.remove("hidden"); }
 function hideModal(id) { document.getElementById(id)?.classList.add("hidden"); }
 
-// New Patient
-document.getElementById("btn-new-patient")?.addEventListener("click", () => {
-  document.getElementById("input-new-patient-label").value = "";
+function openNewPatientModal() {
+  const input = document.getElementById("input-new-patient-label");
+  if (input) input.value = "";
   showModal("modal-new-patient");
-  document.getElementById("input-new-patient-label")?.focus();
+  input?.focus();
+}
+
+async function openNewCaseModal() {
+  const r = await fetch("/api/cases/active");
+  const ctx = await r.json();
+  let patientId = ctx.patient_id;
+  let patientLabel = ctx.patient_label;
+  if (!patientId) {
+    alert("Add a patient first.");
+    openNewPatientModal();
+    return;
+  }
+  document.getElementById("new-case-patient-label").textContent = `for ${patientLabel}`;
+  document.getElementById("input-new-case-label").value = "";
+  document.getElementById("input-new-case-context").value = "";
+  document.getElementById("modal-new-case").dataset.patientId = patientId;
+  showModal("modal-new-case");
+  document.getElementById("input-new-case-label")?.focus();
+}
+
+document.querySelectorAll(".js-new-patient").forEach((btn) => {
+  btn.addEventListener("click", openNewPatientModal);
 });
+document.querySelectorAll(".js-new-case").forEach((btn) => {
+  btn.addEventListener("click", () => { void openNewCaseModal(); });
+});
+
 document.getElementById("btn-cancel-new-patient")?.addEventListener("click", () => hideModal("modal-new-patient"));
 document.getElementById("btn-confirm-new-patient")?.addEventListener("click", async () => {
   const label = document.getElementById("input-new-patient-label")?.value.trim();
   if (!label) return;
-  await fetch("/api/patients", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({label}) });
-  hideModal("modal-new-patient");
-  // Show the new case modal immediately for the new patient
-  const pRes = await fetch("/api/patients");
-  const pData = await pRes.json();
-  const newP = pData.patients.find(p => p.label === label);
-  if (newP) {
-    document.getElementById("new-case-patient-label").textContent = `for ${newP.label}`;
-    document.getElementById("input-new-case-label").value = "";
-    document.getElementById("input-new-case-context").value = "";
-    document.getElementById("modal-new-case").dataset.patientId = newP.id;
-    showModal("modal-new-case");
-    document.getElementById("input-new-case-label")?.focus();
+  const res = await fetch("/api/patients", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!res.ok) {
+    alert("Failed to create patient");
+    return;
   }
-});
-
-// New Case
-document.getElementById("btn-new-case")?.addEventListener("click", async () => {
-  const r = await fetch("/api/cases/active");
-  const ctx = await r.json();
-  if (!ctx.patient_id) { alert("Create a patient first."); return; }
-  document.getElementById("new-case-patient-label").textContent = `for ${ctx.patient_label}`;
+  const created = await res.json();
+  hideModal("modal-new-patient");
+  document.getElementById("new-case-patient-label").textContent = `for ${created.patient.label}`;
   document.getElementById("input-new-case-label").value = "";
   document.getElementById("input-new-case-context").value = "";
-  document.getElementById("modal-new-case").dataset.patientId = ctx.patient_id;
+  document.getElementById("modal-new-case").dataset.patientId = created.patient.id;
   showModal("modal-new-case");
   document.getElementById("input-new-case-label")?.focus();
 });
+
 document.getElementById("btn-cancel-new-case")?.addEventListener("click", () => hideModal("modal-new-case"));
 document.getElementById("btn-confirm-new-case")?.addEventListener("click", async () => {
   const patientId = document.getElementById("modal-new-case").dataset.patientId;
@@ -6387,81 +7673,607 @@ document.getElementById("btn-confirm-new-case")?.addEventListener("click", async
   const patientContext = document.getElementById("input-new-case-context")?.value.trim() || null;
   const res = await fetch(`/api/patients/${patientId}/cases`, {
     method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({label, patient_context: patientContext}),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, patient_context: patientContext }),
   });
-  if (!res.ok) { alert("Failed to create case"); return; }
-  const caseData = await res.json();
-  // Activate the new case
-  await fetch("/api/cases/activate", {
-    method: "PUT",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({patient_id: patientId, case_id: caseData.case.id}),
-  });
-  hideModal("modal-new-case");
-  location.reload();
-});
-
-// Switch modal
-document.getElementById("btn-switch-case")?.addEventListener("click", async () => {
-  const r = await fetch("/api/patients");
-  const data = await r.json();
-  const active = data.active;
-  const listEl = document.getElementById("switch-case-list");
-  listEl.innerHTML = "";
-  if (!data.patients.length) {
-    listEl.innerHTML = "<p>No patients yet. Create one first.</p>";
-    showModal("modal-switch-case");
+  if (!res.ok) {
+    alert("Failed to create case");
     return;
   }
-  for (const p of data.patients) {
-    const group = document.createElement("div");
-    group.className = "switch-patient-group";
-    group.innerHTML = `<h4>${p.label}</h4>`;
-    for (const c of (p.cases || [])) {
-      const btn = document.createElement("button");
-      btn.className = "switch-case-btn";
-      if (active.patient_id === p.id && active.case_id === c.id) btn.classList.add("active-case");
-      btn.textContent = c.label;
-      btn.addEventListener("click", async () => {
-        await fetch("/api/cases/activate", {
-          method: "PUT",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({patient_id: p.id, case_id: c.id}),
-        });
-        hideModal("modal-switch-case");
-        location.reload();
-      });
-      group.appendChild(btn);
-    }
-    listEl.appendChild(group);
-  }
-  showModal("modal-switch-case");
+  const caseData = await res.json();
+  await activatePatientCase(patientId, caseData.case.id);
 });
+
+async function openRenameCaseModal() {
+  const r = await fetch("/api/cases/active");
+  const ctx = await r.json();
+  if (!ctx.patient_id || !ctx.case_id) {
+    alert("Select a case first.");
+    return;
+  }
+  const modal = document.getElementById("modal-rename-case");
+  if (!modal) return;
+  modal.dataset.patientId = ctx.patient_id;
+  modal.dataset.caseId = ctx.case_id;
+  const input = document.getElementById("input-rename-case-label");
+  if (input) input.value = ctx.case_label || "";
+  showModal("modal-rename-case");
+  input?.focus();
+  input?.select();
+}
+
+document.getElementById("btn-rename-case-settings")?.addEventListener("click", () => openRenameCaseModal());
+document.getElementById("btn-cancel-rename-case")?.addEventListener("click", () => hideModal("modal-rename-case"));
+document.getElementById("btn-confirm-rename-case")?.addEventListener("click", async () => {
+  const modal = document.getElementById("modal-rename-case");
+  const patientId = modal?.dataset.patientId;
+  const caseId = modal?.dataset.caseId;
+  const label = document.getElementById("input-rename-case-label")?.value.trim();
+  if (!patientId || !caseId || !label) return;
+  const res = await fetch(`/api/patients/${patientId}/cases/${caseId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || "Failed to rename case");
+    return;
+  }
+  hideModal("modal-rename-case");
+  await loadCaseContext();
+  toast(`Case renamed to ${label}`);
+});
+
+document.getElementById("header-case-select")?.addEventListener("change", async (event) => {
+  const caseId = event.target.value;
+  if (!caseId) return;
+  const r = await fetch("/api/patients");
+  const data = await r.json();
+  const patientId = data.active?.patient_id;
+  if (!patientId) return;
+  if (caseId === data.active?.case_id) return;
+  await activatePatientCase(patientId, caseId);
+});
+
+document.getElementById("header-patient-select")?.addEventListener("change", async (event) => {
+  const patientId = event.target.value;
+  const r = await fetch("/api/patients");
+  const data = await r.json();
+  const patient = (data.patients || []).find((p) => p.id === patientId);
+  if (!patient) return;
+  const firstCase = (patient.cases || [])[0];
+  if (!firstCase) {
+    document.getElementById("modal-new-case").dataset.patientId = patient.id;
+    document.getElementById("new-case-patient-label").textContent = `for ${patient.label}`;
+    showModal("modal-new-case");
+    return;
+  }
+  if (patientId === data.active?.patient_id && firstCase.id === data.active?.case_id) return;
+  await activatePatientCase(patientId, firstCase.id);
+});
+
+document.getElementById("btn-patient-photo")?.addEventListener("click", () => {
+  document.getElementById("input-patient-photo")?.click();
+});
+document.getElementById("input-patient-photo")?.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  const r = await fetch("/api/cases/active");
+  const ctx = await r.json();
+  if (!ctx.patient_id) {
+    alert("Add a patient first.");
+    return;
+  }
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(`/api/patients/${ctx.patient_id}/photo`, { method: "POST", body });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || "Could not save photo");
+    return;
+  }
+  await loadCaseContext();
+});
+
 document.getElementById("btn-cancel-switch-case")?.addEventListener("click", () => hideModal("modal-switch-case"));
 
-// Cross-case document browsing
-async function loadCrossCaseSiblings() {
-  const section = document.getElementById("cross-case-section");
-  if (!section) return;
+document.getElementById("btn-save-profile")?.addEventListener("click", async () => {
+  if (!state.activePatientId) {
+    toast("Select a patient first", "error");
+    return;
+  }
+  const res = await fetch(`/api/patients/${state.activePatientId}/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      date_of_birth: document.getElementById("profile-dob")?.value || null,
+      gender: document.getElementById("profile-gender")?.value || null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    toast(err.detail || "Could not save profile", "error");
+    return;
+  }
+  const data = await res.json();
+  applyProfileResponse(data);
+  toast("Demographics saved");
+});
+
+document.getElementById("btn-add-measurement")?.addEventListener("click", async () => {
+  if (!state.activePatientId) {
+    toast("Select a patient first", "error");
+    return;
+  }
+  const recordedAt = document.getElementById("measure-date")?.value;
+  const heightRaw = document.getElementById("measure-height")?.value;
+  const weightRaw = document.getElementById("measure-weight")?.value;
+  const notes = document.getElementById("measure-notes")?.value.trim() || null;
+  const height_cm = heightRaw === "" || heightRaw == null ? null : Number(heightRaw);
+  const weight_kg = weightRaw === "" || weightRaw == null ? null : Number(weightRaw);
+  if (!recordedAt) {
+    toast("Choose a measurement date", "error");
+    return;
+  }
+  if (height_cm == null && weight_kg == null) {
+    toast("Enter height and/or weight", "error");
+    return;
+  }
+  const res = await fetch(`/api/patients/${state.activePatientId}/measurements`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recorded_at: recordedAt, height_cm, weight_kg, notes }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    toast(err.detail || "Could not add measurement", "error");
+    return;
+  }
+  const data = await res.json();
+  document.getElementById("measure-height").value = "";
+  document.getElementById("measure-weight").value = "";
+  document.getElementById("measure-notes").value = "";
+  applyProfileResponse(data);
+  toast("Measurement added");
+});
+
+document.getElementById("btn-add-diagnostic")?.addEventListener("click", async () => {
+  if (!state.activePatientId) {
+    toast("Select a patient first", "error");
+    return;
+  }
+  const name = document.getElementById("diag-name")?.value.trim();
+  const valueRaw = document.getElementById("diag-value")?.value;
+  const unit = document.getElementById("diag-unit")?.value.trim() || null;
+  const recordedAt = document.getElementById("diag-date")?.value;
+  const notes = document.getElementById("diag-notes")?.value.trim() || null;
+  if (!name) {
+    toast("Enter a diagnostic name", "error");
+    return;
+  }
+  if (valueRaw === "" || valueRaw == null) {
+    toast("Enter a value", "error");
+    return;
+  }
+  if (!recordedAt) {
+    toast("Choose a date", "error");
+    return;
+  }
+  // Auto-fill unit from preset when blank
+  if (!unit) {
+    const preset = (state.diagnosticPresets || []).find(
+      (p) => p.name.toLowerCase() === name.toLowerCase()
+    );
+    if (preset?.unit) document.getElementById("diag-unit").value = preset.unit;
+  }
+  const res = await fetch(`/api/patients/${state.activePatientId}/diagnostics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name,
+      value: Number(valueRaw),
+      unit: document.getElementById("diag-unit")?.value.trim() || null,
+      recorded_at: recordedAt,
+      notes,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    toast(err.detail || "Could not add diagnostic", "error");
+    return;
+  }
+  const data = await res.json();
+  document.getElementById("diag-value").value = "";
+  document.getElementById("diag-notes").value = "";
+  applyProfileResponse(data);
+  toast("Diagnostic reading added");
+});
+
+document.getElementById("diag-name")?.addEventListener("change", () => {
+  const name = document.getElementById("diag-name")?.value.trim().toLowerCase();
+  const unitEl = document.getElementById("diag-unit");
+  if (!name || !unitEl || unitEl.value.trim()) return;
+  const preset = (state.diagnosticPresets || []).find((p) => p.name.toLowerCase() === name);
+  if (preset?.unit) unitEl.value = preset.unit;
+});
+
+document.getElementById("patient-measurements-list")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".btn-delete-measurement");
+  if (!btn || !state.activePatientId) return;
+  const id = btn.dataset.id;
+  if (!id) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/measurements/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    toast("Could not remove measurement", "error");
+    return;
+  }
+  const data = await res.json();
+  applyProfileResponse(data);
+});
+
+document.getElementById("patient-diagnostics-list")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".btn-delete-diagnostic");
+  if (!btn || !state.activePatientId) return;
+  const id = btn.dataset.id;
+  if (!id) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/diagnostics/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    toast("Could not remove reading", "error");
+    return;
+  }
+  const data = await res.json();
+  applyProfileResponse(data);
+});
+
+async function deleteJournalEntry(entryId) {
+  if (!state.activePatientId || !entryId) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/journal/${entryId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    toast("Could not remove self-report", "error");
+    return;
+  }
+  const data = await res.json();
+  applyProfileResponse(data);
+}
+
+document.getElementById("patient-journal-list")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".btn-delete-journal");
+  if (!btn) return;
+  await deleteJournalEntry(btn.dataset.id);
+});
+
+document.getElementById("journal-recent")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".btn-delete-journal");
+  if (!btn) return;
+  await deleteJournalEntry(btn.dataset.id);
+});
+
+document.getElementById("btn-journal")?.addEventListener("click", () => {
+  ensureJournalChips();
+  updateJournalDraftUi();
+  showModal("modal-journal");
+  document.getElementById("journal-text")?.focus();
+});
+
+document.getElementById("btn-journal-open-home")?.addEventListener("click", () => {
+  document.getElementById("btn-journal")?.click();
+});
+
+document.getElementById("btn-close-journal")?.addEventListener("click", () => {
+  hideModal("modal-journal");
+});
+
+document.getElementById("modal-journal")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-journal") hideModal("modal-journal");
+});
+
+document.getElementById("journal-feeling-chips")?.addEventListener("click", (event) => {
+  const chip = event.target.closest(".journal-chip");
+  if (!chip) return;
+  state.journalDraft = {
+    ...state.journalDraft,
+    kind: chip.dataset.kind || "symptom",
+    label: chip.dataset.label || "",
+  };
+  updateJournalDraftUi();
+});
+
+document.getElementById("journal-action-chips")?.addEventListener("click", (event) => {
+  const chip = event.target.closest(".journal-chip");
+  if (!chip) return;
+  state.journalDraft = {
+    ...state.journalDraft,
+    kind: chip.dataset.kind || "note",
+    label: chip.dataset.label || "",
+    severity: chip.dataset.kind === "medication" || chip.dataset.kind === "note"
+      ? null
+      : state.journalDraft.severity,
+  };
+  updateJournalDraftUi();
+});
+
+document.getElementById("journal-severity")?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".journal-sev-btn");
+  if (!btn) return;
+  const sev = Number(btn.dataset.sev);
+  state.journalDraft = {
+    ...state.journalDraft,
+    severity: state.journalDraft.severity === sev ? null : sev,
+  };
+  updateJournalDraftUi();
+});
+
+document.getElementById("btn-journal-clear-sev")?.addEventListener("click", () => {
+  state.journalDraft = { ...state.journalDraft, severity: null };
+  updateJournalDraftUi();
+});
+
+document.getElementById("btn-journal-log")?.addEventListener("click", async () => {
+  if (!state.activePatientId) {
+    toast("Select a patient first", "error");
+    return;
+  }
+  const text = document.getElementById("journal-text")?.value.trim() || "";
+  let kind = state.journalDraft.kind || "note";
+  let label = (state.journalDraft.label || "").trim();
+  let detail = text || null;
+  if (!label && text) {
+    kind = "note";
+    label = text.slice(0, 80);
+    detail = null;
+  }
+  if (!label) {
+    toast("Pick a chip or type a detail", "error");
+    return;
+  }
+  const linkCase = document.getElementById("journal-link-case")?.checked;
+  const whenRaw = document.getElementById("journal-when")?.value;
+  let recorded_at = null;
+  if (whenRaw) {
+    const local = new Date(whenRaw);
+    recorded_at = Number.isNaN(local.getTime()) ? whenRaw : local.toISOString();
+  }
+  const body = {
+    kind,
+    label,
+    text: detail,
+    severity:
+      kind === "symptom" || kind === "feeling" ? state.journalDraft.severity || null : null,
+    recorded_at,
+    case_id: linkCase && state.activeCaseId ? state.activeCaseId : null,
+  };
+
+  const btn = document.getElementById("btn-journal-log");
+  if (btn) btn.disabled = true;
   try {
-    const r = await fetch("/api/cases/siblings");
-    const data = await r.json();
-    if (!data.siblings || !data.siblings.length) {
-      section.classList.add("hidden");
+    const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save self-report");
+    }
+    const data = await res.json();
+    const textEl = document.getElementById("journal-text");
+    if (textEl) textEl.value = "";
+    const whenEl = document.getElementById("journal-when");
+    if (whenEl) whenEl.value = "";
+    state.journalDraft = { kind: "note", label: "", severity: null };
+    applyProfileResponse(data);
+    hideModal("modal-journal");
+    toast("Logged");
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-diagnostics-settings")?.addEventListener("click", () => {
+  switchTab("settings");
+  document.getElementById("diag-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  document.getElementById("diag-name")?.focus();
+});
+
+document.getElementById("btn-medications-settings")?.addEventListener("click", () => {
+  switchTab("settings");
+  document.getElementById("medications-settings-heading")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("med-name")?.focus();
+});
+
+document.getElementById("btn-cancel-med-edit")?.addEventListener("click", () => clearMedicationForm());
+
+document.getElementById("btn-save-medication")?.addEventListener("click", async () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const editId = document.getElementById("med-edit-id")?.value || "";
+  const name = document.getElementById("med-name")?.value.trim();
+  if (!name) return toast("Enter a medication name", "error");
+  const body = {
+    name,
+    dosage: document.getElementById("med-dosage")?.value.trim() || null,
+    frequency: document.getElementById("med-frequency")?.value.trim() || null,
+    conditions: parseConditionsInput(document.getElementById("med-conditions")?.value),
+    notes: document.getElementById("med-notes")?.value.trim() || null,
+    started_at: document.getElementById("med-started")?.value || null,
+  };
+  const btn = document.getElementById("btn-save-medication");
+  if (btn) btn.disabled = true;
+  try {
+    let res;
+    if (editId) {
+      body.history_note = document.getElementById("med-history-note")?.value.trim() || null;
+      res = await fetch(`/api/patients/${state.activePatientId}/medications/${editId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      res = await fetch(`/api/patients/${state.activePatientId}/medications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save medication");
+    }
+    const data = await res.json();
+    clearMedicationForm();
+    applyProfileResponse(data);
+    toast(editId ? "Medication updated" : "Medication added");
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("patient-medications-list")?.addEventListener("click", async (event) => {
+  const editBtn = event.target.closest(".btn-edit-medication");
+  const stopBtn = event.target.closest(".btn-stop-medication");
+  const delBtn = event.target.closest(".btn-delete-medication");
+  if (!state.activePatientId) return;
+
+  if (editBtn) {
+    const id = editBtn.dataset.id;
+    const res = await fetch(`/api/patients/${state.activePatientId}/profile`);
+    if (!res.ok) return toast("Could not load medication", "error");
+    const data = await res.json();
+    const med = (data.profile?.medications || []).find((m) => m.id === id);
+    if (!med) return toast("Medication not found", "error");
+    fillMedicationForm(med);
+    document.getElementById("medications-settings-heading")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
+  if (stopBtn) {
+    const id = stopBtn.dataset.id;
+    if (!id || !confirm("Mark this medication as stopped?")) return;
+    const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) return toast("Could not stop medication", "error");
+    applyProfileResponse(await res.json());
+    toast("Medication stopped");
+    return;
+  }
+
+  if (delBtn) {
+    const id = delBtn.dataset.id;
+    if (!id || !confirm("Remove this medication record?")) return;
+    const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) return toast("Could not remove medication", "error");
+    applyProfileResponse(await res.json());
+    if (document.getElementById("med-edit-id")?.value === id) clearMedicationForm();
+    toast("Medication removed");
+  }
+});
+
+document.getElementById("btn-import-medications")?.addEventListener("click", async () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const fileInput = document.getElementById("med-import-file");
+  const file = fileInput?.files?.[0];
+  if (!file) return toast("Choose a PDF or image first", "error");
+  const btn = document.getElementById("btn-import-medications");
+  if (btn) btn.disabled = true;
+  setMedImportStatus("Extracting and parsing medications…");
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const data = await api(`/api/patients/${state.activePatientId}/medications/import`, {
+      method: "POST",
+      body: fd,
+      timeoutMs: 300000,
+    });
+    renderMedImportReview(data);
+    toast(`Parsed ${(data.proposed || []).length} medication(s)`);
+  } catch (err) {
+    setMedImportStatus(err.message || "Import failed", { error: true });
+    toast(err.message || "Import failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-med-import-select-all")?.addEventListener("click", () => {
+  document.querySelectorAll("#med-import-review-list .med-import-select").forEach((el) => {
+    el.checked = true;
+  });
+});
+
+document.getElementById("btn-med-import-clear")?.addEventListener("click", () => clearMedImportReview());
+
+document.getElementById("btn-med-import-confirm")?.addEventListener("click", async () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const medications = collectMedImportSelected();
+  if (!medications.length) return toast("Select at least one medication with a name", "error");
+  const btn = document.getElementById("btn-med-import-confirm");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api(`/api/patients/${state.activePatientId}/medications/import/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ medications }),
+    });
+    applyProfileResponse(data);
+    clearMedImportReview();
+    toast(`Added ${data.added_count || medications.length} medication(s)`);
+  } catch (err) {
+    toast(err.message || "Could not add medications", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", async () => {
+  const patientId = state.activePatientId;
+  if (!patientId) return toast("Select a patient first", "error");
+  const btn = document.getElementById("btn-export-diagnostics-pdf");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${patientId}/diagnostics/export.pdf`, {
+      credentials: "include",
+    });
+    if (res.status === 401) {
+      window.location.href = "/login";
       return;
     }
-    section.classList.remove("hidden");
-    const tabsEl = document.getElementById("cross-case-tabs");
-    tabsEl.innerHTML = "";
-    for (const s of data.siblings) {
-      const btn = document.createElement("button");
-      btn.className = "cross-case-tab";
-      btn.textContent = s.label;
-      btn.addEventListener("click", () => loadCrossCaseDocs(s.id, s.label, btn));
-      tabsEl.appendChild(btn);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Export failed (${res.status})`);
     }
-  } catch { section.classList.add("hidden"); }
+    const blob = await res.blob();
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(0, 19);
+    const filename = filenameFromContentDisposition(
+      res,
+      `beatit-diagnostics-${stamp}.pdf`
+    );
+    triggerPdfDownload(blob, filename);
+    toast("Diagnostics PDF downloaded");
+  } catch (err) {
+    toast(err.message || "Export failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+// Cross-case browsing folded into the unified patient-wide Library list
+async function loadCrossCaseSiblings() {
+  const section = document.getElementById("cross-case-section");
+  if (section) section.classList.add("hidden");
 }
 
 async function loadCrossCaseDocs(caseId, caseLabel, tabBtn) {

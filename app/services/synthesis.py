@@ -22,8 +22,12 @@ from app.services.source_normalize import enrich_with_sources
 from app.storage.database import Database
 from app.storage.documents import DocumentStore
 from app.services.patient_context import DEFAULT_PATIENT_CONTEXT, DEFAULT_REVIEWER_CONTEXT
+from app.services.case_manager import format_profile_for_prompt, get_active_context
 
 MEDICAL_SYSTEM_TEMPLATE = """{reviewer_context}
+
+Patient demographics and vitals:
+{patient_demographics}
 
 Patient and case context (baseline — update as new evidence arrives):
 {patient_context}
@@ -48,8 +52,13 @@ Important constraints:
 async def build_medical_system_prompt(db: Database) -> str:
     reviewer = await db.get_setting("reviewer_context") or DEFAULT_REVIEWER_CONTEXT
     patient = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+    ctx = get_active_context()
+    demographics = format_profile_for_prompt(ctx.get("patient_id"), ctx.get("patient_label"))
+    if not demographics.strip():
+        demographics = "- Not set yet."
     base = MEDICAL_SYSTEM_TEMPLATE.format(
         reviewer_context=reviewer.strip(),
+        patient_demographics=demographics.strip(),
         patient_context=patient.strip(),
     )
     return f"{base}\n\n{PALLIATIVE_EXCLUSION}"
@@ -182,13 +191,21 @@ def _prepare_corpus_items(corpus: list[dict[str, Any]]) -> tuple[list[dict[str, 
 def _format_document_inventory(corpus: list[dict[str, Any]]) -> str:
     rows = sorted(
         corpus,
-        key=lambda item: ((item.get("source_type") or ""), (item.get("title") or "")),
+        key=lambda item: (
+            (item.get("case_label") or ""),
+            (item.get("source_type") or ""),
+            (item.get("title") or ""),
+        ),
     )
-    lines = [
-        f'- [{item.get("source_type", "unknown").upper()}] "{item.get("title") or "Untitled"}"'
-        for item in rows
-        if item.get("title")
-    ]
+    lines = []
+    for item in rows:
+        if not item.get("title"):
+            continue
+        case = item.get("case_label")
+        case_bit = f" ({case})" if case else ""
+        lines.append(
+            f'- [{item.get("source_type", "unknown").upper()}] "{item.get("title")}"{case_bit}'
+        )
     return "\n".join(lines) if lines else "[No documents in scope]"
 
 
@@ -215,9 +232,12 @@ def _format_corpus(corpus: list[dict[str, Any]], max_chars: int = 200_000) -> tu
     used = 0
 
     for item in items:
+        case_label = item.get("case_label") or (item.get("metadata") or {}).get("case_label")
+        case_line = f"Focus: {case_label}\n" if case_label else ""
         header = (
             f"### [{item['source_type'].upper()}] {item['title']}\n"
             f"ID: {item['id']}\n"
+            f"{case_line}"
             f"Source: {item.get('source_uri') or 'local'}\n"
         )
         body = item["text"]

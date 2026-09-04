@@ -10,7 +10,11 @@ from collections.abc import AsyncIterator
 
 from app.ingest.text import ingest_text
 from app.ingest.url import ingest_url
-from app.ingest.pdf import ingest_pdf_file
+from app.ingest.pdf import ingest_pdf_file, reextract_pdf_document
+from app.services.medication_import import (
+    clamp_proposed_medication,
+    propose_medications_from_upload,
+)
 from app.ingest.imaging import ingest_imaging_file, is_allowed_imaging_upload
 from app.ingest.video import ingest_video
 from app.services.llm import LLMClient
@@ -46,7 +50,12 @@ from app.services.vision_jobs import (
     get_job_payload as get_vision_job_payload,
 )
 from app.ingest.imaging import reindex_all_imaging_metadata
-from app.services.pdf_export import assessment_pdf_filename, build_assessment_pdf
+from app.services.pdf_export import (
+    assessment_pdf_filename,
+    build_assessment_pdf,
+    build_diagnostics_pdf,
+    diagnostics_pdf_filename,
+)
 from app.services.source_catalog import (
     DEFAULT_SOURCE_TYPES,
     SOURCE_TYPE_KEYS,
@@ -100,9 +109,34 @@ from app.services.case_manager import (
     list_cases,
     create_case,
     delete_case,
+    rename_case,
     get_active_context,
     activate_patient_case,
     sibling_case_dirs,
+    find_patient_photo,
+    save_patient_photo,
+    get_patient_profile,
+    update_patient_demographics,
+    add_patient_measurement,
+    delete_patient_measurement,
+    add_patient_diagnostic,
+    delete_patient_diagnostic,
+    group_diagnostics_for_charts,
+    add_patient_journal_entry,
+    delete_patient_journal_entry,
+    group_journal_for_charts,
+    add_patient_medication,
+    update_patient_medication,
+    stop_patient_medication,
+    delete_patient_medication,
+    age_years_from_dob,
+    DIAGNOSTIC_PRESETS,
+    JOURNAL_PRESETS,
+)
+from app.services.patient_documents import (
+    list_active_patient_document_index,
+    list_active_patient_documents_page,
+    resolve_active_patient_document,
 )
 
 router = APIRouter(prefix="/api")
@@ -163,6 +197,13 @@ class ChatObservationCreateRequest(BaseModel):
 class ChatObservationUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     include_in_analysis: bool | None = None
+
+
+class ApplyChatToHomeRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    message_id: str | None = None
+    document_ids: list[str] | None = None
+    assessment_guidance: str | None = Field(default=None, max_length=20000)
 
 
 class ImagingVisionRequest(BaseModel):
@@ -529,6 +570,9 @@ async def list_audit_events(
 @router.get("/documents/index")
 async def document_index():
     db, _, _, _, _ = await _get_services()
+    patient_payload = await list_active_patient_document_index()
+    if patient_payload is not None:
+        return patient_payload
     return {
         "documents": await db.list_document_index(),
         "total": await db.count_documents(),
@@ -687,6 +731,22 @@ async def list_documents(
     if normalized_type == "all":
         normalized_type = None
 
+    patient_page = await list_active_patient_documents_page(
+        limit=page_size,
+        offset=page_offset,
+        source_type=normalized_type,
+    )
+    if patient_page is not None:
+        documents = patient_page["documents"]
+        catalog = await _source_catalog(db, documents)
+        for doc in documents:
+            doc["source_info"] = catalog.describe_document(doc)
+        return {
+            **patient_page,
+            "documents": documents,
+            "source_legend": catalog.legend(),
+        }
+
     total = await db.count_documents(normalized_type)
     counts_by_type = await db.document_type_counts()
     documents = await db.list_documents(
@@ -711,10 +771,12 @@ async def list_documents(
 @router.get("/documents/{doc_id}")
 async def get_document(doc_id: str):
     db, store, _, _, _ = await _get_services()
-    doc = await db.get_document(doc_id)
+    doc = await resolve_active_patient_document(doc_id)
+    if not doc:
+        doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    catalog = await _source_catalog(db)
+    catalog = await _source_catalog(db, [doc])
     doc["source_info"] = catalog.describe_document(doc)
     text = await store.read_extracted_text(doc)
     view = build_document_view(doc)
@@ -724,7 +786,9 @@ async def get_document(doc_id: str):
 @router.get("/documents/{doc_id}/file")
 async def get_document_file(doc_id: str):
     db, _, _, _, _ = await _get_services()
-    doc = await db.get_document(doc_id)
+    doc = await resolve_active_patient_document(doc_id)
+    if not doc:
+        doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     if not file_is_available(doc):
@@ -747,7 +811,9 @@ async def get_document_file(doc_id: str):
 @router.get("/documents/{doc_id}/preview")
 async def get_document_preview(doc_id: str):
     db, _, _, _, _ = await _get_services()
-    doc = await db.get_document(doc_id)
+    doc = await resolve_active_patient_document(doc_id)
+    if not doc:
+        doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     if not file_is_available(doc):
@@ -774,6 +840,12 @@ async def get_document_preview(doc_id: str):
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, request: Request):
     db, store, _, _, _ = await _get_services()
+    patient_doc = await resolve_active_patient_document(doc_id)
+    if patient_doc and not patient_doc.get("is_active_case"):
+        raise HTTPException(
+            status_code=403,
+            detail="Switch to that focus case to delete this document",
+        )
     doc = await db.get_document(doc_id)
     deleted = await store.delete_document(doc_id)
     if not deleted:
@@ -801,6 +873,12 @@ async def update_document_citation(
     request: Request,
 ):
     db, _, _, _, _ = await _get_services()
+    patient_doc = await resolve_active_patient_document(doc_id)
+    if patient_doc and not patient_doc.get("is_active_case"):
+        raise HTTPException(
+            status_code=403,
+            detail="Switch to that focus case to edit this document",
+        )
     existing = await db.get_document(doc_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -828,6 +906,44 @@ async def update_document_citation(
     catalog = await _source_catalog(db)
     doc["source_info"] = catalog.describe_document(doc)
     return {"document": doc}
+
+
+@router.post("/documents/{doc_id}/reextract")
+async def reextract_document(doc_id: str, request: Request):
+    """Re-run PDF text extraction / OCR for a stored PDF."""
+    db, store, _, _, _ = await _get_services()
+    patient_doc = await resolve_active_patient_document(doc_id)
+    if patient_doc and not patient_doc.get("is_active_case"):
+        raise HTTPException(
+            status_code=403,
+            detail="Switch to that focus case to re-extract this document",
+        )
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if (doc.get("source_type") or "").lower() != "pdf":
+        raise HTTPException(status_code=400, detail="Only PDF documents can be re-extracted")
+    try:
+        updated = await reextract_pdf_document(store, doc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc_id,
+        metadata={
+            "action": "reextract",
+            "title": updated.get("title"),
+            "extraction_method": (updated.get("metadata") or {}).get("extraction_method"),
+            "needs_ocr": (updated.get("metadata") or {}).get("needs_ocr"),
+        },
+    )
+    catalog = await _source_catalog(db)
+    updated["source_info"] = catalog.describe_document(updated)
+    text = await store.read_extracted_text(updated)
+    return {"document": updated, "extracted_preview": (text or "")[:500]}
 
 
 @router.post("/ingest/text")
@@ -1384,6 +1500,99 @@ async def save_chat_observation_to_library(observation_id: str, request: Request
     return result
 
 
+@router.post("/options-chat/apply-to-home", status_code=202)
+async def apply_chat_to_home(body: ApplyChatToHomeRequest, request: Request):
+    """Pin a chat reply (or latest assistant message) and enqueue a Home baseline update."""
+    db, _, _, _, _ = await _get_services()
+    session = await db.get_chat_session(body.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    messages = await db.list_chat_messages(body.session_id)
+    assistant_messages = [m for m in messages if m.get("role") == "assistant" and (m.get("content") or "").strip()]
+    if not assistant_messages:
+        raise HTTPException(status_code=400, detail="No assistant reply to apply yet")
+
+    target = None
+    if body.message_id:
+        target = next((m for m in assistant_messages if m.get("id") == body.message_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Message not found in this session")
+    else:
+        target = assistant_messages[-1]
+
+    excerpt = (target.get("content") or "").strip()
+    if len(excerpt) > 50000:
+        excerpt = excerpt[:50000]
+    title = f"Chat → Home · {(session.get('title') or 'AI Chat')[:80]}"
+    try:
+        observation = await db.create_chat_observation(
+            session_id=body.session_id,
+            message_id=target.get("id"),
+            excerpt=excerpt,
+            title=title,
+            include_in_analysis=True,
+            created_by=_actor(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    prior = await db.get_latest_analysis()
+    build_on_id = None
+    if prior and prior.get("analysis_type") == "baseline":
+        build_on_id = prior["id"]
+
+    guidance = (body.assessment_guidance or "").strip()
+    if not guidance:
+        guidance = (
+            "Incorporate the pinned chat analysis into the Home assessment. "
+            "Reconcile with existing sources; prefer chart documents over chat when they conflict. "
+            "Preserve clinically important findings from the chat excerpt with source attribution."
+        )
+
+    document_ids = body.document_ids
+    if document_ids is None:
+        session_docs = session.get("document_ids") or []
+        document_ids = session_docs or None
+
+    try:
+        job = await enqueue_analysis_job(
+            job_type="baseline",
+            query="",
+            document_ids=document_ids,
+            include_baseline_assessment=True,
+            assessment_guidance=guidance,
+            requested_by=_actor(request),
+            build_on_analysis_id=build_on_id,
+            chat_observation_ids=[observation["id"]],
+        )
+    except ActiveAnalysisJobError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running",
+        ) from exc
+
+    await _audit(
+        db,
+        request,
+        ANALYSIS_REQUESTED,
+        resource_type="analysis_job",
+        resource_id=job["id"],
+        metadata={
+            "job_type": "baseline",
+            "source": "options_chat_apply_to_home",
+            "session_id": body.session_id,
+            "message_id": target.get("id"),
+            "observation_id": observation["id"],
+        },
+    )
+    return {
+        "job": job,
+        "observation": observation,
+        "message": "Home assessment update started from chat",
+    }
+
+
 @router.get("/custom-tasks")
 async def list_custom_tasks():
     db, _, _, _, _ = await _get_services()
@@ -1554,10 +1763,28 @@ async def _export_analysis_pdf_response(
 ) -> FastAPIResponse:
     patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
     catalog = await _source_catalog(db)
+    ctx = get_active_context()
+    profile = ctx.get("profile") if ctx.get("patient_id") else None
+    if profile is None and ctx.get("patient_id"):
+        profile = get_patient_profile(ctx["patient_id"])
+    diagnostic_series = group_diagnostics_for_charts(profile) if profile else []
+    patient_label = ctx.get("patient_label")
+    sub_bits: list[str] = []
+    if profile:
+        age = age_years_from_dob(profile.get("date_of_birth"))
+        if age is not None:
+            sub_bits.append(f"Age {age}")
+        if profile.get("gender"):
+            sub_bits.append(str(profile["gender"]))
+    if ctx.get("case_label"):
+        sub_bits.append(f"Case: {ctx['case_label']}")
     pdf_bytes = build_assessment_pdf(
         analysis,
         patient_context=patient_context,
         catalog=catalog,
+        diagnostic_series=diagnostic_series,
+        patient_label=patient_label,
+        patient_subline=" · ".join(sub_bits) if sub_bits else None,
     )
     exported_at = datetime.now(timezone.utc)
     filename = assessment_pdf_filename(analysis, exported_at=exported_at)
@@ -1865,6 +2092,10 @@ class CreateCaseRequest(BaseModel):
     patient_context: str | None = None
 
 
+class RenameCaseRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+
+
 class ActivateCaseRequest(BaseModel):
     patient_id: str
     case_id: str
@@ -1891,6 +2122,481 @@ async def api_delete_patient(patient_id: str):
     return {"ok": True}
 
 
+@router.get("/patients/{patient_id}/photo")
+async def api_get_patient_photo(patient_id: str):
+    path = find_patient_photo(patient_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="No photo")
+    suffix = path.suffix.lower()
+    media = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+    return FileResponse(path, media_type=media.get(suffix, "image/jpeg"), headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.post("/patients/{patient_id}/photo")
+async def api_set_patient_photo(patient_id: str, file: UploadFile = File(...)):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo must be 5 MB or smaller")
+    try:
+        save_patient_photo(patient_id, content, file.content_type or "", file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ctx = get_active_context()
+    return {"ok": True, "photo_url": ctx["photo_url"] if ctx.get("patient_id") == patient_id else f"/api/patients/{patient_id}/photo"}
+
+
+class PatientDemographicsRequest(BaseModel):
+    date_of_birth: str | None = None
+    gender: str | None = None
+
+
+class PatientMeasurementRequest(BaseModel):
+    recorded_at: str
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    notes: str | None = None
+
+
+@router.get("/patients/{patient_id}/profile")
+async def api_get_patient_profile(patient_id: str):
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "profile": profile,
+        "patient": {"id": patient["id"], "label": patient["label"]},
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "diagnostic_presets": DIAGNOSTIC_PRESETS,
+        "journal_series": group_journal_for_charts(profile),
+        "journal_presets": JOURNAL_PRESETS,
+    }
+
+
+@router.get("/patients/{patient_id}/diagnostics/export.pdf")
+async def export_patient_diagnostics_pdf(patient_id: str, request: Request):
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    series = group_diagnostics_for_charts(profile)
+    if not series:
+        raise HTTPException(status_code=404, detail="No diagnostics to export")
+
+    sub_bits: list[str] = []
+    age = age_years_from_dob(profile.get("date_of_birth"))
+    if age is not None:
+        sub_bits.append(f"Age {age}")
+    if profile.get("gender"):
+        sub_bits.append(str(profile["gender"]))
+    patient_subline = " · ".join(sub_bits) if sub_bits else None
+
+    exported_at = datetime.now(timezone.utc)
+    pdf_bytes = build_diagnostics_pdf(
+        series,
+        patient_label=patient.get("label"),
+        patient_subline=patient_subline,
+    )
+    filename = diagnostics_pdf_filename(
+        patient_label=patient.get("label"),
+        exported_at=exported_at,
+    )
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        PDF_EXPORTED,
+        resource_type="patient",
+        resource_id=patient_id,
+        metadata={
+            "filename": filename,
+            "export_kind": "diagnostics",
+            "series_count": len(series),
+        },
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.put("/patients/{patient_id}/profile")
+async def api_update_patient_profile(patient_id: str, body: PatientDemographicsRequest):
+    gender = body.gender
+    if gender is not None:
+        gender = gender.strip()
+        allowed = {"", "female", "male", "other", "unknown", "prefer_not_to_say"}
+        if gender.lower() not in allowed and gender:
+            # allow free-text clinical labels too, but normalize empties
+            pass
+    dob = body.date_of_birth
+    if dob is not None and dob.strip():
+        try:
+            datetime.fromisoformat(dob.strip()[:10])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD") from exc
+    profile = update_patient_demographics(
+        patient_id,
+        date_of_birth=body.date_of_birth,
+        gender=body.gender,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return {
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientDiagnosticRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    value: float
+    recorded_at: str
+    unit: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default=None, max_length=20)
+
+
+@router.post("/patients/{patient_id}/measurements")
+async def api_add_patient_measurement(patient_id: str, body: PatientMeasurementRequest):
+    if not body.recorded_at.strip():
+        raise HTTPException(status_code=400, detail="recorded_at is required")
+    try:
+        datetime.fromisoformat(body.recorded_at.strip()[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="recorded_at must be YYYY-MM-DD") from exc
+    try:
+        entry = add_patient_measurement(
+            patient_id,
+            recorded_at=body.recorded_at.strip()[:10],
+            height_cm=body.height_cm,
+            weight_kg=body.weight_kg,
+            notes=body.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "measurement": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/measurements/{measurement_id}")
+async def api_delete_patient_measurement(patient_id: str, measurement_id: str):
+    ok = delete_patient_measurement(patient_id, measurement_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    profile = get_patient_profile(patient_id)
+    return {"ok": True, "profile": profile, "diagnostic_series": group_diagnostics_for_charts(profile)}
+
+
+@router.post("/patients/{patient_id}/diagnostics")
+async def api_add_patient_diagnostic(patient_id: str, body: PatientDiagnosticRequest):
+    if not body.recorded_at.strip():
+        raise HTTPException(status_code=400, detail="recorded_at is required")
+    try:
+        datetime.fromisoformat(body.recorded_at.strip()[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="recorded_at must be YYYY-MM-DD") from exc
+    try:
+        entry = add_patient_diagnostic(
+            patient_id,
+            name=body.name,
+            value=body.value,
+            recorded_at=body.recorded_at.strip()[:10],
+            unit=body.unit,
+            notes=body.notes,
+            category=body.category,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "diagnostic": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/diagnostics/{diagnostic_id}")
+async def api_delete_patient_diagnostic(patient_id: str, diagnostic_id: str):
+    ok = delete_patient_diagnostic(patient_id, diagnostic_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Diagnostic reading not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientJournalRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=20)
+    label: str = Field(min_length=1, max_length=80)
+    text: str | None = Field(default=None, max_length=500)
+    severity: int | None = Field(default=None, ge=1, le=5)
+    recorded_at: str | None = Field(default=None, max_length=40)
+    case_id: str | None = Field(default=None, max_length=120)
+
+
+@router.post("/patients/{patient_id}/journal")
+async def api_add_patient_journal(patient_id: str, body: PatientJournalRequest):
+    try:
+        entry = add_patient_journal_entry(
+            patient_id,
+            kind=body.kind,
+            label=body.label,
+            text=body.text,
+            severity=body.severity,
+            recorded_at=body.recorded_at,
+            case_id=body.case_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "entry": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/journal/{entry_id}")
+async def api_delete_patient_journal(patient_id: str, entry_id: str):
+    ok = delete_patient_journal_entry(patient_id, entry_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientMedicationCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    dosage: str | None = Field(default=None, max_length=80)
+    frequency: str | None = Field(default=None, max_length=80)
+    conditions: list[str] | str | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    started_at: str | None = Field(default=None, max_length=20)
+
+
+class PatientMedicationUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    dosage: str | None = Field(default=None, max_length=80)
+    frequency: str | None = Field(default=None, max_length=80)
+    conditions: list[str] | str | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    started_at: str | None = Field(default=None, max_length=20)
+    history_note: str | None = Field(default=None, max_length=200)
+
+
+class PatientMedicationStopRequest(BaseModel):
+    stopped_at: str | None = Field(default=None, max_length=20)
+
+
+class PatientMedicationConfirmItem(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    dosage: str | None = Field(default=None, max_length=80)
+    frequency: str | None = Field(default=None, max_length=80)
+    conditions: list[str] | str | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    started_at: str | None = Field(default=None, max_length=20)
+
+
+class PatientMedicationConfirmRequest(BaseModel):
+    medications: list[PatientMedicationConfirmItem] = Field(default_factory=list, max_length=80)
+
+
+@router.post("/patients/{patient_id}/medications/import")
+async def api_import_patient_medications(
+    patient_id: str,
+    file: UploadFile = File(...),
+):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    content = await file.read()
+    try:
+        result = await propose_medications_from_upload(
+            patient_id,
+            content,
+            content_type=file.content_type,
+            filename=file.filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/patients/{patient_id}/medications/import/confirm")
+async def api_confirm_patient_medications_import(
+    patient_id: str,
+    body: PatientMedicationConfirmRequest,
+):
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if not body.medications:
+        raise HTTPException(status_code=400, detail="Select at least one medication to add")
+    added: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for raw in body.medications:
+        clamped = clamp_proposed_medication(raw.model_dump())
+        if clamped is None:
+            errors.append("Skipped an invalid row")
+            continue
+        try:
+            entry = add_patient_medication(
+                patient_id,
+                name=clamped["name"],
+                dosage=clamped.get("dosage"),
+                frequency=clamped.get("frequency"),
+                conditions=clamped.get("conditions"),
+                notes=clamped.get("notes"),
+                started_at=clamped.get("started_at"),
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        added.append(entry)
+    if not added and errors:
+        raise HTTPException(status_code=400, detail=errors[0])
+    profile = get_patient_profile(patient_id)
+    return {
+        "added": added,
+        "added_count": len(added),
+        "errors": errors,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.post("/patients/{patient_id}/medications")
+async def api_add_patient_medication(patient_id: str, body: PatientMedicationCreateRequest):
+    try:
+        entry = add_patient_medication(
+            patient_id,
+            name=body.name,
+            dosage=body.dosage,
+            frequency=body.frequency,
+            conditions=body.conditions,
+            notes=body.notes,
+            started_at=body.started_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "medication": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.patch("/patients/{patient_id}/medications/{medication_id}")
+async def api_update_patient_medication(
+    patient_id: str,
+    medication_id: str,
+    body: PatientMedicationUpdateRequest,
+):
+    fields_set = body.model_fields_set
+    kwargs: dict[str, Any] = {"history_note": body.history_note}
+    if "name" in fields_set:
+        kwargs["name"] = body.name
+    if "dosage" in fields_set:
+        kwargs["dosage"] = body.dosage
+    if "frequency" in fields_set:
+        kwargs["frequency"] = body.frequency
+    if "conditions" in fields_set:
+        kwargs["conditions"] = body.conditions
+    if "notes" in fields_set:
+        kwargs["notes"] = body.notes
+    if "started_at" in fields_set:
+        kwargs["started_at"] = body.started_at
+    try:
+        entry = update_patient_medication(patient_id, medication_id, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Medication not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "medication": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.post("/patients/{patient_id}/medications/{medication_id}/stop")
+async def api_stop_patient_medication(
+    patient_id: str,
+    medication_id: str,
+    body: PatientMedicationStopRequest | None = None,
+):
+    try:
+        entry = stop_patient_medication(
+            patient_id,
+            medication_id,
+            stopped_at=(body.stopped_at if body else None),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Medication not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "medication": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/medications/{medication_id}")
+async def api_delete_patient_medication(patient_id: str, medication_id: str):
+    ok = delete_patient_medication(patient_id, medication_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Medication not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
 @router.get("/patients/{patient_id}/cases")
 async def api_list_cases(patient_id: str):
     cases = list_cases(patient_id)
@@ -1908,6 +2614,17 @@ async def api_create_case(patient_id: str, body: CreateCaseRequest):
         await db.init()
         await db.set_setting("patient_context", body.patient_context)
     return {"case": case}
+
+
+@router.patch("/patients/{patient_id}/cases/{case_id}")
+async def api_rename_case(patient_id: str, case_id: str, body: RenameCaseRequest):
+    try:
+        case = rename_case(patient_id, case_id, body.label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if case is None:
+        raise HTTPException(status_code=404, detail="Patient or case not found")
+    return {"case": case, "active": get_active_context()}
 
 
 @router.delete("/patients/{patient_id}/cases/{case_id}")

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -70,12 +70,932 @@ def save_registry(reg: dict[str, Any]) -> None:
 # Helpers
 # ------------------------------------------------------------------
 
+PHOTO_FILENAMES = ("photo.jpg", "photo.jpeg", "photo.png", "photo.webp")
+PHOTO_EXT_BY_TYPE = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
+
 def _patients_dir() -> Path:
     return settings.data_dir / "patients"
 
 
+def _patient_dir(patient_id: str) -> Path:
+    return _patients_dir() / patient_id
+
+
 def _case_dir(patient_id: str, case_id: str) -> Path:
     return _patients_dir() / patient_id / "cases" / case_id
+
+
+def find_patient_photo(patient_id: str) -> Path | None:
+    d = _patient_dir(patient_id)
+    if not d.exists():
+        return None
+    for name in PHOTO_FILENAMES:
+        path = d / name
+        if path.exists():
+            return path
+    return None
+
+
+def save_patient_photo(patient_id: str, data: bytes, content_type: str, filename: str = "") -> Path:
+    ext = PHOTO_EXT_BY_TYPE.get((content_type or "").lower())
+    if not ext:
+        suffix = Path(filename or "").suffix.lower()
+        if suffix in {".jpg", ".jpeg"}:
+            ext = ".jpg"
+        elif suffix in {".png", ".webp"}:
+            ext = suffix
+    if not ext:
+        raise ValueError("Photo must be JPEG, PNG, or WebP")
+    d = _patient_dir(patient_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for name in PHOTO_FILENAMES:
+        old = d / name
+        if old.exists():
+            old.unlink()
+    path = d / f"photo{ext}"
+    path.write_bytes(data)
+    return path
+
+
+def _photo_url(patient_id: str) -> str | None:
+    path = find_patient_photo(patient_id)
+    if not path:
+        return None
+    mtime = int(path.stat().st_mtime)
+    return f"/api/patients/{patient_id}/photo?t={mtime}"
+
+
+def _serialize_patient(patient: dict) -> dict[str, Any]:
+    pid = patient["id"]
+    profile = get_patient_profile(pid)
+    return {
+        **patient,
+        "has_photo": find_patient_photo(pid) is not None,
+        "photo_url": _photo_url(pid),
+        "date_of_birth": profile.get("date_of_birth"),
+        "gender": profile.get("gender"),
+        "latest_measurement": latest_measurement(profile),
+    }
+
+
+def _profile_path(patient_id: str) -> Path:
+    return _patient_dir(patient_id) / "profile.json"
+
+
+def _empty_profile() -> dict[str, Any]:
+    return {
+        "date_of_birth": None,
+        "gender": None,
+        "measurements": [],
+        "diagnostics": [],
+        "journal": [],
+        "medications": [],
+    }
+
+
+def get_patient_profile(patient_id: str) -> dict[str, Any]:
+    path = _profile_path(patient_id)
+    if not path.exists():
+        return _empty_profile()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _empty_profile()
+    profile = _empty_profile()
+    profile["date_of_birth"] = data.get("date_of_birth") or None
+    profile["gender"] = data.get("gender") or None
+    measurements = data.get("measurements") or []
+    if isinstance(measurements, list):
+        profile["measurements"] = sorted(
+            measurements,
+            key=lambda m: str(m.get("recorded_at") or ""),
+            reverse=True,
+        )
+    diagnostics = data.get("diagnostics") or []
+    if isinstance(diagnostics, list):
+        profile["diagnostics"] = sorted(
+            diagnostics,
+            key=lambda d: str(d.get("recorded_at") or ""),
+            reverse=True,
+        )
+    journal = data.get("journal") or []
+    if isinstance(journal, list):
+        profile["journal"] = sorted(
+            journal,
+            key=lambda j: str(j.get("recorded_at") or j.get("created_at") or ""),
+            reverse=True,
+        )
+    medications = data.get("medications") or []
+    if isinstance(medications, list):
+        profile["medications"] = _sort_medications(medications)
+    return profile
+
+
+def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+    d = _patient_dir(patient_id)
+    d.mkdir(parents=True, exist_ok=True)
+    cleaned = {
+        "date_of_birth": profile.get("date_of_birth") or None,
+        "gender": profile.get("gender") or None,
+        "measurements": profile.get("measurements") or [],
+        "diagnostics": profile.get("diagnostics") or [],
+        "journal": profile.get("journal") or [],
+        "medications": profile.get("medications") or [],
+    }
+    _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+    return get_patient_profile(patient_id)
+
+
+def update_patient_demographics(
+    patient_id: str,
+    *,
+    date_of_birth: str | None = None,
+    gender: str | None = None,
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    if date_of_birth is not None:
+        profile["date_of_birth"] = date_of_birth.strip() or None
+    if gender is not None:
+        profile["gender"] = gender.strip() or None
+    return save_patient_profile(patient_id, profile)
+
+
+def add_patient_measurement(
+    patient_id: str,
+    *,
+    recorded_at: str,
+    height_cm: float | None = None,
+    weight_kg: float | None = None,
+    notes: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    if height_cm is None and weight_kg is None:
+        raise ValueError("Provide height and/or weight")
+    profile = get_patient_profile(patient_id)
+    entry = {
+        "id": str(uuid4()),
+        "recorded_at": recorded_at.strip(),
+        "height_cm": height_cm,
+        "weight_kg": weight_kg,
+        "notes": (notes or "").strip() or None,
+        "created_at": _now_iso(),
+    }
+    profile.setdefault("measurements", []).append(entry)
+    saved = save_patient_profile(patient_id, profile)
+    return next((m for m in saved["measurements"] if m["id"] == entry["id"]), entry)
+
+
+def delete_patient_measurement(patient_id: str, measurement_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    before = len(profile.get("measurements") or [])
+    profile["measurements"] = [
+        m for m in profile.get("measurements") or [] if m.get("id") != measurement_id
+    ]
+    if len(profile["measurements"]) == before:
+        return False
+    save_patient_profile(patient_id, profile)
+    return True
+
+
+DIAGNOSTIC_PRESETS = [
+    # Blood / labs (primary for charting)
+    {"name": "LDL cholesterol", "unit": "mmol/L", "category": "blood"},
+    {"name": "Non-HDL cholesterol", "unit": "mmol/L", "category": "blood"},
+    {"name": "Total cholesterol", "unit": "mmol/L", "category": "blood"},
+    {"name": "HDL cholesterol", "unit": "mmol/L", "category": "blood"},
+    {"name": "Triglyceride", "unit": "mmol/L", "category": "blood"},
+    {"name": "Cholesterol/HDL ratio", "unit": "", "category": "blood"},
+    {"name": "HbA1c", "unit": "%", "category": "blood"},
+    {"name": "Glucose fasting", "unit": "mmol/L", "category": "blood"},
+    {"name": "Creatinine", "unit": "µmol/L", "category": "blood"},
+    {"name": "eGFR", "unit": "mL/min/1.73m²", "category": "blood"},
+    {"name": "ALT", "unit": "U/L", "category": "blood"},
+    {"name": "AST", "unit": "U/L", "category": "blood"},
+    {"name": "Bilirubin total", "unit": "µmol/L", "category": "blood"},
+    {"name": "Hemoglobin", "unit": "g/L", "category": "blood"},
+    {"name": "Platelets", "unit": "xE9/L", "category": "blood"},
+    {"name": "CRP", "unit": "mg/L", "category": "blood"},
+    {"name": "TSH", "unit": "mIU/L", "category": "blood"},
+    {"name": "Vitamin D 25-OH", "unit": "nmol/L", "category": "blood"},
+    {"name": "Vitamin B12", "unit": "pmol/L", "category": "blood"},
+    {"name": "Ferritin", "unit": "µg/L", "category": "blood"},
+    {"name": "CA19-9", "unit": "U/mL", "category": "blood"},
+    {"name": "CEA", "unit": "ng/mL", "category": "blood"},
+    # Imaging / other
+    {"name": "Coronary calcium score", "unit": "AU", "category": "imaging"},
+    {"name": "Systolic BP", "unit": "mmHg", "category": "vital"},
+    {"name": "Diastolic BP", "unit": "mmHg", "category": "vital"},
+]
+
+
+def _infer_diagnostic_category(name: str, explicit: str | None = None) -> str:
+    if explicit in {"blood", "imaging", "vital", "other"}:
+        return explicit
+    lower = (name or "").lower()
+    for preset in DIAGNOSTIC_PRESETS:
+        if preset["name"].lower() == lower:
+            return preset.get("category") or "blood"
+    if "calcium score" in lower or "agatston" in lower:
+        return "imaging"
+    if "bp" in lower or "blood pressure" in lower:
+        return "vital"
+    return "blood"
+
+
+def add_patient_diagnostic(
+    patient_id: str,
+    *,
+    name: str,
+    value: float,
+    recorded_at: str,
+    unit: str | None = None,
+    notes: str | None = None,
+    category: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned_name = (name or "").strip()
+    if not cleaned_name:
+        raise ValueError("Diagnostic name is required")
+    if value is None:
+        raise ValueError("Diagnostic value is required")
+    date_raw = (recorded_at or "").strip()
+    try:
+        date_iso = datetime.fromisoformat(date_raw[:10]).date().isoformat()
+    except ValueError as exc:
+        raise ValueError("recorded_at must be YYYY-MM-DD") from exc
+    profile = get_patient_profile(patient_id)
+    unit_clean = (unit or "").strip() or None
+    if not unit_clean:
+        for existing in profile.get("diagnostics") or []:
+            if str(existing.get("name") or "").strip().lower() == cleaned_name.lower():
+                if existing.get("unit"):
+                    unit_clean = existing["unit"]
+                    break
+        if not unit_clean:
+            for preset in DIAGNOSTIC_PRESETS:
+                if preset["name"].lower() == cleaned_name.lower():
+                    unit_clean = preset["unit"] or None
+                    break
+    cat = _infer_diagnostic_category(cleaned_name, category)
+    entry = {
+        "id": str(uuid4()),
+        "name": cleaned_name,
+        "value": float(value),
+        "unit": unit_clean,
+        "recorded_at": date_iso,
+        "category": cat,
+        "notes": (notes or "").strip() or None,
+        "created_at": _now_iso(),
+    }
+    profile.setdefault("diagnostics", []).append(entry)
+    saved = save_patient_profile(patient_id, profile)
+    return next((d for d in saved["diagnostics"] if d["id"] == entry["id"]), entry)
+
+
+def delete_patient_diagnostic(patient_id: str, diagnostic_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    before = len(profile.get("diagnostics") or [])
+    profile["diagnostics"] = [
+        d for d in profile.get("diagnostics") or [] if d.get("id") != diagnostic_id
+    ]
+    if len(profile["diagnostics"]) == before:
+        return False
+    save_patient_profile(patient_id, profile)
+    return True
+
+
+JOURNAL_KINDS = frozenset({"symptom", "feeling", "medication", "note"})
+
+JOURNAL_PRESETS = [
+    {"label": "Weak", "kind": "feeling"},
+    {"label": "Headache", "kind": "symptom"},
+    {"label": "Nauseous", "kind": "symptom"},
+    {"label": "Dizzy", "kind": "symptom"},
+    {"label": "Fatigue", "kind": "symptom"},
+    {"label": "Pain", "kind": "symptom"},
+    {"label": "Anxiety", "kind": "feeling"},
+    {"label": "Took medication", "kind": "medication"},
+    {"label": "Ate", "kind": "note"},
+    {"label": "Slept", "kind": "note"},
+    {"label": "Note", "kind": "note"},
+]
+
+
+def _normalize_journal_label(label: str) -> str:
+    cleaned = " ".join((label or "").strip().split())
+    return cleaned[:80]
+
+
+def _parse_journal_datetime(raw: str | None) -> str:
+    """Return timezone-aware ISO datetime; default to now (UTC)."""
+    text = (raw or "").strip()
+    if not text:
+        return _now_iso()
+    try:
+        # Support date-only, local datetime without tz, and full ISO
+        if len(text) == 10:
+            dt = datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except ValueError as exc:
+        raise ValueError("recorded_at must be an ISO date or datetime") from exc
+
+
+def add_patient_journal_entry(
+    patient_id: str,
+    *,
+    kind: str,
+    label: str,
+    text: str | None = None,
+    severity: int | None = None,
+    recorded_at: str | None = None,
+    case_id: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    kind_clean = (kind or "").strip().lower()
+    if kind_clean not in JOURNAL_KINDS:
+        raise ValueError(f"kind must be one of: {', '.join(sorted(JOURNAL_KINDS))}")
+    label_clean = _normalize_journal_label(label)
+    if not label_clean:
+        raise ValueError("label is required")
+    severity_val: int | None = None
+    if severity is not None:
+        try:
+            severity_val = int(severity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("severity must be an integer 1–5") from exc
+        if severity_val < 1 or severity_val > 5:
+            raise ValueError("severity must be 1–5")
+    case_clean = (case_id or "").strip() or None
+    if case_clean:
+        patient = _find_patient(reg, patient_id)
+        if patient and not _find_case(patient, case_clean):
+            raise ValueError("case_id does not belong to this patient")
+    entry = {
+        "id": str(uuid4()),
+        "recorded_at": _parse_journal_datetime(recorded_at),
+        "kind": kind_clean,
+        "label": label_clean,
+        "text": (text or "").strip() or None,
+        "severity": severity_val,
+        "case_id": case_clean,
+        "created_at": _now_iso(),
+    }
+    profile = get_patient_profile(patient_id)
+    profile.setdefault("journal", []).append(entry)
+    saved = save_patient_profile(patient_id, profile)
+    return next((j for j in saved["journal"] if j["id"] == entry["id"]), entry)
+
+
+def delete_patient_journal_entry(patient_id: str, entry_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    before = len(profile.get("journal") or [])
+    profile["journal"] = [
+        j for j in profile.get("journal") or [] if j.get("id") != entry_id
+    ]
+    if len(profile["journal"]) == before:
+        return False
+    save_patient_profile(patient_id, profile)
+    return True
+
+
+def _sort_medications(medications: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def sort_key(m: dict[str, Any]) -> tuple:
+        active = 0 if (m.get("status") or "active") == "active" else 1
+        return (active, str(m.get("name") or "").lower())
+
+    return sorted(medications, key=sort_key)
+
+
+def _normalize_conditions(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    items: list[str] = []
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.replace(";", ",").split(",")]
+        items = [p for p in parts if p]
+    elif isinstance(raw, list):
+        for item in raw:
+            text = str(item or "").strip()
+            if text:
+                items.append(text)
+    # Dedupe case-insensitively, keep first casing
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item[:80])
+    return out[:20]
+
+
+def _normalize_med_date(raw: str | None) -> str | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text[:10]).date().isoformat()
+    except ValueError as exc:
+        raise ValueError("started_at / stopped_at must be YYYY-MM-DD") from exc
+
+
+def add_patient_medication(
+    patient_id: str,
+    *,
+    name: str,
+    dosage: str | None = None,
+    frequency: str | None = None,
+    conditions: Any = None,
+    notes: str | None = None,
+    started_at: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned_name = " ".join((name or "").strip().split())
+    if not cleaned_name:
+        raise ValueError("Medication name is required")
+    now = _now_iso()
+    entry = {
+        "id": str(uuid4()),
+        "name": cleaned_name[:120],
+        "dosage": (dosage or "").strip() or None,
+        "frequency": (frequency or "").strip() or None,
+        "conditions": _normalize_conditions(conditions),
+        "notes": (notes or "").strip() or None,
+        "status": "active",
+        "started_at": _normalize_med_date(started_at),
+        "stopped_at": None,
+        "created_at": now,
+        "updated_at": now,
+        "dosage_history": [],
+    }
+    profile = get_patient_profile(patient_id)
+    profile.setdefault("medications", []).append(entry)
+    saved = save_patient_profile(patient_id, profile)
+    return next((m for m in saved["medications"] if m["id"] == entry["id"]), entry)
+
+
+def update_patient_medication(
+    patient_id: str,
+    medication_id: str,
+    *,
+    name: str | None = None,
+    dosage: str | None = ...,  # type: ignore[assignment]
+    frequency: str | None = ...,  # type: ignore[assignment]
+    conditions: Any = ...,
+    notes: str | None = ...,  # type: ignore[assignment]
+    started_at: str | None = ...,  # type: ignore[assignment]
+    history_note: str | None = None,
+) -> dict[str, Any] | None:
+    """Update a medication. Dosage/frequency changes append to dosage_history.
+
+    Use ellipsis (...) as sentinel for “field not provided”.
+    """
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    meds = profile.get("medications") or []
+    idx = next((i for i, m in enumerate(meds) if m.get("id") == medication_id), None)
+    if idx is None:
+        return None
+    med = dict(meds[idx])
+    old_dosage = med.get("dosage")
+    old_frequency = med.get("frequency")
+
+    if name is not None:
+        cleaned = " ".join(name.strip().split())
+        if not cleaned:
+            raise ValueError("Medication name is required")
+        med["name"] = cleaned[:120]
+    if dosage is not ...:
+        med["dosage"] = (dosage or "").strip() or None
+    if frequency is not ...:
+        med["frequency"] = (frequency or "").strip() or None
+    if conditions is not ...:
+        med["conditions"] = _normalize_conditions(conditions)
+    if notes is not ...:
+        med["notes"] = (notes or "").strip() or None
+    if started_at is not ...:
+        med["started_at"] = _normalize_med_date(started_at)
+
+    dosage_changed = dosage is not ... and med.get("dosage") != old_dosage
+    frequency_changed = frequency is not ... and med.get("frequency") != old_frequency
+    if dosage_changed or frequency_changed:
+        history = list(med.get("dosage_history") or [])
+        history.append(
+            {
+                "dosage": old_dosage,
+                "frequency": old_frequency,
+                "changed_at": _now_iso(),
+                "note": (history_note or "").strip() or None,
+            }
+        )
+        med["dosage_history"] = history
+
+    med["updated_at"] = _now_iso()
+    meds[idx] = med
+    profile["medications"] = meds
+    saved = save_patient_profile(patient_id, profile)
+    return next((m for m in saved["medications"] if m["id"] == medication_id), med)
+
+
+def stop_patient_medication(
+    patient_id: str,
+    medication_id: str,
+    *,
+    stopped_at: str | None = None,
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    meds = profile.get("medications") or []
+    idx = next((i for i, m in enumerate(meds) if m.get("id") == medication_id), None)
+    if idx is None:
+        return None
+    med = dict(meds[idx])
+    med["status"] = "stopped"
+    med["stopped_at"] = _normalize_med_date(stopped_at) or datetime.now(timezone.utc).date().isoformat()
+    med["updated_at"] = _now_iso()
+    meds[idx] = med
+    profile["medications"] = meds
+    saved = save_patient_profile(patient_id, profile)
+    return next((m for m in saved["medications"] if m["id"] == medication_id), med)
+
+
+def delete_patient_medication(patient_id: str, medication_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    before = len(profile.get("medications") or [])
+    profile["medications"] = [
+        m for m in profile.get("medications") or [] if m.get("id") != medication_id
+    ]
+    if len(profile["medications"]) == before:
+        return False
+    save_patient_profile(patient_id, profile)
+    return True
+
+
+def group_journal_for_charts(
+    profile: dict[str, Any] | None,
+    *,
+    max_labels: int = 8,
+) -> list[dict[str, Any]]:
+    """Group journal entries by label for frequency / severity charts."""
+    from collections import defaultdict
+
+    groups: dict[str, dict[str, Any]] = {}
+    for row in (profile or {}).get("journal") or []:
+        label = _normalize_journal_label(str(row.get("label") or ""))
+        if not label:
+            continue
+        key = label.lower()
+        group = groups.get(key)
+        if not group:
+            group = {
+                "key": key,
+                "label": label,
+                "kind": row.get("kind") or "note",
+                "entries": [],
+            }
+            groups[key] = group
+        # Prefer symptom/feeling kind when mixed
+        kind = str(row.get("kind") or "note")
+        if kind in {"symptom", "feeling"} and group.get("kind") not in {"symptom", "feeling"}:
+            group["kind"] = kind
+        day = str(row.get("recorded_at") or "")[:10]
+        severity = row.get("severity")
+        try:
+            sev = int(severity) if severity is not None else None
+        except (TypeError, ValueError):
+            sev = None
+        group["entries"].append(
+            {
+                "id": row.get("id"),
+                "recorded_at": row.get("recorded_at"),
+                "day": day,
+                "severity": sev,
+                "kind": kind,
+                "text": row.get("text"),
+            }
+        )
+
+    series: list[dict[str, Any]] = []
+    for group in groups.values():
+        entries = sorted(
+            group["entries"],
+            key=lambda e: str(e.get("recorded_at") or ""),
+        )
+        by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for e in entries:
+            if e.get("day"):
+                by_day[e["day"]].append(e)
+        readings: list[dict[str, Any]] = []
+        for day in sorted(by_day.keys()):
+            day_rows = by_day[day]
+            severities = [r["severity"] for r in day_rows if r.get("severity") is not None]
+            if severities:
+                value = sum(severities) / len(severities)
+                metric = "severity_avg"
+            else:
+                value = float(len(day_rows))
+                metric = "count"
+            readings.append(
+                {
+                    "recorded_at": day,
+                    "value": round(value, 2) if metric == "severity_avg" else value,
+                    "count": len(day_rows),
+                    "metric": metric,
+                }
+            )
+        latest = readings[-1] if readings else None
+        series.append(
+            {
+                "key": group["key"],
+                "name": group["label"],
+                "label": group["label"],
+                "kind": group["kind"],
+                "unit": "sev" if any(r.get("metric") == "severity_avg" for r in readings) else "count",
+                "readings": readings,
+                "latest": latest,
+                "point_count": len(readings),
+                "entry_count": len(entries),
+                "latest_entry": entries[-1] if entries else None,
+            }
+        )
+
+    series.sort(
+        key=lambda s: (
+            0 if s.get("kind") in {"symptom", "feeling"} else 1,
+            -int(s.get("entry_count") or 0),
+            str(s.get("name") or "").lower(),
+        )
+    )
+    return series[:max_labels]
+
+
+def recent_journal_for_prompt(
+    profile: dict[str, Any] | None,
+    *,
+    days: int = 14,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows: list[dict[str, Any]] = []
+    for row in (profile or {}).get("journal") or []:
+        raw = str(row.get("recorded_at") or "")
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if dt < cutoff:
+            continue
+        rows.append(row)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Group diagnostic readings by name (case-insensitive) for charting.
+
+    Blood-test series with multiple dated points are sorted first.
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    for row in (profile or {}).get("diagnostics") or []:
+        name = (row.get("name") or "").strip()
+        if not name or row.get("value") is None:
+            continue
+        key = name.lower()
+        group = groups.get(key)
+        category = _infer_diagnostic_category(name, row.get("category"))
+        if not group:
+            group = {
+                "key": key,
+                "name": name,
+                "unit": row.get("unit"),
+                "category": category,
+                "readings": [],
+            }
+            groups[key] = group
+        if row.get("unit") and not group.get("unit"):
+            group["unit"] = row["unit"]
+        if category == "blood":
+            group["category"] = "blood"
+        group["readings"].append(
+            {
+                "id": row.get("id"),
+                "recorded_at": str(row.get("recorded_at") or "")[:10],
+                "value": row.get("value"),
+                "notes": row.get("notes"),
+            }
+        )
+    series: list[dict[str, Any]] = []
+    for group in groups.values():
+        readings = sorted(
+            group["readings"],
+            key=lambda r: str(r.get("recorded_at") or ""),
+        )
+        latest = readings[-1] if readings else None
+        series.append(
+            {
+                "key": group["key"],
+                "name": group["name"],
+                "unit": group.get("unit"),
+                "category": group.get("category") or "blood",
+                "readings": readings,
+                "latest": latest,
+                "point_count": len(readings),
+            }
+        )
+
+    def sort_key(s: dict[str, Any]) -> tuple:
+        cat = s.get("category") or "other"
+        cat_rank = 0 if cat == "blood" else 1 if cat == "vital" else 2 if cat == "imaging" else 3
+        # Prefer multi-point blood trends
+        multi = 0 if s["point_count"] > 1 else 1
+        return (cat_rank, multi, -s["point_count"], s["name"].lower())
+
+    series.sort(key=sort_key)
+
+    from app.services.diagnostic_references import attach_references_to_series
+
+    return attach_references_to_series(
+        series,
+        date_of_birth=(profile or {}).get("date_of_birth"),
+        gender=(profile or {}).get("gender"),
+    )
+
+
+def latest_measurement(profile: dict[str, Any] | None) -> dict[str, Any] | None:
+    measurements = (profile or {}).get("measurements") or []
+    return measurements[0] if measurements else None
+
+
+def age_years_from_dob(date_of_birth: str | None, on_date: str | None = None) -> int | None:
+    if not date_of_birth:
+        return None
+    try:
+        dob = datetime.fromisoformat(date_of_birth[:10]).date()
+        if on_date:
+            today = datetime.fromisoformat(on_date[:10]).date()
+        else:
+            today = datetime.now(timezone.utc).date()
+    except ValueError:
+        return None
+    years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return max(0, years)
+
+
+def format_profile_for_prompt(patient_id: str | None, patient_label: str | None = None) -> str:
+    if not patient_id:
+        return ""
+    profile = get_patient_profile(patient_id)
+    lines: list[str] = []
+    if patient_label:
+        lines.append(f"Name: {patient_label}")
+    dob = profile.get("date_of_birth")
+    age = age_years_from_dob(dob)
+    if dob:
+        age_bit = f" (age {age})" if age is not None else ""
+        lines.append(f"Date of birth: {dob}{age_bit}")
+    elif age is not None:
+        lines.append(f"Age: {age}")
+    if profile.get("gender"):
+        lines.append(f"Gender: {profile['gender']}")
+    latest = latest_measurement(profile)
+    if latest:
+        bits = [f"as of {latest.get('recorded_at')}"]
+        if latest.get("height_cm") is not None:
+            bits.append(f"height {latest['height_cm']} cm")
+        if latest.get("weight_kg") is not None:
+            bits.append(f"weight {latest['weight_kg']} kg")
+            if latest.get("height_cm"):
+                try:
+                    h_m = float(latest["height_cm"]) / 100.0
+                    bmi = float(latest["weight_kg"]) / (h_m * h_m)
+                    bits.append(f"BMI {bmi:.1f}")
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+        lines.append("Latest measurements: " + ", ".join(bits))
+        history = profile.get("measurements") or []
+        if len(history) > 1:
+            hist_lines = []
+            for m in history[:8]:
+                parts = [str(m.get("recorded_at") or "?")]
+                if m.get("height_cm") is not None:
+                    parts.append(f"{m['height_cm']} cm")
+                if m.get("weight_kg") is not None:
+                    parts.append(f"{m['weight_kg']} kg")
+                hist_lines.append(" / ".join(parts))
+            lines.append("Measurement history: " + "; ".join(hist_lines))
+    for series in group_diagnostics_for_charts(profile)[:10]:
+        latest = series.get("latest") or {}
+        unit = f" {series['unit']}" if series.get("unit") else ""
+        if latest.get("value") is None:
+            continue
+        line = f"{series['name']}: {latest['value']}{unit} ({latest.get('recorded_at') or '?'})"
+        if series["point_count"] > 1:
+            trend = ", ".join(
+                f"{r.get('recorded_at')}: {r.get('value')}"
+                for r in (series.get("readings") or [])[-5:]
+            )
+            line += f" · trend {trend}"
+        lines.append(line)
+    journal_rows = recent_journal_for_prompt(profile)
+    if journal_rows:
+        lines.append("Recent self-reports (last 14 days):")
+        for row in journal_rows:
+            bits = [
+                str(row.get("recorded_at") or "?")[:16],
+                str(row.get("kind") or "note"),
+                str(row.get("label") or ""),
+            ]
+            if row.get("severity") is not None:
+                bits.append(f"severity {row['severity']}/5")
+            if row.get("text"):
+                bits.append(str(row["text"])[:120])
+            if row.get("case_id"):
+                bits.append(f"case:{row['case_id']}")
+            lines.append("  · " + " · ".join(b for b in bits if b))
+    meds = profile.get("medications") or []
+    active_meds = [m for m in meds if (m.get("status") or "active") == "active"]
+    stopped_meds = [m for m in meds if (m.get("status") or "") == "stopped"]
+    if active_meds:
+        lines.append("Active medications:")
+        for m in active_meds[:20]:
+            bits = [str(m.get("name") or "")]
+            if m.get("dosage"):
+                bits.append(str(m["dosage"]))
+            if m.get("frequency"):
+                bits.append(str(m["frequency"]))
+            if m.get("conditions"):
+                bits.append("for " + ", ".join(str(c) for c in m["conditions"]))
+            if m.get("started_at"):
+                bits.append(f"since {m['started_at']}")
+            hist = m.get("dosage_history") or []
+            if hist:
+                last = hist[-1]
+                bits.append(
+                    f"prior {last.get('dosage') or '?'} {last.get('frequency') or ''}".strip()
+                    + f" until {str(last.get('changed_at') or '')[:10]}"
+                )
+            lines.append("  · " + " · ".join(b for b in bits if b))
+    if stopped_meds:
+        lines.append("Stopped medications (recent):")
+        for m in stopped_meds[:8]:
+            bits = [str(m.get("name") or "")]
+            if m.get("dosage"):
+                bits.append(str(m["dosage"]))
+            if m.get("stopped_at"):
+                bits.append(f"stopped {m['stopped_at']}")
+            lines.append("  · " + " · ".join(b for b in bits if b))
+    if not lines:
+        return ""
+    return "\n".join(f"- {line}" for line in lines)
 
 
 def _find_patient(reg: dict, patient_id: str) -> dict | None:
@@ -98,7 +1018,7 @@ def _find_case(patient: dict, case_id: str) -> dict | None:
 
 def list_patients() -> list[dict[str, Any]]:
     reg = load_registry()
-    return reg["patients"]
+    return [_serialize_patient(p) for p in reg["patients"]]
 
 
 def create_patient(label: str) -> dict[str, Any]:
@@ -133,7 +1053,7 @@ def delete_patient(patient_id: str) -> bool:
     if not patient:
         return False
 
-    patient_dir = _patients_dir() / patient_id
+    patient_dir = _patient_dir(patient_id)
     if patient_dir.exists():
         shutil.rmtree(patient_dir)
 
@@ -191,6 +1111,25 @@ def create_case(patient_id: str, label: str) -> dict[str, Any] | None:
     return case
 
 
+def rename_case(patient_id: str, case_id: str, label: str) -> dict[str, Any] | None:
+    """Update a case display label. Keeps case id / directory unchanged."""
+    cleaned = (label or "").strip()
+    if not cleaned:
+        raise ValueError("Case label is required")
+
+    reg = load_registry()
+    patient = _find_patient(reg, patient_id)
+    if not patient:
+        return None
+    case = _find_case(patient, case_id)
+    if not case:
+        return None
+
+    case["label"] = cleaned
+    save_registry(reg)
+    return case
+
+
 def delete_case(patient_id: str, case_id: str) -> bool:
     reg = load_registry()
     patient = _find_patient(reg, patient_id)
@@ -230,6 +1169,10 @@ def get_active_context() -> dict[str, Any]:
         "patient_label": patient["label"] if patient else None,
         "case_id": case_id,
         "case_label": case["label"] if case else None,
+        "has_photo": find_patient_photo(patient_id) is not None if patient_id else False,
+        "photo_url": _photo_url(patient_id) if patient_id else None,
+        "cases": patient.get("cases", []) if patient else [],
+        "profile": get_patient_profile(patient_id) if patient_id else _empty_profile(),
     }
 
 

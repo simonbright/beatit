@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -22,11 +23,12 @@ OPTIONS CHAT MODE (live guided discussion):
 - Follow the user's lead. When they ask to go deeper on one option, regimen, trial class, biomarker, or trade-off, do so thoroughly.
 - Prefer structured comparisons when helpful: eligibility, evidence strength, practical requirements, unknowns, and what would change the recommendation.
 - Separate what is documented in the chart from guideline/general oncology knowledge and from AI inference.
-- Do not invent labs, imaging, staging, or biomarker results that are absent from STORED DOCUMENTS / CURRENT ASSESSMENT.
+- Do not invent labs, imaging, staging, or biomarker results that are absent from STORED DOCUMENTS / CURRENT ASSESSMENT / FOCUS DOCUMENTS.
+- When FOCUS DOCUMENTS are provided, prioritize those; they were explicitly requested by the user.
 - Ask a brief clarifying question when a fork in the analysis would materially change the option set — but still give a useful partial answer.
 - Keep responses conversational enough for live guidance, but clinically precise. Use short headings and bullets when comparing options.
 - Cite claims with [SOURCE: …] tags using the source attribution rules below.
-- This chat does NOT replace the Home assessment; it is for exploring options in depth.
+- This chat does NOT automatically replace the Home assessment. When the user wants the main assessment updated, tell them to use “Update Home assessment” (or pin excerpts and run Update analysis on Home).
 """
 
 OPTIONS_STARTER_PROMPTS = [
@@ -36,6 +38,67 @@ OPTIONS_STARTER_PROMPTS = [
     "Walk through surgical vs non-surgical pathways and the decision points between them.",
     "List the molecular / staging tests that would most change the option set, ranked by impact.",
 ]
+
+_READ_DOC_HINT = re.compile(
+    r"\b(read|open|look at|review|check|summarize|analyse|analyze|extract|ocr)\b",
+    re.I,
+)
+
+
+def _normalize_title(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def match_documents_for_message(
+    message: str,
+    documents: list[dict[str, Any]],
+    *,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    """Find library documents the user is asking about by title."""
+    text = (message or "").strip()
+    if not text or not documents:
+        return []
+
+    lowered = text.lower()
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for doc in documents:
+        title = (doc.get("title") or "").strip()
+        display = (doc.get("citation_display_name") or "").strip()
+        candidates = [c for c in (title, display) if c]
+        best = 0
+        for cand in candidates:
+            norm = _normalize_title(cand)
+            if len(norm) < 4:
+                continue
+            if norm in _normalize_title(text) or cand.lower() in lowered:
+                best = max(best, 100 + len(norm))
+                continue
+            # Token overlap for partial matches (e.g. "calcium scan")
+            tokens = [t for t in norm.split() if len(t) > 3]
+            if not tokens:
+                continue
+            hits = sum(1 for t in tokens if t in lowered)
+            if hits and hits >= max(1, len(tokens) // 2):
+                best = max(best, 40 + hits * 10)
+        if best:
+            # Prefer explicit read/review intent
+            if _READ_DOC_HINT.search(text):
+                best += 15
+            scored.append((best, doc))
+
+    scored.sort(key=lambda item: (-item[0], item[1].get("title") or ""))
+    seen: set[str] = set()
+    matched: list[dict[str, Any]] = []
+    for _, doc in scored:
+        doc_id = doc.get("id")
+        if not doc_id or doc_id in seen:
+            continue
+        seen.add(doc_id)
+        matched.append(doc)
+        if len(matched) >= limit:
+            break
+    return matched
 
 
 class OptionsChatService:
@@ -67,7 +130,70 @@ class OptionsChatService:
         messages = await self.db.list_chat_messages(session_id)
         return {"session": session, "messages": messages}
 
-    async def _build_system_prompt(self, session: dict[str, Any]) -> str:
+    async def _focus_documents_block(
+        self,
+        message: str,
+        session: dict[str, Any],
+    ) -> str:
+        from app.services.patient_documents import list_patient_documents
+        from app.services.case_manager import get_active_context
+
+        doc_ids = session.get("document_ids") or None
+        if doc_ids == []:
+            doc_ids = None
+        ctx = get_active_context()
+        patient_id = ctx.get("patient_id")
+        if patient_id:
+            docs = await list_patient_documents(
+                patient_id,
+                active_case_id=ctx.get("case_id"),
+            )
+        else:
+            docs = await self.db.list_documents()
+        if doc_ids is not None:
+            allowed = set(doc_ids)
+            docs = [d for d in docs if d.get("id") in allowed]
+        matched = match_documents_for_message(message, docs)
+        if not matched:
+            return ""
+
+        parts: list[str] = [
+            "=== FOCUS DOCUMENTS (explicitly requested this turn — use these first) ==="
+        ]
+        for doc in matched:
+            text = await self.store.read_extracted_text(doc) or ""
+            title = doc.get("citation_display_name") or doc.get("title") or doc.get("id")
+            case_label = doc.get("case_label")
+            method = (doc.get("metadata") or {}).get("extraction_method")
+            needs_ocr = (doc.get("metadata") or {}).get("needs_ocr")
+            note = ""
+            if needs_ocr or (text.startswith("[No extractable text")):
+                note = (
+                    "\n[WARNING: This PDF has little/no extractable text. "
+                    "It may be a scanned image. Ask the user to run Re-extract/OCR in Library, "
+                    "or paste OCR text.]"
+                )
+            elif method == "ocr":
+                note = "\n[Text recovered via OCR.]"
+            body = text.strip() or "[No extracted text on file]"
+            if len(body) > 40_000:
+                body = body[:40_000] + "\n…[truncated]"
+            case_line = f"\nFocus: {case_label}" if case_label else ""
+            parts.append(
+                f"--- FOCUS: {title} ---\n"
+                f"ID: {doc.get('id')}\n"
+                f"Type: {doc.get('source_type')}"
+                f"{case_line}"
+                f"{note}\n\n{body}"
+            )
+        return "\n\n".join(parts)
+
+    async def _build_system_prompt(
+        self,
+        session: dict[str, Any],
+        *,
+        user_message: str | None = None,
+    ) -> str:
         medical = await build_medical_system_prompt(self.db)
         doc_ids = session.get("document_ids") or None
         if doc_ids == []:
@@ -95,9 +221,16 @@ class OptionsChatService:
                     f"Full assessment excerpt:\n{body or '(none)'}\n"
                 )
 
+        focus_block = ""
+        if user_message:
+            focus_block = await self._focus_documents_block(user_message, session)
+            if focus_block:
+                focus_block = f"\n\n{focus_block}\n"
+
         return (
             f"{medical}\n\n{OPTIONS_CHAT_RULES}\n\n{SOURCE_ATTRIBUTION_RULES}\n"
             f"{assessment_block}\n"
+            f"{focus_block}"
             f"=== DOCUMENT INVENTORY ===\n{inventory}\n\n"
             f"=== COVERAGE NOTES ===\n{coverage or '- None'}\n\n"
             f"=== STORED DOCUMENTS ===\n{corpus_text or '[No documents in scope]'}\n"
@@ -146,8 +279,12 @@ class OptionsChatService:
             await self.db.update_chat_session(session_id, title=title)
             session = await self.db.get_chat_session(session_id) or session
 
-        system = await self._build_system_prompt(session)
-        messages = [{"role": "system", "content": system}, *self._history_messages(prior), {"role": "user", "content": text}]
+        system = await self._build_system_prompt(session, user_message=text)
+        messages = [
+            {"role": "system", "content": system},
+            *self._history_messages(prior),
+            {"role": "user", "content": text},
+        ]
 
         if stream:
             return self._stream_reply(session_id, messages, user_msg)
