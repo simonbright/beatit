@@ -40,8 +40,10 @@ _EXECUTIVE_SUMMARY_HEADERS = ("executive summary", "1 executive summary")
 _SECTION_TITLE_PLAIN = re.compile(
     r"^(?:"
     r"what we know|what we do not know|uncertainties|"
-    r"critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|treatment options|"
-    r"next steps|open items|questions for(?:\s+the)?\s+oncology|"
+    r"critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|"
+    r"clinical status(?:\s*&\s*|\s+and\s+)?workup|treatment options|"
+    r"next steps|open items|questions for(?:\s+the)?\s+(?:oncology|cardiology|neurology|care)|"
+    r"questions for(?:\s+the)?\s+\w+\s+team|"
     r"disclaimer|full assessment|latest assessment"
     r")\b",
     re.IGNORECASE,
@@ -173,7 +175,17 @@ def parse_assessment(response: str) -> dict[str, Any]:
         ),
         (
             "Question",
-            extract_section(response, ["questions for the oncology team", "questions for oncology"]),
+            extract_section(
+                response,
+                [
+                    "questions for the care team",
+                    "questions for the cardiology team",
+                    "questions for the neurology team",
+                    "questions for the oncology team",
+                    "questions for oncology",
+                    "questions for care team",
+                ],
+            ),
         ),
     ]
 

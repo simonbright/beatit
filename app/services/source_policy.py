@@ -28,20 +28,142 @@ STAGING RULES (critical):
 - In staging sections, use two subsections: "Documented in stored records" vs "Not yet established / needs verification".
 """
 
-RESPONSE_STRUCTURE_WITH_SOURCES = """
+# Specialty keywords — first matching domain wins.
+_SPECIALTY_RULES: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "oncology",
+        (
+            "oncolog",
+            "cancer",
+            "tumor",
+            "tumour",
+            "chemo",
+            "radiation oncology",
+            "pancreatic",
+            "pdac",
+            "metastat",
+            "lymphoma",
+            "leukemia",
+            "melanoma",
+            "biopsy of mass",
+        ),
+    ),
+    (
+        "cardiology",
+        (
+            "cardio",
+            "cardiac",
+            "heart",
+            "lipid",
+            "cholesterol",
+            "statin",
+            "echo",
+            "ecg",
+            "ekg",
+            "angina",
+            "cad",
+            "atherosclero",
+        ),
+    ),
+    (
+        "neurology",
+        (
+            "neuro",
+            "migraine",
+            "seizure",
+            "stroke",
+            "ms ",
+            "multiple sclerosis",
+            "parkinson",
+        ),
+    ),
+]
+
+_SPECIALTY_COPY = {
+    "oncology": {
+        "domain": "oncology",
+        "care_team": "the oncology team",
+        "workup_section": "Staging & workup",
+        "baseline_query": (
+            "Provide a comprehensive baseline oncology assessment synthesizing ALL documents in scope: "
+            "what we know from every report and source, what we do not know, critical gaps to close, "
+            "staging considerations, and a broad overview of treatment options."
+        ),
+        "care_constraint": "NOT a substitute for in-person oncology care",
+    },
+    "cardiology": {
+        "domain": "cardiology",
+        "care_team": "the cardiology team",
+        "workup_section": "Clinical status & workup",
+        "baseline_query": (
+            "Provide a comprehensive baseline cardiology assessment synthesizing ALL documents in scope: "
+            "what we know from every report and source, what we do not know, critical gaps to close, "
+            "risk and workup status, and a broad overview of management options."
+        ),
+        "care_constraint": "NOT a substitute for in-person cardiology care",
+    },
+    "neurology": {
+        "domain": "neurology",
+        "care_team": "the neurology team",
+        "workup_section": "Clinical status & workup",
+        "baseline_query": (
+            "Provide a comprehensive baseline neurology assessment synthesizing ALL documents in scope: "
+            "what we know from every report and source, what we do not know, critical gaps to close, "
+            "workup status, and a broad overview of management options."
+        ),
+        "care_constraint": "NOT a substitute for in-person neurology care",
+    },
+    "clinical": {
+        "domain": "clinical",
+        "care_team": "the care team",
+        "workup_section": "Clinical status & workup",
+        "baseline_query": (
+            "Provide a comprehensive baseline clinical assessment synthesizing ALL documents in scope: "
+            "what we know from every report and source, what we do not know, critical gaps to close, "
+            "workup status, and a broad overview of management options."
+        ),
+        "care_constraint": "NOT a substitute for in-person clinical care",
+    },
+}
+
+
+def infer_assessment_specialty(
+    *,
+    case_label: str | None = None,
+    patient_context: str | None = None,
+) -> dict[str, str]:
+    """Pick assessment wording from the active case — avoid oncology defaults for other specialties."""
+    blob = f"{case_label or ''} {patient_context or ''}".lower()
+    for domain, keys in _SPECIALTY_RULES:
+        if any(k in blob for k in keys):
+            return dict(_SPECIALTY_COPY[domain])
+    return dict(_SPECIALTY_COPY["clinical"])
+
+
+def response_structure_with_sources(specialty: dict[str, str] | None = None) -> str:
+    spec = specialty or _SPECIALTY_COPY["clinical"]
+    care_team = spec.get("care_team") or "the care team"
+    workup = spec.get("workup_section") or "Clinical status & workup"
+    return f"""
 Structure your response with these sections:
-1. Executive summary — at least 6 complete sentences covering diagnosis, key findings from ALL major report types in scope, staging status, and immediate priorities. Every sentence must include clinical content AND a [SOURCE: …] tag. Never output only a source tag line.
+1. Executive summary — at least 6 complete sentences covering diagnosis, key findings from ALL major report types in scope, current status, and immediate priorities. Every sentence must include clinical content AND a [SOURCE: …] tag. Never output only a source tag line.
 2. What we know — hard data only, each bullet tagged [SOURCE: Document "..."]
 3. What we do not know / uncertainties — tag [SOURCE: Unknown]
 4. Critical gaps to close (prioritized numbered list)
-5. Staging & workup — ONLY documented findings first; separate "unconfirmed/suggested" items clearly
+5. {workup} — ONLY documented findings first; separate "unconfirmed/suggested" items clearly
 6. Treatment options (broad range; tag inference vs guideline vs document)
 7. Next steps and open items (prioritized numbered list)
-8. Questions for the oncology team (numbered list)
+8. Questions for {care_team} (numbered list)
 9. Disclaimer
+
+Name section 8 exactly "Questions for {care_team}". Do NOT say "oncology team" unless this case is oncology.
 
 Do NOT include a separate "Source key" section — references are compiled automatically in the report appendix.
 """
+
+
+# Back-compat alias for imports that still expect a constant string
+RESPONSE_STRUCTURE_WITH_SOURCES = response_structure_with_sources(_SPECIALTY_COPY["clinical"])
 
 COMPREHENSIVE_SYNTHESIS_RULES = """
 COMPREHENSIVE SYNTHESIS (mandatory for baseline assessment and executive summary):
@@ -91,7 +213,7 @@ Tag gaps with [SOURCE: Unknown].
 
 ### Disclaimer
 
-Do NOT include baseline-only sections such as "What we know", "Staging & workup", or "Questions for the oncology team" unless the user explicitly asked for them.
+Do NOT include baseline-only sections such as "What we know", "Staging & workup", "Clinical status & workup", or "Questions for the … team" unless the user explicitly asked for them.
 """
 
 LIST_ITEM_SOURCE_RULES = """
@@ -101,7 +223,7 @@ Each numbered list item MUST include exactly ONE "- Sources:" sub-bullet at the 
 
 - Sources: [SOURCE: Document "<exact title>"] — when the item or trial is named in stored documents (copy title from ### headers).
 - Sources: Not in stored records — verify on ClinicalTrials.gov or with the treating team. Suggested search: "<terms>" [SOURCE: Unknown]
-  Use this when the item comes from general oncology knowledge and there is NO matching document or URL in the library.
+  Use this when the item comes from general specialty knowledge and there is NO matching document or URL in the library.
 - Sources: [SOURCE: Web — https://clinicaltrials.gov/study/NCT…] when you cite a specific trial page or external guideline URL.
 - Sources: [SOURCE: Patient context] — only when the list item is purely about a patient fact from settings (e.g. a biomarker), not for therapies/trials.
 
@@ -135,7 +257,7 @@ Rules:
 """
 
 INVESTIGATION_PROMPT_TEMPLATE = """
-You are investigating ONE open item from an oncology case review.
+You are investigating ONE open item from a clinical case review.
 
 OPEN ITEM:
 {item}
@@ -155,7 +277,7 @@ Provide a focused investigation (separate from any prior full assessment) with t
 1. What the documents actually say (quote or paraphrase with [SOURCE: Document "<title>"])
 2. What is NOT in the documents — tag [SOURCE: Unknown]
 3. Recommended next steps to resolve this item (tag actions that need new data)
-4. Staging impact (if relevant) — ONLY cite hard documented data for any staging statements
+4. Clinical impact (if relevant) — ONLY cite hard documented data for any status/staging statements
 
 Do not repeat a full case assessment. Do not include a separate source key section. Stay focused on this open item only.
 Do not mention palliative care, hospice, or comfort care.

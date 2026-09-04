@@ -14,9 +14,10 @@ from app.services.source_policy import (
     COMPREHENSIVE_SYNTHESIS_RULES,
     CUSTOM_QUERY_RESPONSE_STRUCTURE,
     LIST_ITEM_SOURCE_RULES,
-    RESPONSE_STRUCTURE_WITH_SOURCES,
     SOURCE_ATTRIBUTION_RULES,
     TRIAL_SEARCH_QUERY_INSTRUCTIONS,
+    infer_assessment_specialty,
+    response_structure_with_sources,
 )
 from app.services.source_normalize import enrich_with_sources
 from app.storage.database import Database
@@ -41,7 +42,8 @@ Core responsibilities:
 
 Important constraints:
 - Do not discuss, recommend, or mention palliative care — see PALLIATIVE EXCLUSION below
-- This is decision-support for clinicians and informed family discussion — NOT a substitute for in-person oncology care
+- This is decision-support for clinicians and informed family discussion — {care_constraint}
+- Match specialty language to the active case (e.g. cardiology vs oncology); do not default to oncology wording
 - Do not invent lab values, imaging findings, or staging that are not in the provided documents
 - When data is missing, say so explicitly and explain why it matters
 - Use clear headings and bullet points
@@ -56,10 +58,15 @@ async def build_medical_system_prompt(db: Database) -> str:
     demographics = format_profile_for_prompt(ctx.get("patient_id"), ctx.get("patient_label"))
     if not demographics.strip():
         demographics = "- Not set yet."
+    specialty = infer_assessment_specialty(
+        case_label=ctx.get("case_label"),
+        patient_context=patient,
+    )
     base = MEDICAL_SYSTEM_TEMPLATE.format(
         reviewer_context=reviewer.strip(),
         patient_demographics=demographics.strip(),
         patient_context=patient.strip(),
+        care_constraint=specialty["care_constraint"],
     )
     return f"{base}\n\n{PALLIATIVE_EXCLUSION}"
 
@@ -284,13 +291,18 @@ def _is_trial_search_query(query: str) -> bool:
     return any(keyword in lower for keyword in keywords)
 
 
-def _response_structure_for_analysis(*, analysis_type: str, query: str) -> str:
+def _response_structure_for_analysis(
+    *,
+    analysis_type: str,
+    query: str,
+    specialty: dict[str, str] | None = None,
+) -> str:
     if analysis_type == "query":
         structure = f"{CUSTOM_QUERY_RESPONSE_STRUCTURE}\n\n{LIST_ITEM_SOURCE_RULES}"
         if _is_trial_search_query(query):
             structure = f"{structure}\n\n{TRIAL_SEARCH_QUERY_INSTRUCTIONS}"
         return structure
-    return f"{RESPONSE_STRUCTURE_WITH_SOURCES}\n\n{COMPREHENSIVE_SYNTHESIS_RULES}"
+    return f"{response_structure_with_sources(specialty)}\n\n{COMPREHENSIVE_SYNTHESIS_RULES}"
 
 
 BASELINE_BUILD_ON_PRIOR_SECTION = """
@@ -400,13 +412,16 @@ class SynthesisService:
                         new_docs_note=new_docs_note,
                     )
 
+        ctx = get_active_context()
+        patient_setting = await self.db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+        specialty = infer_assessment_specialty(
+            case_label=ctx.get("case_label"),
+            patient_context=patient_setting,
+        )
+
         if include_baseline_assessment and not query.strip():
             analysis_type = "baseline"
-            query = (
-                "Provide a comprehensive baseline oncology assessment synthesizing ALL documents in scope: "
-                "what we know from every report and source, what we do not know, critical gaps to close, "
-                "staging considerations, and a broad overview of treatment options."
-            )
+            query = specialty["baseline_query"]
 
         gap_rules = f"\n{BASELINE_GAP_RULES}\n" if analysis_type == "baseline" else ""
         guidance_text = (assessment_guidance or "").strip()
@@ -432,6 +447,15 @@ class SynthesisService:
             else ""
         )
 
+        case_focus = (ctx.get("case_label") or "").strip()
+        case_focus_line = (
+            f"\nActive case focus: {case_focus}. Use {specialty['care_team']} wording — "
+            f"do not invent an oncology framing unless this case is oncology.\n"
+            if case_focus
+            else f"\nUse {specialty['care_team']} wording for clinician questions — "
+            f"do not default to oncology.\n"
+        )
+
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
 {inventory_section}{coverage_section}
@@ -443,8 +467,8 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 {chat_section}{prior_section}{guidance_section}
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
-{gap_rules}
-{_response_structure_for_analysis(analysis_type=analysis_type, query=query)}
+{case_focus_line}{gap_rules}
+{_response_structure_for_analysis(analysis_type=analysis_type, query=query, specialty=specialty)}
 
 CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."] or another SOURCE tag.
 Do NOT write parenthetical citations like (CT Report). Use [SOURCE: Document "exact title"] only.
@@ -610,7 +634,7 @@ Use clear ### headings for each section."""
     ) -> dict[str, Any]:
         return await self.analyze(
             query=(
-                "Summarize each stored document for an oncology case conference. "
+                "Summarize each stored document for a clinical case conference. "
                 "Extract clinically relevant findings, dates, test results, and recommendations. "
                 "Note contradictions between sources."
             ),
