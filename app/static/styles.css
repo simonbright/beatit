@@ -735,11 +735,10 @@ body {
 }
 
 .medication-history {
-  margin: 0.45rem 0 0;
-  padding-left: 1rem;
-  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
 .medication-history summary {
@@ -748,9 +747,34 @@ body {
   color: var(--text);
 }
 
+.medication-history ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
 .medication-stopped-heading {
-  margin: 1rem 0 0.45rem;
-  font-size: 0.92rem;
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.medication-home-row.is-stopped {
+  opacity: 0.88;
+}
+
+.medication-stopped-pill {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .patient-medication-form {
