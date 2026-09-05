@@ -998,9 +998,24 @@ function coverageDocRowHtml(row) {
 
 function coverageGroupHtml(group) {
   const docs = group.documents || [];
+  const imaging = group.imaging_collapsed;
+  const imagingN = Number(imaging?.count || group.imaging_count || 0);
+  const imagingHtml =
+    imagingN > 0
+      ? `<li class="coverage-doc-row coverage-imaging-collapsed">
+          <div class="coverage-collapsed-note">
+            <strong>${imagingN}</strong> DICOM / imaging slice${imagingN === 1 ? "" : "s"}
+            <span class="muted"> — counted above; hidden from this list</span>
+          </div>
+        </li>`
+      : "";
+  const empty =
+    !docs.length && !imagingN
+      ? `<li class="muted small">None</li>`
+      : "";
   return `<section class="coverage-group">
-    <h4 class="coverage-group-title">${escapeHtml(group.label || "")} <span class="coverage-group-count">${docs.length}</span></h4>
-    <ul class="coverage-doc-list">${docs.map(coverageDocRowHtml).join("") || `<li class="muted small">None</li>`}</ul>
+    <h4 class="coverage-group-title">${escapeHtml(group.label || "")} <span class="coverage-group-count">${Number(group.count || docs.length + imagingN)}</span></h4>
+    <ul class="coverage-doc-list">${docs.map(coverageDocRowHtml).join("")}${imagingHtml}${empty}</ul>
   </section>`;
 }
 
@@ -1063,6 +1078,8 @@ function renderCoverageReport() {
     return;
   }
   const total = coverage.total || 0;
+  const listed = coverage.listed_total != null ? coverage.listed_total : total;
+  const imagingTotal = coverage.imaging_total || 0;
   const present = coverage.present_count || 0;
   const missing = coverage.missing_count || 0;
   const attnCounts = coverage.attention?.counts || {};
@@ -1072,7 +1089,11 @@ function renderCoverageReport() {
     (attnCounts.file_missing || 0) +
     (attnCounts.unclassified_pdf || 0);
   if (summary) {
-    summary.textContent = `${total} document${total === 1 ? "" : "s"} · ${present} coverage areas present · ${missing} missing · ${attnTotal} need attention`;
+    const imagingBit =
+      imagingTotal > 0
+        ? ` · ${imagingTotal} imaging slice${imagingTotal === 1 ? "" : "s"} collapsed`
+        : "";
+    summary.textContent = `${total} document${total === 1 ? "" : "s"} (${listed} listed${imagingBit}) · ${present} coverage areas present · ${missing} missing · ${attnTotal} need attention`;
   }
 
   const view = state.coverageView || "all";

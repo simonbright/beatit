@@ -1521,6 +1521,23 @@ def build_document_coverage_pdf(
             if chips:
                 bit += f" · [{', '.join(chips)}]"
             _pdf_multiline(pdf, _safe_text(bit), h=3.4)
+        imaging_n = int(
+            (group.get("imaging_collapsed") or {}).get("count")
+            or group.get("imaging_count")
+            or 0
+        )
+        if imaging_n:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.set_text_color(100, 100, 100)
+            _pdf_multiline(
+                pdf,
+                _safe_text(
+                    f"- {imaging_n} DICOM / imaging slices (counted; not listed individually)"
+                ),
+                h=3.4,
+            )
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(40, 40, 40)
         pdf.ln(1.5)
 
     buffer = BytesIO()

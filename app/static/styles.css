@@ -3037,6 +3037,15 @@ textarea { resize: vertical; min-height: 100px; }
   margin-bottom: 0.85rem;
 }
 
+.coverage-imaging-collapsed .coverage-collapsed-note {
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--text) 4%, var(--surface));
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
 .flagged-list {
   display: flex;
   flex-direction: column;

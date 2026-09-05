@@ -230,25 +230,39 @@ async def build_document_coverage(patient_id: str) -> dict[str, Any]:
             reverse=True,
         )
 
-    by_type = [
-        {
+    def _pack_group(
+        *,
+        gid: str,
+        label: str,
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        # Keep inventory readable: count DICOM slices but do not list every one
+        imaging = [r for r in items if r.get("source_type") == "imaging"]
+        other = [r for r in items if r.get("source_type") != "imaging"]
+        packed: dict[str, Any] = {
             "id": gid,
-            "label": group_labels[gid],
+            "label": label,
             "count": len(items),
-            "documents": _sort_rows(items),
+            "documents": _sort_rows(other),
+            "imaging_count": len(imaging),
         }
+        if imaging:
+            packed["imaging_collapsed"] = {
+                "count": len(imaging),
+                "label": "DICOM / imaging slices",
+                "note": "Counted in coverage; hidden from the list by default",
+            }
+        return packed
+
+    by_type = [
+        _pack_group(gid=gid, label=group_labels[gid], items=items)
         for gid, items in sorted(
             by_type_map.items(),
             key=lambda kv: (-len(kv[1]), group_labels.get(kv[0], kv[0]).lower()),
         )
     ]
     by_month = [
-        {
-            "id": mid,
-            "label": month_labels[mid],
-            "count": len(items),
-            "documents": _sort_rows(items),
-        }
+        _pack_group(gid=mid, label=month_labels[mid], items=items)
         for mid, items in sorted(
             by_month_map.items(),
             key=lambda kv: (kv[0] == "unknown", kv[0]),
@@ -256,10 +270,16 @@ async def build_document_coverage(patient_id: str) -> dict[str, Any]:
         )
     ]
 
+    # Flat document list for UI/PDF: exclude bulk imaging (counts still in checklist)
+    listed_docs = _sort_rows([r for r in rows if r.get("source_type") != "imaging"])
+    imaging_total = sum(1 for r in rows if r.get("source_type") == "imaging")
+
     missing = [c for c in checklist if not c["present"]]
     return {
         "patient_id": patient_id,
         "total": len(rows),
+        "listed_total": len(listed_docs),
+        "imaging_total": imaging_total,
         "checklist": checklist,
         "missing_count": len(missing),
         "present_count": len(checklist) - len(missing),
@@ -279,5 +299,5 @@ async def build_document_coverage(patient_id: str) -> dict[str, Any]:
         },
         "by_type": by_type,
         "by_month": by_month,
-        "documents": _sort_rows(rows),
+        "documents": listed_docs,
     }
