@@ -445,9 +445,16 @@ async def auth_me(request: Request):
 
 @router.get("/health")
 async def health():
+    from app.ingest.pdf import ocr_runtime_status
+
     _, _, llm, _, _ = await _get_services()
     llm_status = await llm.health()
-    return {"status": "ok", "llm": llm_status, **version_info()}
+    return {
+        "status": "ok",
+        "llm": llm_status,
+        "ocr": ocr_runtime_status(),
+        **version_info(),
+    }
 
 
 @router.get("/version")

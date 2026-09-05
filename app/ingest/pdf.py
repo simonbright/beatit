@@ -207,6 +207,30 @@ def _ocr_with_tesseract(content: bytes, *, max_pages: int = OCR_PAGE_LIMIT) -> s
     return "\n\n".join(pages_out)
 
 
+def _png_to_jpeg_bytes(png: bytes, *, max_side: int = 1600, quality: int = 75) -> bytes:
+    """Downscale/compress page images so vision OCR requests stay small and fast."""
+    try:
+        from PIL import Image
+
+        image = Image.open(BytesIO(png))
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        elif image.mode == "L":
+            image = image.convert("RGB")
+        w, h = image.size
+        scale = min(1.0, float(max_side) / float(max(w, h) or 1))
+        if scale < 1.0:
+            image = image.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return png
+
+
 def _vision_ocr_model() -> str:
     from app.config import settings
     from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL
@@ -224,19 +248,85 @@ def _vision_ocr_model() -> str:
     return DEFAULT_OPENROUTER_MODEL
 
 
-async def _ocr_with_openrouter_vision(
-    content: bytes, *, max_pages: int = OCR_VISION_PAGE_LIMIT
-) -> tuple[str, dict[str, Any]]:
-    """OCR scanned PDF pages via OpenRouter vision when local tesseract is unavailable."""
+async def _ocr_pdf_direct_with_vision(content: bytes) -> tuple[str, dict[str, Any]]:
+    """Send the PDF bytes straight to a multimodal model (best path for Gemini)."""
     from app.config import settings
     from app.services.openrouter_client import OpenRouterClient
 
-    meta: dict[str, Any] = {"vision_attempted": True}
+    meta: dict[str, Any] = {"vision_mode": "pdf_direct"}
+    if not settings.openrouter_api_key:
+        meta["vision_error"] = "OPENROUTER_API_KEY not set"
+        return "", meta
+    if not content.startswith(b"%PDF"):
+        meta["vision_error"] = "Not a PDF"
+        return "", meta
+    # Keep payload reasonable for API gateways
+    if len(content) > 12 * 1024 * 1024:
+        meta["vision_error"] = "PDF too large for direct vision OCR"
+        return "", meta
+
+    model = _vision_ocr_model()
+    client = OpenRouterClient(model=model)
+    meta["vision_model"] = model
+    b64 = base64.b64encode(content).decode("ascii")
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": OCR_VISION_SYSTEM},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "This attachment is a clinical PDF (often a scan). "
+                        "Transcribe ALL readable text exactly. Preserve headings, "
+                        "labels, numbers, and line breaks. Return only the transcript."
+                    ),
+                },
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "clinical-report.pdf",
+                        "file_data": f"data:application/pdf;base64,{b64}",
+                    },
+                },
+            ],
+        },
+    ]
+    try:
+        text = (await client.chat(messages=messages, temperature=0.0)).strip()
+    except Exception as exc:
+        # Some providers reject the file part — retry as image_url data-PDF
+        try:
+            messages[1]["content"][1] = {
+                "type": "image_url",
+                "image_url": {"url": f"data:application/pdf;base64,{b64}"},
+            }
+            text = (await client.chat(messages=messages, temperature=0.0)).strip()
+            meta["vision_mode"] = "pdf_as_image_url"
+        except Exception as exc2:
+            meta["vision_error"] = f"{exc}; retry: {exc2}"
+            return "", meta
+    if text:
+        return f"--- Page 1 (Vision OCR) ---\n{text}", meta
+    meta["vision_error"] = "Vision model returned empty transcript"
+    return "", meta
+
+
+async def _ocr_pages_with_vision(
+    content: bytes, *, max_pages: int = OCR_VISION_PAGE_LIMIT
+) -> tuple[str, dict[str, Any]]:
+    """Render PDF pages and OCR via OpenRouter vision."""
+    from app.config import settings
+    from app.services.openrouter_client import OpenRouterClient
+
+    meta: dict[str, Any] = {"vision_mode": "page_images"}
     if not settings.openrouter_api_key:
         meta["vision_error"] = "OPENROUTER_API_KEY not set"
         return "", meta
 
-    pages, renderer = render_pdf_page_pngs(content, max_pages=max_pages)
+    pages, renderer = render_pdf_page_pngs(
+        content, max_pages=max_pages, dpi=150
+    )
     meta["renderer"] = renderer
     if not pages:
         meta["vision_error"] = "Could not render PDF pages for vision OCR"
@@ -247,7 +337,9 @@ async def _ocr_with_openrouter_vision(
     meta["vision_model"] = model
     pages_out: list[str] = []
     for i, png in enumerate(pages, start=1):
-        b64 = base64.b64encode(png).decode("ascii")
+        jpeg = _png_to_jpeg_bytes(png)
+        b64 = base64.b64encode(jpeg).decode("ascii")
+        mime = "image/jpeg" if jpeg[:3] == b"\xff\xd8\xff" else "image/png"
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": OCR_VISION_SYSTEM},
             {
@@ -262,7 +354,7 @@ async def _ocr_with_openrouter_vision(
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
                     },
                 ],
             },
@@ -275,6 +367,38 @@ async def _ocr_with_openrouter_vision(
         if text:
             pages_out.append(f"--- Page {i} (Vision OCR) ---\n{text}")
     return "\n\n".join(pages_out), meta
+
+
+async def _ocr_with_openrouter_vision(
+    content: bytes, *, max_pages: int = OCR_VISION_PAGE_LIMIT
+) -> tuple[str, dict[str, Any]]:
+    """OCR scanned PDF via OpenRouter: prefer direct PDF, then rendered pages."""
+    text, meta = await _ocr_pdf_direct_with_vision(content)
+    if text and len(text.strip()) >= MIN_NATIVE_CHARS:
+        meta["vision_attempted"] = True
+        return text, meta
+
+    page_text, page_meta = await _ocr_pages_with_vision(content, max_pages=max_pages)
+    combined = dict(meta)
+    combined["vision_attempted"] = True
+    combined["pdf_direct"] = {
+        "ok": bool(text),
+        "chars": len(text or ""),
+        "error": meta.get("vision_error"),
+        "mode": meta.get("vision_mode"),
+    }
+    combined.update(page_meta)
+    if page_text and len(page_text.strip()) >= MIN_NATIVE_CHARS:
+        return page_text, combined
+    if page_text.strip():
+        return page_text, combined
+    if text.strip():
+        return text, combined
+    if not combined.get("vision_error"):
+        combined["vision_error"] = meta.get("vision_error") or page_meta.get(
+            "vision_error"
+        ) or "Vision OCR returned no text"
+    return "", combined
 
 
 def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
@@ -315,8 +439,8 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
     meta["extracted_chars"] = 0 if fallback == EMPTY_PDF_PLACEHOLDER else len(fallback)
     if not meta["ocr_available"]:
         meta["ocr_hint"] = (
-            "Local OCR tools are unavailable. BeatIt will try vision OCR via OpenRouter "
-            "when re-extracting, or install tesseract + poppler / deploy the Docker image."
+            "Local OCR tools are unavailable on this server. "
+            "Re-extract will try OpenRouter vision OCR automatically."
         )
     return fallback, meta
 
@@ -344,6 +468,9 @@ async def extract_pdf_text_async(content: bytes) -> tuple[str, dict[str, Any]]:
         meta["needs_ocr"] = len(vision_text) < MIN_NATIVE_CHARS
         return vision_text, meta
 
+    err = vision_meta.get("vision_error") or meta.get("vision_error")
+    if err:
+        meta["ocr_hint"] = f"OCR failed: {err}"
     return text, meta
 
 
