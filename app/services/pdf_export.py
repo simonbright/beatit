@@ -707,6 +707,7 @@ def _sparkline_png_bytes(
 
     day_vals = [_day(p[0]) for p in points]
     t_min, t_max = min(day_vals), max(day_vals)
+    read_min, read_max = t_min, t_max
     # Keep med starts that land shortly after the last lab on the timeline
     range_events = filter_events_for_range(
         milestones,
@@ -714,14 +715,26 @@ def _sparkline_png_bytes(
         end=points[-1][0],
         pad_days=60,
     )
+    pre_days: list[float] = []
+    post_days: list[float] = []
     for ev in range_events:
         d = str(ev.get("date") or "")[:10]
         if not d:
             continue
         day = _day(d)
-        if day:
-            t_min = min(t_min, day)
-            t_max = max(t_max, day)
+        if not day:
+            continue
+        if day < read_min:
+            pre_days.append(day)
+        if day > read_max:
+            post_days.append(day)
+    if pre_days:
+        span = read_max - read_min or 1.0
+        t_min = min(min(pre_days), read_min - max(span * 0.18, 40.0))
+    if post_days:
+        span = read_max - read_min or 1.0
+        # Visual headroom so a start a few days after the last lab isn't glued to it
+        t_max = max(max(post_days), read_max + max(span * 0.22, 50.0))
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)

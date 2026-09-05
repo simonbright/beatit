@@ -8792,10 +8792,11 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   max += pad;
   const span = max - min || 1;
   const yFor = (value) => h - padBottom - ((value - min) / span) * (h - padTop - padBottom);
-  const toDay = (iso) => new Date(`${iso}T12:00:00`).getTime();
+  const toDay = (iso) => new Date(`${String(iso).slice(0, 10)}T12:00:00`).getTime();
   const readMin = toDay(points[0].date);
   const readMax = toDay(points[points.length - 1].date);
-  // Stretch the axis so meds started just after the last lab still plot on-timeline
+  const dayMs = 86400000;
+  // Stretch the axis so meds started just after the last lab still plot with visible headroom
   const inRange = filterMilestonesForRange(
     milestones,
     points[0].date,
@@ -8804,11 +8805,24 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   );
   let tMin = readMin;
   let tMax = readMax;
+  const pre = [];
+  const post = [];
   for (const ev of inRange) {
-    const t = toDay(String(ev.date || "").slice(0, 10));
+    const t = toDay(ev.date);
     if (!Number.isFinite(t)) continue;
-    if (t < tMin) tMin = t;
-    if (t > tMax) tMax = t;
+    if (t < readMin) pre.push(t);
+    if (t > readMax) post.push(t);
+  }
+  if (pre.length) {
+    const earliest = Math.min(...pre);
+    const minLead = Math.max((readMax - readMin) * 0.18, 40 * dayMs);
+    tMin = Math.min(earliest, readMin - minLead);
+  }
+  if (post.length) {
+    const latest = Math.max(...post);
+    // Enough empty time after the last lab so a Sep 1 start isn't glued to Aug 27
+    const minHead = Math.max((readMax - readMin) * 0.22, 50 * dayMs);
+    tMax = Math.max(latest, readMax + minHead);
   }
   const tSpan = tMax - tMin || 1;
   const xFor = (iso) => padX + ((toDay(iso) - tMin) / tSpan) * (w - padX * 2);
@@ -8822,18 +8836,18 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       x: xFor(ev.date),
     }));
     markers.sort((a, b) => a.x - b.x || String(a.date).localeCompare(String(b.date)));
-    const minGap = 16;
+    const minGap = 18;
     for (let i = 1; i < markers.length; i++) {
       if (markers[i].x - markers[i - 1].x < minGap) {
         markers[i].x = Math.min(w - padX, markers[i - 1].x + minGap);
       }
     }
-    // Clear chart markers only (labels live in the HTML legend below — no overlapping SVG text)
     const accent = "#0f766e";
     milestoneLayer = markers
       .map((ev) => {
-        const x = ev.x;
-        if (!Number.isFinite(x) || x < padX - 2 || x > w - padX + 2) return "";
+        let x = ev.x;
+        if (!Number.isFinite(x)) return "";
+        x = Math.min(w - padX, Math.max(padX, x));
         const top = padTop - 2;
         const bot = h - padBottom;
         return `<g class="diag-milestone-mark">
@@ -8847,10 +8861,13 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       .join("");
     milestoneLegend = `<div class="diag-milestone-legend" aria-label="Medication milestones on this chart">
       ${markers
-        .map(
-          (ev) =>
-            `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}"><span class="diag-milestone-badge-dot" aria-hidden="true"></span>${escapeHtml(ev.label)}</span>`
-        )
+        .map((ev) => {
+          const short =
+            String(ev.label || "").length > 42
+              ? `${String(ev.label).slice(0, 41)}…`
+              : ev.label;
+          return `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}"><span class="diag-milestone-badge-dot" aria-hidden="true"></span>${escapeHtml(short)}</span>`;
+        })
         .join("")}
     </div>`;
   }
@@ -8887,23 +8904,11 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     })
     .join("");
 
-  // Unique date labels at the true time-scaled X (no duplicate days, no equal-grid skew)
-  const axisDates = [...coords.map((c) => c.date)];
-  if (inRange.length) {
-    for (const ev of inRange) {
-      const d = String(ev.date || "").slice(0, 10);
-      if (d && !axisDates.includes(d) && toDay(d) >= tMin && toDay(d) <= tMax) {
-        // Only add milestone dates beyond the last reading so the stretched axis is readable
-        if (toDay(d) > readMax || toDay(d) < readMin) axisDates.push(d);
-      }
-    }
-  }
-  axisDates.sort((a, b) => a.localeCompare(b));
-  const dateLabels = axisDates
-    .map((d, i) => {
-      const x = xFor(d);
-      const anchor = i === 0 ? "start" : i === axisDates.length - 1 ? "end" : "middle";
-      return `<text x="${x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="10" opacity="0.75">${escapeHtml(formatDiagDateAxis(d))}</text>`;
+  // Axis labels from readings only — milestone dates use the badges below (avoids Sep/Aug mash)
+  const dateLabels = coords
+    .map((c, i) => {
+      const anchor = i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle";
+      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="10" opacity="0.75">${escapeHtml(formatDiagDateAxis(c.date))}</text>`;
     })
     .join("");
 
