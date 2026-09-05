@@ -51,15 +51,24 @@ Important constraints:
 - Be compassionate but clinically precise"""
 
 
-async def build_medical_system_prompt(db: Database) -> str:
+async def build_medical_system_prompt(
+    db: Database,
+    *,
+    patient_id: str | None = None,
+    patient_label: str | None = None,
+    case_label: str | None = None,
+) -> str:
     reviewer = await db.get_setting("reviewer_context") or DEFAULT_REVIEWER_CONTEXT
     patient = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
     ctx = get_active_context()
-    demographics = format_profile_for_prompt(ctx.get("patient_id"), ctx.get("patient_label"))
+    pid = patient_id or ctx.get("patient_id")
+    plabel = patient_label or ctx.get("patient_label")
+    clabel = case_label or ctx.get("case_label")
+    demographics = format_profile_for_prompt(pid, plabel)
     if not demographics.strip():
         demographics = "- Not set yet."
     specialty = infer_assessment_specialty(
-        case_label=ctx.get("case_label"),
+        case_label=clabel,
         patient_context=patient,
     )
     base = MEDICAL_SYSTEM_TEMPLATE.format(
@@ -356,6 +365,10 @@ class SynthesisService:
         created_by: str | None = None,
         build_on_analysis_id: str | None = None,
         chat_observation_ids: list[str] | None = None,
+        patient_id: str | None = None,
+        case_id: str | None = None,
+        patient_label: str | None = None,
+        case_label: str | None = None,
     ) -> dict[str, Any]:
         observations = await resolve_observations_for_analysis(
             self.db,
@@ -413,9 +426,13 @@ class SynthesisService:
                     )
 
         ctx = get_active_context()
+        pinned_patient_id = patient_id or ctx.get("patient_id")
+        pinned_case_id = case_id or ctx.get("case_id")
+        pinned_patient_label = patient_label or ctx.get("patient_label")
+        pinned_case_label = case_label or ctx.get("case_label")
         patient_setting = await self.db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
         specialty = infer_assessment_specialty(
-            case_label=ctx.get("case_label"),
+            case_label=pinned_case_label,
             patient_context=patient_setting,
         )
 
@@ -447,7 +464,7 @@ class SynthesisService:
             else ""
         )
 
-        case_focus = (ctx.get("case_label") or "").strip()
+        case_focus = (pinned_case_label or "").strip()
         case_focus_line = (
             f"\nActive case focus: {case_focus}. Use {specialty['care_team']} wording — "
             f"do not invent an oncology framing unless this case is oncology.\n"
@@ -477,7 +494,12 @@ Do NOT substitute a generic case summary when the user asked for a specific deli
 
 Use clear ### headings for each section."""
 
-        system = await build_medical_system_prompt(self.db)
+        system = await build_medical_system_prompt(
+            self.db,
+            patient_id=pinned_patient_id,
+            patient_label=pinned_patient_label,
+            case_label=pinned_case_label,
+        )
         system = f"{system}\n\n{SOURCE_ATTRIBUTION_RULES}"
 
         response = await self.llm.generate(
@@ -513,6 +535,10 @@ Use clear ### headings for each section."""
             record_status=record_status,
             created_by=created_by,
             assessment_guidance=guidance_text or None,
+            patient_id=pinned_patient_id,
+            case_id=pinned_case_id,
+            patient_label=pinned_patient_label,
+            case_label=pinned_case_label,
         )
         return saved
 
@@ -524,6 +550,10 @@ Use clear ### headings for each section."""
         refinement: str,
         document_ids: list[str] | None = None,
         created_by: str | None = None,
+        patient_id: str | None = None,
+        case_id: str | None = None,
+        patient_label: str | None = None,
+        case_label: str | None = None,
     ) -> dict[str, Any]:
         existing = await self.db.get_analysis_by_id(analysis_id)
         if not existing or existing.get("record_status") != "draft":
@@ -591,7 +621,13 @@ Do NOT mention palliative care, hospice, or comfort care anywhere in the respons
 
 Use clear ### headings for each section."""
 
-        system = await build_medical_system_prompt(self.db)
+        ctx = get_active_context()
+        system = await build_medical_system_prompt(
+            self.db,
+            patient_id=patient_id or existing.get("patient_id") or ctx.get("patient_id"),
+            patient_label=patient_label or existing.get("patient_label") or ctx.get("patient_label"),
+            case_label=case_label or existing.get("case_label") or ctx.get("case_label"),
+        )
         system = f"{system}\n\n{SOURCE_ATTRIBUTION_RULES}"
 
         response = await self.llm.generate(
@@ -631,6 +667,7 @@ Use clear ### headings for each section."""
     async def summarize_documents(
         self,
         document_ids: list[str] | None = None,
+        **analyze_kwargs: Any,
     ) -> dict[str, Any]:
         return await self.analyze(
             query=(
@@ -640,4 +677,5 @@ Use clear ### headings for each section."""
             ),
             document_ids=document_ids,
             analysis_type="summarize",
+            **analyze_kwargs,
         )

@@ -9,7 +9,12 @@ from app.services.openrouter_models import (
     DEFAULT_OPENROUTER_MODEL,
     DEPRECATED_OPENROUTER_MODELS,
 )
-from app.services.patient_context import DEFAULT_PATIENT_CONTEXT, DEFAULT_REVIEWER_CONTEXT
+from app.services.patient_context import (
+    DEFAULT_PATIENT_CONTEXT,
+    DEFAULT_REVIEWER_CONTEXT,
+    should_scrub_legacy_cancer_patient_context,
+    should_scrub_legacy_oncology_reviewer_context,
+)
 from app.services.assessment_parse import ensure_executive_summary, parse_assessment
 from app.services.source_catalog import SourceCatalog
 from app.services.source_references import build_reference_bundle
@@ -27,7 +32,12 @@ class Database:
     def __init__(self, db_path=None):
         self.db_path = str(db_path or settings.db_path)
 
-    async def init(self) -> None:
+    async def init(
+        self,
+        *,
+        case_label: str | None = None,
+        case_id: str | None = None,
+    ) -> None:
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         settings.documents_dir.mkdir(parents=True, exist_ok=True)
         settings.extracted_dir.mkdir(parents=True, exist_ok=True)
@@ -76,11 +86,64 @@ class Database:
             if not existing:
                 await self.set_setting("openrouter_model", default_model)
 
+            scrub_case_label = case_label
+            scrub_case_id = case_id
+            if scrub_case_label is None or scrub_case_id is None:
+                try:
+                    from pathlib import Path as _Path
+
+                    from app.services.case_manager import get_active_context, load_registry
+
+                    parts = _Path(self.db_path).resolve().parts
+                    if "cases" in parts:
+                        idx = parts.index("cases")
+                        if idx + 1 < len(parts) and scrub_case_id is None:
+                            scrub_case_id = parts[idx + 1]
+                        if idx >= 2 and scrub_case_label is None:
+                            pid = parts[idx - 1] if parts[idx - 1] != "patients" else None
+                            # .../patients/<patient_id>/cases/<case_id>/
+                            if "patients" in parts:
+                                pidx = parts.index("patients")
+                                if pidx + 1 < idx:
+                                    pid = parts[pidx + 1]
+                                    reg = load_registry()
+                                    for p in reg.get("patients", []):
+                                        if p.get("id") == pid:
+                                            for c in p.get("cases", []):
+                                                if c.get("id") == scrub_case_id:
+                                                    scrub_case_label = c.get("label")
+                                                    break
+                    if scrub_case_label is None and scrub_case_id is None:
+                        ctx = get_active_context()
+                        active_id = ctx.get("case_id")
+                        if active_id and f"/cases/{active_id}/" in str(self.db_path).replace("\\", "/"):
+                            scrub_case_label = ctx.get("case_label")
+                            scrub_case_id = active_id
+                except Exception:
+                    pass
+
             if not await self.get_setting("patient_context"):
                 await self.set_setting("patient_context", DEFAULT_PATIENT_CONTEXT)
+            else:
+                current_patient = await self.get_setting("patient_context")
+                if should_scrub_legacy_cancer_patient_context(
+                    current_patient,
+                    case_label=scrub_case_label,
+                    case_id=scrub_case_id,
+                ):
+                    # Never leave Susan's oncology template on another person's case
+                    await self.set_setting("patient_context", DEFAULT_PATIENT_CONTEXT)
 
             if not await self.get_setting("reviewer_context"):
                 await self.set_setting("reviewer_context", DEFAULT_REVIEWER_CONTEXT)
+            else:
+                current_reviewer = await self.get_setting("reviewer_context")
+                if should_scrub_legacy_oncology_reviewer_context(
+                    current_reviewer,
+                    case_label=scrub_case_label,
+                    case_id=scrub_case_id,
+                ):
+                    await self.set_setting("reviewer_context", DEFAULT_REVIEWER_CONTEXT)
 
             await self._migrate_documents_citation_display_name(db)
             await self._migrate_documents_indexes(db)
@@ -499,6 +562,15 @@ class Database:
         await self._migrate_analysis_jobs_requested_by(db)
         await self._migrate_analysis_jobs_refinement(db)
         await self._migrate_analysis_jobs_chat_observations(db)
+        await self._migrate_analysis_jobs_patient_scope(db)
+
+    async def _migrate_analysis_jobs_patient_scope(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(analysis_jobs)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        for col_name in ("patient_id", "case_id", "patient_label", "case_label"):
+            if col_name not in columns:
+                await db.execute(f"ALTER TABLE analysis_jobs ADD COLUMN {col_name} TEXT")
+        await db.commit()
 
     async def _migrate_analysis_jobs_chat_observations(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(analysis_jobs)")
@@ -647,6 +719,10 @@ class Database:
         assessment_guidance: str | None = None,
         build_on_analysis_id: str | None = None,
         chat_observation_ids: list[str] | None = None,
+        patient_id: str | None = None,
+        case_id: str | None = None,
+        patient_label: str | None = None,
+        case_label: str | None = None,
     ) -> dict[str, Any]:
         job_id = str(uuid4())
         now = _now_iso()
@@ -665,6 +741,10 @@ class Database:
             "assessment_guidance": assessment_guidance,
             "build_on_analysis_id": build_on_analysis_id,
             "chat_observation_ids_json": json.dumps(chat_observation_ids or []),
+            "patient_id": patient_id,
+            "case_id": case_id,
+            "patient_label": patient_label,
+            "case_label": case_label,
             "created_at": now,
             "started_at": None,
             "completed_at": None,
@@ -677,11 +757,13 @@ class Database:
                  include_baseline_assessment, analysis_id, error, requested_by,
                  refine_analysis_id, refinement_notes, assessment_guidance, build_on_analysis_id,
                  chat_observation_ids_json,
+                 patient_id, case_id, patient_label, case_label,
                  created_at, started_at, completed_at)
                 VALUES (:id, :status, :job_type, :query, :document_ids_json,
                         :include_baseline_assessment, :analysis_id, :error, :requested_by,
                         :refine_analysis_id, :refinement_notes, :assessment_guidance, :build_on_analysis_id,
                         :chat_observation_ids_json,
+                        :patient_id, :case_id, :patient_label, :case_label,
                         :created_at, :started_at, :completed_at)
                 """,
                 row,
@@ -766,6 +848,10 @@ class Database:
             "assessment_guidance": row.get("assessment_guidance"),
             "build_on_analysis_id": row.get("build_on_analysis_id"),
             "chat_observation_ids": json.loads(row.get("chat_observation_ids_json") or "[]"),
+            "patient_id": row.get("patient_id"),
+            "case_id": row.get("case_id"),
+            "patient_label": row.get("patient_label"),
+            "case_label": row.get("case_label"),
             "created_at": row["created_at"],
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
@@ -827,6 +913,13 @@ class Database:
         if "assessment_guidance" not in columns:
             await db.execute("ALTER TABLE analyses ADD COLUMN assessment_guidance TEXT")
             await db.commit()
+        for col_name in ("patient_id", "case_id", "patient_label", "case_label"):
+            if col_name not in columns:
+                await db.execute(f"ALTER TABLE analyses ADD COLUMN {col_name} TEXT")
+                await db.commit()
+        # refresh columns set after alters
+        cursor = await db.execute("PRAGMA table_info(analyses)")
+        columns = {row[1] for row in await cursor.fetchall()}
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_analyses_record_status ON analyses(record_status, created_at DESC)"
         )
@@ -1078,6 +1171,10 @@ class Database:
         record_status: str = "official",
         created_by: str | None = None,
         assessment_guidance: str | None = None,
+        patient_id: str | None = None,
+        case_id: str | None = None,
+        patient_label: str | None = None,
+        case_label: str | None = None,
     ) -> dict[str, Any]:
         analysis_id = str(uuid4())
         now = _now_iso()
@@ -1100,6 +1197,10 @@ class Database:
             "updated_at": now,
             "refinement_count": 0,
             "assessment_guidance": assessment_guidance,
+            "patient_id": patient_id,
+            "case_id": case_id,
+            "patient_label": patient_label,
+            "case_label": case_label,
         }
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -1108,11 +1209,13 @@ class Database:
                 (id, query, response, document_ids_json, model, analysis_type,
                  executive_summary, open_items_json, record_status, promoted_at,
                  created_by, annotation_title, annotation_header, annotation_notes,
-                 created_at, updated_at, refinement_count, assessment_guidance)
+                 created_at, updated_at, refinement_count, assessment_guidance,
+                 patient_id, case_id, patient_label, case_label)
                 VALUES (:id, :query, :response, :document_ids_json, :model, :analysis_type,
                         :executive_summary, :open_items_json, :record_status, :promoted_at,
                         :created_by, :annotation_title, :annotation_header, :annotation_notes,
-                        :created_at, :updated_at, :refinement_count, :assessment_guidance)
+                        :created_at, :updated_at, :refinement_count, :assessment_guidance,
+                        :patient_id, :case_id, :patient_label, :case_label)
                 """,
                 row,
             )
@@ -1436,6 +1539,10 @@ class Database:
             "updated_at": row.get("updated_at") or row["created_at"],
             "refinement_count": int(row.get("refinement_count") or 0),
             "assessment_guidance": row.get("assessment_guidance"),
+            "patient_id": row.get("patient_id"),
+            "case_id": row.get("case_id"),
+            "patient_label": row.get("patient_label"),
+            "case_label": row.get("case_label"),
         }
 
     async def create_chat_session(

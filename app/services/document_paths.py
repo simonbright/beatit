@@ -40,6 +40,7 @@ def _basename_candidates(doc: dict[str, Any], *, kind: str) -> list[str]:
 
 
 def _search_roots() -> list[Path]:
+    """Search only the active patient (and legacy flat dirs) — never every patient."""
     roots: list[Path] = []
     seen: set[str] = set()
 
@@ -70,13 +71,6 @@ def _search_roots() -> list[Path]:
                 add(case_dir / "extracted")
     except Exception:
         pass
-
-    # Broad scan under data/patients/*/cases/*/documents|extracted
-    patients = settings.data_dir / "patients"
-    if patients.is_dir():
-        for case_dir in patients.glob("*/cases/*"):
-            add(case_dir / "documents")
-            add(case_dir / "extracted")
 
     return roots
 

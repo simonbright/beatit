@@ -2036,15 +2036,26 @@ async def _export_analysis_pdf_response(
     request: Request,
     analysis: dict[str, Any],
 ) -> FastAPIResponse:
-    patient_context = await db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
-    catalog = await _source_catalog(db)
     ctx = get_active_context()
-    profile = ctx.get("profile") if ctx.get("patient_id") else None
-    if profile is None and ctx.get("patient_id"):
-        profile = get_patient_profile(ctx["patient_id"])
+    # Prefer identity pinned on the analysis so a live patient switch cannot relabel the PDF.
+    patient_id = analysis.get("patient_id") or ctx.get("patient_id")
+    case_id = analysis.get("case_id") or ctx.get("case_id")
+    patient_label = analysis.get("patient_label") or ctx.get("patient_label")
+    case_label = analysis.get("case_label") or ctx.get("case_label")
+
+    context_db = db
+    if analysis.get("patient_id") and analysis.get("case_id"):
+        from app.services.case_manager import _case_dir
+
+        case_db_path = _case_dir(analysis["patient_id"], analysis["case_id"]) / "beatit.db"
+        if case_db_path.is_file() and str(case_db_path) != str(db.db_path):
+            context_db = Database(db_path=case_db_path)
+
+    patient_context = await context_db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+    catalog = await _source_catalog(context_db)
+    profile = get_patient_profile(patient_id) if patient_id else None
     diagnostic_series = group_diagnostics_for_charts(profile) if profile else []
     milestones = all_chart_milestones(profile) if profile else []
-    patient_label = ctx.get("patient_label")
     sub_bits: list[str] = []
     if profile:
         age = age_years_from_dob(profile.get("date_of_birth"))
@@ -2052,8 +2063,8 @@ async def _export_analysis_pdf_response(
             sub_bits.append(f"Age {age}")
         if profile.get("gender"):
             sub_bits.append(str(profile["gender"]))
-    if ctx.get("case_label"):
-        sub_bits.append(f"Case: {ctx['case_label']}")
+    if case_label:
+        sub_bits.append(f"Case: {case_label}")
     pdf_bytes = build_assessment_pdf(
         analysis,
         patient_context=patient_context,
@@ -2077,6 +2088,10 @@ async def _export_analysis_pdf_response(
             "analysis_type": analysis.get("analysis_type"),
             "record_status": analysis.get("record_status"),
             "created_by": analysis.get("created_by"),
+            "patient_id": patient_id,
+            "case_id": case_id,
+            "patient_label": patient_label,
+            "case_label": case_label,
         },
     )
     return FastAPIResponse(
