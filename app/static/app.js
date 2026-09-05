@@ -8964,9 +8964,7 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   }
 
   const span = seriesDateSpan(cards);
-  const inSpan = span
-    ? filterMilestonesForRange(allEvents, span.start, span.end, 0)
-    : allEvents;
+  const inSpan = milestonesForLabSpan(allEvents, span);
   const prefs = state.diagMilestonePrefs || loadDiagMilestonePrefs(state.activePatientId, inSpan);
   const milestones = opts.milestones || visibleDiagMilestones(inSpan, prefs);
 
