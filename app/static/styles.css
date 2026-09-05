@@ -732,6 +732,17 @@ body {
   justify-content: flex-end;
 }
 
+.med-log-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  margin-right: 0.25rem;
+  white-space: nowrap;
+  align-self: center;
+  font-weight: 600;
+}
+
 .medication-history {
   margin: 0.35rem 0 0;
   font-size: 0.8rem;
@@ -1028,6 +1039,56 @@ body {
   align-items: center;
   gap: 0.4rem;
   font-size: 0.88rem;
+}
+
+.journal-add-to-list {
+  margin-top: 0.45rem;
+}
+
+.journal-add-to-list-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+}
+
+.journal-med-hidden {
+  margin-top: 0.55rem;
+}
+
+.journal-med-hidden .journal-chip {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+.journal-med-manage {
+  margin: 0.45rem 0 0;
+}
+
+.journal-chip.is-quick-pick::after {
+  content: " +";
+  opacity: 0.65;
+  font-weight: 600;
+}
+
+.food-drink-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  align-items: end;
+  margin-bottom: 0.75rem;
+}
+
+.food-drink-form label {
+  flex: 1 1 12rem;
+}
+
+.food-drink-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
 }
 
 .journal-when-details summary {

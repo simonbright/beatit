@@ -134,8 +134,15 @@
         <p class="journal-chip-label muted small">What I did — tap several</p>
         <div class="journal-chips" id="journal-action-chips" role="group" aria-label="Action chips"></div>
         <div id="journal-med-options" class="journal-subchip-block hidden">
-          <p class="journal-chip-label muted small">Which medicine?</p>
+          <p class="journal-chip-label muted small">Which medicine? <span class="journal-med-hint" id="journal-med-hint"></span></p>
           <div class="journal-chips" id="journal-med-chips" role="group" aria-label="Medication taken"></div>
+          <div id="journal-med-hidden" class="journal-med-hidden hidden">
+            <p class="muted small">Hidden from Log (usually daily Rx). Tap to show here:</p>
+            <div class="journal-chips" id="journal-med-hidden-chips" role="group" aria-label="Medications hidden from log"></div>
+          </div>
+          <p class="muted small journal-med-manage">
+            <button type="button" class="btn ghost btn-sm" id="btn-journal-meds-settings">Manage meds &amp; Show on Log</button>
+          </p>
         </div>
         <div id="journal-food-options" class="journal-subchip-block hidden">
           <p class="journal-chip-label muted small">What did you eat or drink?</p>
@@ -154,13 +161,14 @@
         <button type="button" class="btn ghost btn-sm" id="btn-journal-clear-sev">Clear</button>
       </div>
       <label class="journal-text-label" for="journal-text">Details
-        <input type="text" id="journal-text" maxlength="500" placeholder="e.g. 500mg aspirin, worse lying down…" autocomplete="off">
+        <input type="text" id="journal-text" maxlength="500" placeholder="e.g. green tea, worse lying down…" autocomplete="off">
       </label>
+      <label class="journal-check journal-add-to-list" for="journal-add-to-list">
+        <input type="checkbox" id="journal-add-to-list">
+        <span id="journal-add-to-list-label">Add to my List</span>
+      </label>
+      <p class="muted small journal-add-to-list-hint" id="journal-add-to-list-hint"></p>
       <div class="journal-meta-row">
-        <label class="journal-check">
-          <input type="checkbox" id="journal-link-case">
-          Link to this case
-        </label>
         <details class="journal-when-details">
           <summary class="muted small">Change time</summary>
           <label for="journal-when">When
@@ -1316,8 +1324,20 @@
         <div id="patient-diagnostics-list" class="patient-measurements-list"></div>
 
         <h4 class="patient-measurements-title">Self-reports</h4>
-        <p class="muted small">Feelings (including when you’re better), symptoms, one-off meds taken, and notes. Usually logged from Home; manage the full list here.</p>
+        <p class="muted small">Feelings, symptoms, meds taken, and notes for this person (shared across cases). Logged from Home.</p>
         <div id="patient-journal-list" class="patient-measurements-list"></div>
+
+        <h4 class="patient-measurements-title" id="food-drinks-settings-heading">Ate / Drank list</h4>
+        <p class="muted small">Quick picks shown when logging Ate/Drank. Add from here or check <em>Add to my List</em> when logging details.</p>
+        <div class="patient-measurement-form food-drink-form" id="food-drink-form">
+          <label for="food-drink-label">Item
+            <input type="text" id="food-drink-label" maxlength="80" placeholder="e.g. Water, coffee, toast" autocomplete="off">
+          </label>
+          <div class="med-form-actions">
+            <button type="button" class="btn secondary" id="btn-save-food-drink">Add to list</button>
+          </div>
+        </div>
+        <div id="patient-food-drinks-list" class="patient-measurements-list"></div>
 
         <h4 class="patient-measurements-title" id="milestones-settings-heading">Timeline milestones</h4>
         <p class="muted small">Lifestyle and other dated milestones (exercise, diet changes, etc.) shown on Labs charts alongside medication starts and dose changes.</p>
@@ -1341,7 +1361,7 @@
         <div id="patient-milestones-list" class="patient-measurements-list"></div>
 
         <h4 class="patient-measurements-title" id="medications-settings-heading">Medications &amp; remedies</h4>
-        <p class="muted small">Anything this person uses — prescriptions, over‑the‑counter, and remedies (CBD, supplements, etc.). Changing dosage or frequency keeps prior values as history.</p>
+        <p class="muted small">Anything this person uses — prescriptions, OTC, and remedies. Check <strong>Show on Log</strong> for meds that should appear under Took medication. Log only shows this person’s opted-in meds (nothing shared between people).</p>
         <div class="medication-import-block" id="medication-import-block">
           <p class="muted small">Have a printed or photo list? Import a PDF or image, review the parsed rows, then add what looks right.</p>
           <div class="medication-import-controls row-between wrap">
@@ -1372,7 +1392,7 @@
           <input type="hidden" id="med-edit-id" value="">
           <p class="muted small med-identity-hint hidden" id="med-identity-hint" role="status"></p>
           <label for="med-name">Name
-            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin or CBD Drops" autocomplete="off">
+            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin or Magnesium" autocomplete="off">
           </label>
           <label for="med-category">Type
             <select id="med-category">
@@ -1420,6 +1440,10 @@
           </label>
           <label for="med-notes" class="med-span-2">Notes
             <input type="text" id="med-notes" maxlength="500" placeholder="Optional" autocomplete="off">
+          </label>
+          <label class="journal-check med-span-2" for="med-show-on-log">
+            <input type="checkbox" id="med-show-on-log">
+            Show on Log screen (Took medication chips)
           </label>
           <label for="med-history-note" class="med-span-2 med-history-note-wrap hidden">Change note
             <input type="text" id="med-history-note" maxlength="200" placeholder="Optional — e.g. increased for lipids" autocomplete="off">

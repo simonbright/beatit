@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +17,14 @@ from app.storage.documents import DocumentStore
 MIN_NATIVE_CHARS = 80
 EMPTY_PDF_PLACEHOLDER = "[No extractable text in PDF — may be scanned/image-based]"
 OCR_PAGE_LIMIT = 20
+OCR_VISION_PAGE_LIMIT = 8
+OCR_RENDER_DPI = 200
+
+OCR_VISION_SYSTEM = (
+    "You are a precise OCR engine for clinical documents. "
+    "Transcribe all readable text exactly. Preserve headings, labels, numbers, "
+    "tables, and line breaks as plain text. Do not summarize, diagnose, or omit values."
+)
 
 
 def _page_count(content: bytes) -> int:
@@ -57,13 +66,43 @@ def _run_pdftotext(content: bytes) -> str:
         return text
 
 
-def _ocr_with_tesseract(content: bytes, *, max_pages: int = OCR_PAGE_LIMIT) -> str:
-    pdftoppm = shutil.which("pdftoppm")
-    tesseract = shutil.which("tesseract")
-    if not pdftoppm or not tesseract:
-        return ""
+def _pymupdf_available() -> bool:
+    try:
+        import pymupdf  # noqa: F401
 
-    pages_out: list[str] = []
+        return True
+    except Exception:
+        try:
+            import fitz  # noqa: F401
+
+            return True
+        except Exception:
+            return False
+
+
+def _tesseract_available() -> bool:
+    return bool(shutil.which("tesseract"))
+
+
+def _pdftoppm_available() -> bool:
+    return bool(shutil.which("pdftoppm"))
+
+
+def ocr_runtime_status() -> dict[str, Any]:
+    return {
+        "tesseract": _tesseract_available(),
+        "pdftoppm": _pdftoppm_available(),
+        "pymupdf": _pymupdf_available(),
+        "local_ocr": _tesseract_available()
+        and (_pdftoppm_available() or _pymupdf_available()),
+    }
+
+
+def _render_pdf_pages_pdftoppm(
+    content: bytes, *, max_pages: int, dpi: int
+) -> list[bytes]:
+    if not _pdftoppm_available():
+        return []
     with tempfile.TemporaryDirectory(prefix="beatit-ocr-") as tmp:
         pdf_path = Path(tmp) / "doc.pdf"
         pdf_path.write_bytes(content)
@@ -71,10 +110,10 @@ def _ocr_with_tesseract(content: bytes, *, max_pages: int = OCR_PAGE_LIMIT) -> s
         try:
             subprocess.run(
                 [
-                    pdftoppm,
+                    "pdftoppm",
                     "-png",
                     "-r",
-                    "200",
+                    str(dpi),
                     "-f",
                     "1",
                     "-l",
@@ -87,32 +126,166 @@ def _ocr_with_tesseract(content: bytes, *, max_pages: int = OCR_PAGE_LIMIT) -> s
                 timeout=300,
             )
         except (subprocess.SubprocessError, OSError):
-            return ""
+            return []
+        return [p.read_bytes() for p in sorted(Path(tmp).glob("page-*.png"))]
 
-        images = sorted(Path(tmp).glob("page-*.png"))
-        for i, image in enumerate(images, start=1):
-            try:
-                result = subprocess.run(
-                    [tesseract, str(image), "stdout", "-l", "eng", "--psm", "6"],
-                    check=True,
-                    capture_output=True,
-                    timeout=120,
-                )
-            except (subprocess.SubprocessError, OSError):
-                continue
-            text = result.stdout.decode("utf-8", errors="ignore").strip()
-            if text:
-                pages_out.append(f"--- Page {i} (OCR) ---\n{text}")
+
+def _render_pdf_pages_pymupdf(
+    content: bytes, *, max_pages: int, dpi: int
+) -> list[bytes]:
+    try:
+        try:
+            import pymupdf as fitz
+        except Exception:
+            import fitz
+    except Exception:
+        return []
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        return []
+    zoom = dpi / 72.0
+    matrix = fitz.Matrix(zoom, zoom)
+    pages: list[bytes] = []
+    try:
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            pages.append(pix.tobytes("png"))
+    finally:
+        doc.close()
+    return pages
+
+
+def render_pdf_page_pngs(
+    content: bytes,
+    *,
+    max_pages: int = OCR_PAGE_LIMIT,
+    dpi: int = OCR_RENDER_DPI,
+) -> tuple[list[bytes], str]:
+    """Return (png_pages, renderer_name). Prefers pdftoppm, falls back to PyMuPDF."""
+    pages = _render_pdf_pages_pdftoppm(content, max_pages=max_pages, dpi=dpi)
+    if pages:
+        return pages, "pdftoppm"
+    pages = _render_pdf_pages_pymupdf(content, max_pages=max_pages, dpi=dpi)
+    if pages:
+        return pages, "pymupdf"
+    return [], "none"
+
+
+def _tesseract_png_bytes(png: bytes) -> str:
+    tesseract = shutil.which("tesseract")
+    if not tesseract or not png:
+        return ""
+    with tempfile.TemporaryDirectory(prefix="beatit-tess-") as tmp:
+        img_path = Path(tmp) / "page.png"
+        img_path.write_bytes(png)
+        try:
+            result = subprocess.run(
+                [tesseract, str(img_path), "stdout", "-l", "eng", "--psm", "6"],
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return ""
+        return result.stdout.decode("utf-8", errors="ignore").strip()
+
+
+def _ocr_with_tesseract(content: bytes, *, max_pages: int = OCR_PAGE_LIMIT) -> str:
+    if not _tesseract_available():
+        return ""
+    pages, _renderer = render_pdf_page_pngs(content, max_pages=max_pages)
+    if not pages:
+        return ""
+    pages_out: list[str] = []
+    for i, png in enumerate(pages, start=1):
+        text = _tesseract_png_bytes(png)
+        if text:
+            pages_out.append(f"--- Page {i} (OCR) ---\n{text}")
     return "\n\n".join(pages_out)
+
+
+def _vision_ocr_model() -> str:
+    from app.config import settings
+    from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL
+
+    model = (settings.openrouter_model or DEFAULT_OPENROUTER_MODEL).strip()
+    lower = model.lower()
+    # Text-only Llama instruct models cannot OCR page images
+    if "llama" in lower and "vision" not in lower:
+        return DEFAULT_OPENROUTER_MODEL
+    if any(
+        token in lower
+        for token in ("gemini", "gpt-4o", "gpt-5", "claude", "vision", "flash")
+    ):
+        return model
+    return DEFAULT_OPENROUTER_MODEL
+
+
+async def _ocr_with_openrouter_vision(
+    content: bytes, *, max_pages: int = OCR_VISION_PAGE_LIMIT
+) -> tuple[str, dict[str, Any]]:
+    """OCR scanned PDF pages via OpenRouter vision when local tesseract is unavailable."""
+    from app.config import settings
+    from app.services.openrouter_client import OpenRouterClient
+
+    meta: dict[str, Any] = {"vision_attempted": True}
+    if not settings.openrouter_api_key:
+        meta["vision_error"] = "OPENROUTER_API_KEY not set"
+        return "", meta
+
+    pages, renderer = render_pdf_page_pngs(content, max_pages=max_pages)
+    meta["renderer"] = renderer
+    if not pages:
+        meta["vision_error"] = "Could not render PDF pages for vision OCR"
+        return "", meta
+
+    model = _vision_ocr_model()
+    client = OpenRouterClient(model=model)
+    meta["vision_model"] = model
+    pages_out: list[str] = []
+    for i, png in enumerate(pages, start=1):
+        b64 = base64.b64encode(png).decode("ascii")
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": OCR_VISION_SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Transcribe page {i} of {len(pages)} from this clinical PDF. "
+                            "Return only the transcribed text."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    },
+                ],
+            },
+        ]
+        try:
+            text = (await client.chat(messages=messages, temperature=0.0)).strip()
+        except Exception as exc:
+            meta["vision_error"] = str(exc)
+            break
+        if text:
+            pages_out.append(f"--- Page {i} (Vision OCR) ---\n{text}")
+    return "\n\n".join(pages_out), meta
 
 
 def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
     """Return (text, extraction_meta). Uses OCR when native extract is empty/thin."""
+    runtime = ocr_runtime_status()
     meta: dict[str, Any] = {
         "page_count": _page_count(content),
         "extraction_method": "native",
         "needs_ocr": False,
-        "ocr_available": bool(shutil.which("pdftoppm") and shutil.which("tesseract")),
+        "ocr_available": runtime["local_ocr"],
+        "ocr_runtime": runtime,
     }
 
     native = extract_pdf_text_native(content).strip()
@@ -123,7 +296,6 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
 
     pdftotext = _run_pdftotext(content).strip()
     if len(pdftotext) >= MIN_NATIVE_CHARS:
-        # Format with page breaks if plain dump
         formatted = pdftotext
         meta["extraction_method"] = "pdftotext"
         meta["extracted_chars"] = len(formatted)
@@ -143,10 +315,36 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
     meta["extracted_chars"] = 0 if fallback == EMPTY_PDF_PLACEHOLDER else len(fallback)
     if not meta["ocr_available"]:
         meta["ocr_hint"] = (
-            "Install poppler (pdftoppm) and tesseract for automatic OCR of scanned PDFs, "
-            "or paste OCR text via Add data / AI Chat."
+            "Local OCR tools are unavailable. BeatIt will try vision OCR via OpenRouter "
+            "when re-extracting, or install tesseract + poppler / deploy the Docker image."
         )
     return fallback, meta
+
+
+async def extract_pdf_text_async(content: bytes) -> tuple[str, dict[str, Any]]:
+    """Like extract_pdf_text, then OpenRouter vision OCR if local OCR failed."""
+    text, meta = extract_pdf_text(content)
+    if not meta.get("needs_ocr"):
+        return text, meta
+    if len((text or "").strip()) >= MIN_NATIVE_CHARS and text != EMPTY_PDF_PLACEHOLDER:
+        return text, meta
+
+    vision_text, vision_meta = await _ocr_with_openrouter_vision(content)
+    meta.update(vision_meta)
+    if vision_text and len(vision_text.strip()) >= MIN_NATIVE_CHARS:
+        meta["extraction_method"] = "vision_ocr"
+        meta["extracted_chars"] = len(vision_text)
+        meta["needs_ocr"] = False
+        meta.pop("ocr_hint", None)
+        return vision_text, meta
+
+    if vision_text.strip():
+        meta["extraction_method"] = "vision_ocr_thin"
+        meta["extracted_chars"] = len(vision_text)
+        meta["needs_ocr"] = len(vision_text) < MIN_NATIVE_CHARS
+        return vision_text, meta
+
+    return text, meta
 
 
 def is_empty_pdf_extract(text: str | None) -> bool:
@@ -298,7 +496,7 @@ async def ingest_pdf_bytes(
 ) -> dict[str, Any]:
     from app.services.clinical_report_classify import classify_and_update_document
 
-    extracted, extraction_meta = extract_pdf_text(content)
+    extracted, extraction_meta = await extract_pdf_text_async(content)
     meta = dict(metadata or {})
     meta["original_filename"] = filename
     meta.update(extraction_meta)
@@ -352,7 +550,7 @@ async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> d
             "Stored PDF file is missing on disk. Re-upload the PDF with Replace file, then try Re-extract again."
         )
     content = path.read_bytes()
-    extracted, extraction_meta = extract_pdf_text(content)
+    extracted, extraction_meta = await extract_pdf_text_async(content)
     saved = await store.save_extracted_text(doc["id"], extracted)
     meta = dict(doc.get("metadata") or {})
     meta.update(extraction_meta)

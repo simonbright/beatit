@@ -142,6 +142,9 @@ from app.services.case_manager import (
     update_patient_medication,
     stop_patient_medication,
     delete_patient_medication,
+    add_patient_food_drink,
+    update_patient_food_drink,
+    delete_patient_food_drink,
     add_patient_milestone,
     update_patient_milestone,
     delete_patient_milestone,
@@ -2966,6 +2969,7 @@ class PatientMedicationCreateRequest(BaseModel):
     started_at: str | None = Field(default=None, max_length=20)
     ended_at: str | None = Field(default=None, max_length=20)
     category: str | None = Field(default="prescription", max_length=32)
+    show_on_log: bool | None = None
 
 
 class PatientMedicationUpdateRequest(BaseModel):
@@ -2977,6 +2981,7 @@ class PatientMedicationUpdateRequest(BaseModel):
     started_at: str | None = Field(default=None, max_length=20)
     ended_at: str | None = Field(default=None, max_length=20)
     category: str | None = Field(default=None, max_length=32)
+    show_on_log: bool | None = None
     history_note: str | None = Field(default=None, max_length=200)
     effective_at: str | None = Field(default=None, max_length=20)
 
@@ -3111,6 +3116,7 @@ async def api_add_patient_medication(patient_id: str, body: PatientMedicationCre
             started_at=body.started_at,
             ended_at=body.ended_at,
             category=body.category,
+            show_on_log=body.show_on_log,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3149,6 +3155,8 @@ async def api_update_patient_medication(
         kwargs["ended_at"] = body.ended_at
     if "category" in fields_set:
         kwargs["category"] = body.category
+    if "show_on_log" in fields_set:
+        kwargs["show_on_log"] = body.show_on_log
     if "effective_at" in fields_set:
         kwargs["effective_at"] = body.effective_at
     try:
@@ -3196,6 +3204,66 @@ async def api_delete_patient_medication(patient_id: str, medication_id: str):
     ok = delete_patient_medication(patient_id, medication_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Medication not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientFoodDrinkCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+
+
+class PatientFoodDrinkUpdateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+
+
+@router.post("/patients/{patient_id}/food-drinks")
+async def api_add_patient_food_drink(patient_id: str, body: PatientFoodDrinkCreateRequest):
+    try:
+        entry = add_patient_food_drink(patient_id, body.label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "food_drink": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.patch("/patients/{patient_id}/food-drinks/{food_id}")
+async def api_update_patient_food_drink(
+    patient_id: str,
+    food_id: str,
+    body: PatientFoodDrinkUpdateRequest,
+):
+    try:
+        entry = update_patient_food_drink(patient_id, food_id, label=body.label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "food_drink": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/food-drinks/{food_id}")
+async def api_delete_patient_food_drink(patient_id: str, food_id: str):
+    ok = delete_patient_food_drink(patient_id, food_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Item not found")
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,

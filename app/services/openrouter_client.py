@@ -106,7 +106,7 @@ class OpenRouterClient:
     async def chat(
         self,
         *,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: float = 0.3,
     ) -> str:
         if not self.api_key:

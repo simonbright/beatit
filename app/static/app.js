@@ -5964,7 +5964,13 @@ async function reextractDocument(id) {
           handling,
         });
       } else if (needs) {
-        toast("Still little text — OCR tools may be unavailable, or the scan is unreadable", "error");
+        const hint = data.document?.metadata?.ocr_hint || data.document?.metadata?.vision_error;
+        toast(
+          hint
+            ? `Still little text — ${hint}`
+            : "Still little text — OCR tools may be unavailable, or the scan is unreadable",
+          "error"
+        );
         await refreshHandlingFlags();
       } else {
         const kindLabel = data.document?.metadata?.clinical_report_kind_label;
@@ -7563,6 +7569,7 @@ async function loadCaseContext() {
 
     state.activePatientId = ctx.patient_id || null;
     state.activeCaseId = ctx.case_id || null;
+    state.patientProfile = null;
     state.diagStatusFilter = "all";
     state.coverageReport = null;
     if (ctx.patient_id) {
@@ -7631,6 +7638,8 @@ function renderPatientProfile(profile, patientId, extras = {}) {
     if (diagListEl) diagListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
     if (journalListEl) journalListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
     if (medListEl) medListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    const foodListEl = document.getElementById("patient-food-drinks-list");
+    if (foodListEl) foodListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
     renderMedicationsHome(null);
@@ -7694,6 +7703,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   }
 
   renderMedicationsSettings(profile);
+  renderFoodDrinksSettings(profile);
   renderMilestonesSettings(profile);
   const series = resolveDiagnosticSeries(profile, extras);
   state.patientProfile = profile || null;
@@ -7743,7 +7753,6 @@ function formatMedicationCategoryBadge(m) {
 
 function defaultCommonRemedies() {
   return [
-    { name: "CBD Drops", category: "remedy" },
     { name: "CBD 1 drop", category: "remedy", dosage: "1 drop", frequency: "as needed" },
     { name: "CBD 2 drops", category: "remedy", dosage: "2 drops", frequency: "as needed" },
     { name: "Magnesium", category: "remedy" },
@@ -8521,6 +8530,23 @@ async function addMilestoneFromForm({ presetSelId, customId, dateId, notesId }) 
   return data;
 }
 
+function medicationShowsOnLog(m) {
+  return Boolean(m && m.show_on_log === true);
+}
+
+function defaultShowOnLogForForm() {
+  // Opt-in only — user must check Show on Log (or add from the Log screen).
+  return false;
+}
+
+function syncMedShowOnLogDefault({ force = false } = {}) {
+  const el = document.getElementById("med-show-on-log");
+  if (!el) return;
+  const editing = Boolean(document.getElementById("med-edit-id")?.value);
+  if (editing && !force) return;
+  el.checked = defaultShowOnLogForForm();
+}
+
 function renderMedicationsSettings(profile) {
   const el = document.getElementById("patient-medications-list");
   if (!el) return;
@@ -8536,7 +8562,12 @@ function renderMedicationsSettings(profile) {
     const endedBit = m.stopped_at ? `Ended ${formatDiagDate(m.stopped_at)}` : "";
     const notes = m.notes ? escapeHtml(m.notes) : "";
     const meta = [formatMedicationDoseLine(m), started, endedBit, notes].filter(Boolean).join(" · ");
-    const actions = `${formatMedicationFixActions(m)}
+    const onLog = medicationShowsOnLog(m);
+    const actions = `<label class="med-log-check" title="Show under Took medication on the Log screen">
+         <input type="checkbox" class="med-show-on-log-toggle" data-id="${escapeHtml(m.id)}" ${onLog ? "checked" : ""}>
+         Show on Log
+       </label>
+         ${formatMedicationFixActions(m)}
          ${isStopped ? "" : `<button type="button" class="btn ghost btn-sm btn-stop-medication" data-id="${escapeHtml(m.id)}">Stop</button>`}
          <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
     return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
@@ -8556,6 +8587,24 @@ function renderMedicationsSettings(profile) {
   }
   el.innerHTML = html || `<p class="muted small">No medications or remedies yet.</p>`;
   renderRemedyQuickChips();
+}
+
+function renderFoodDrinksSettings(profile) {
+  const el = document.getElementById("patient-food-drinks-list");
+  if (!el) return;
+  const items = profile?.food_drinks || [];
+  if (!items.length) {
+    el.innerHTML = `<p class="muted small">No ate/drank items yet. Add Water, coffee, etc. here or via journal.</p>`;
+    return;
+  }
+  el.innerHTML = items
+    .map(
+      (f) => `<div class="food-drink-row" data-id="${escapeHtml(f.id || "")}">
+      <strong>${escapeHtml(f.label || "")}</strong>
+      <button type="button" class="btn ghost btn-sm btn-delete-food-drink" data-id="${escapeHtml(f.id || "")}">Remove</button>
+    </div>`
+    )
+    .join("");
 }
 
 function clearMedicationForm() {
@@ -8581,6 +8630,7 @@ function clearMedicationForm() {
   const saveBtn = document.getElementById("btn-save-medication");
   if (saveBtn) saveBtn.textContent = "Add medication / remedy";
   document.getElementById("btn-cancel-med-edit")?.classList.add("hidden");
+  syncMedShowOnLogDefault({ force: true });
 }
 
 function fillMedicationForm(m) {
@@ -8595,6 +8645,8 @@ function fillMedicationForm(m) {
   document.getElementById("med-started").value = m.started_at ? String(m.started_at).slice(0, 10) : "";
   document.getElementById("med-ended").value = m.stopped_at ? String(m.stopped_at).slice(0, 10) : "";
   document.getElementById("med-history-note").value = "";
+  const showLog = document.getElementById("med-show-on-log");
+  if (showLog) showLog.checked = medicationShowsOnLog(m);
   const effective = document.getElementById("med-effective-at");
   if (effective) {
     const today = new Date();
@@ -8884,9 +8936,8 @@ function formatJournalDateTime(iso) {
 function formatJournalListRow(j) {
   const sev = j.severity != null ? ` · sev ${j.severity}/5` : "";
   const text = j.text ? ` · ${j.text}` : "";
-  const caseBit = j.case_id ? " · case-linked" : "";
   return `<div class="patient-measurement-row" data-id="${escapeHtml(j.id)}">
-    <div><span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span><strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${escapeHtml(text)} · ${escapeHtml(formatJournalDateTime(j.recorded_at))}${escapeHtml(caseBit)}</div>
+    <div><span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span><strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${escapeHtml(text)} · ${escapeHtml(formatJournalDateTime(j.recorded_at))}</div>
     <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Remove</button>
   </div>`;
 }
@@ -8920,9 +8971,6 @@ const POSITIVE_JOURNAL_LABELS = new Set([
   "energetic",
   "pain-free",
 ]);
-
-const JOURNAL_CBD_OPTIONS = ["CBD Drops", "CBD 1 drop", "CBD 2 drops"];
-const JOURNAL_FOOD_OPTIONS = ["Water"];
 
 function emptyJournalDraft() {
   return {
@@ -8988,32 +9036,118 @@ function ensureJournalChips() {
 
 function activePatientMedications() {
   const meds = state.patientProfile?.medications || [];
-  return meds.filter((m) => m && !m.ended_at && (m.name || "").trim());
+  const pid = state.activePatientId;
+  // Guard: never surface meds if profile patient context is missing
+  if (!pid) return [];
+  return meds.filter((m) => m && !m.ended_at && (m.status || "active") === "active" && (m.name || "").trim());
+}
+
+function activePatientMedicationsForLog() {
+  return activePatientMedications().filter((m) => medicationShowsOnLog(m));
+}
+
+function activePatientMedicationsHiddenFromLog() {
+  return activePatientMedications().filter((m) => !medicationShowsOnLog(m));
+}
+
+function personMedNameSet() {
+  return new Set(
+    activePatientMedications()
+      .map((m) => String(m.name || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function updateJournalAddToListHint() {
+  const labelEl = document.getElementById("journal-add-to-list-label");
+  const hintEl = document.getElementById("journal-add-to-list-hint");
+  if (!labelEl || !hintEl) return;
+  const ate = actionSelected("Ate/Drank") || actionSelected("Ate");
+  const tookMed = actionSelected("Took medication");
+  if (tookMed) {
+    labelEl.textContent = "Add to my medications list";
+    hintEl.textContent =
+      "Type the medicine name in Details to add it to this person’s list and show it on Log.";
+  } else if (ate) {
+    labelEl.textContent = "Add to my Ate/Drank list";
+    hintEl.textContent = "Saves what you typed in Details as a reusable chip next time.";
+  } else {
+    labelEl.textContent = "Add to my List";
+    hintEl.textContent = "Select Ate/Drank or Took medication, then type Details.";
+  }
 }
 
 function renderJournalMedChips() {
   const wrap = document.getElementById("journal-med-options");
   const el = document.getElementById("journal-med-chips");
+  const hiddenWrap = document.getElementById("journal-med-hidden");
+  const hiddenEl = document.getElementById("journal-med-hidden-chips");
+  const hint = document.getElementById("journal-med-hint");
   if (!wrap || !el) return;
   const show = actionSelected("Took medication");
   wrap.classList.toggle("hidden", !show);
-  if (!show) return;
-  const personMeds = activePatientMedications().map((m) => String(m.name).trim());
-  const options = [...personMeds];
-  const remedies = state.commonRemedies?.length ? state.commonRemedies : defaultCommonRemedies();
-  for (const r of remedies) {
-    const name = r.name || "";
-    if (name && !options.some((o) => o.toLowerCase() === name.toLowerCase())) options.push(name);
+  if (!show) {
+    hiddenWrap?.classList.add("hidden");
+    return;
   }
-  for (const cbd of JOURNAL_CBD_OPTIONS) {
-    if (!options.some((o) => o.toLowerCase() === cbd.toLowerCase())) options.push(cbd);
+
+  const onLogMeds = activePatientMedicationsForLog();
+  const hiddenMeds = activePatientMedicationsHiddenFromLog();
+  const draft = state.journalDraft || emptyJournalDraft();
+
+  // Only this person's meds with Show on Log — no shared quick-picks
+  const seen = new Set();
+  const chips = [];
+  for (const m of onLogMeds) {
+    const name = String(m.name || "").trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    chips.push(
+      `<button type="button" class="journal-chip" data-med="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+    );
   }
-  el.innerHTML = options
-    .map(
-      (name) =>
-        `<button type="button" class="journal-chip" data-med="${escapeHtml(name)}">${escapeHtml(name)}</button>`
-    )
-    .join("");
+  el.innerHTML =
+    chips.join("") ||
+    `<span class="muted small">None on Log for this person yet — type a name in Details and check Add to my medications list, or enable Show on Log in Settings.</span>`;
+
+  if (hint) {
+    const bits = [];
+    if (onLogMeds.length) bits.push(`${chips.length} on Log`);
+    if (hiddenMeds.length) bits.push(`${hiddenMeds.length} on list but hidden`);
+    hint.textContent = bits.length ? `(${bits.join(" · ")})` : "";
+  }
+
+  if (hiddenWrap && hiddenEl) {
+    if (hiddenMeds.length) {
+      hiddenWrap.classList.remove("hidden");
+      const hiddenSeen = new Set();
+      hiddenEl.innerHTML = hiddenMeds
+        .map((m) => {
+          const name = String(m.name || "").trim();
+          const key = name.toLowerCase();
+          if (!name || hiddenSeen.has(key)) return "";
+          hiddenSeen.add(key);
+          return `<button type="button" class="journal-chip" data-enable-log="${escapeHtml(m.id || "")}" data-med-name="${escapeHtml(name)}" title="Show on Log and select">${escapeHtml(name)}</button>`;
+        })
+        .filter(Boolean)
+        .join("");
+    } else {
+      hiddenWrap.classList.add("hidden");
+      hiddenEl.innerHTML = "";
+    }
+  }
+
+  document.querySelectorAll("#journal-med-chips .journal-chip[data-med]").forEach((btn) => {
+    btn.classList.toggle("is-selected", (draft.medChoices || []).includes(btn.dataset.med));
+  });
+}
+
+function patientFoodDrinkLabels() {
+  const items = state.patientProfile?.food_drinks || [];
+  const labels = items.map((f) => String(f.label || "").trim()).filter(Boolean);
+  if (!labels.length) return ["Water"];
+  return labels;
 }
 
 function renderJournalFoodChips() {
@@ -9023,10 +9157,12 @@ function renderJournalFoodChips() {
   const show = actionSelected("Ate/Drank") || actionSelected("Ate");
   wrap.classList.toggle("hidden", !show);
   if (!show) return;
-  el.innerHTML = JOURNAL_FOOD_OPTIONS.map(
-    (name) =>
-      `<button type="button" class="journal-chip" data-food="${escapeHtml(name)}">${escapeHtml(name)}</button>`
-  ).join("");
+  el.innerHTML = patientFoodDrinkLabels()
+    .map(
+      (name) =>
+        `<button type="button" class="journal-chip" data-food="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+    )
+    .join("");
 }
 
 function updateJournalDraftUi() {
@@ -9079,12 +9215,14 @@ function updateJournalDraftUi() {
   renderJournalMedChips();
   renderJournalFoodChips();
   // re-apply med/food selection after re-render
-  document.querySelectorAll("#journal-med-chips .journal-chip").forEach((btn) => {
+  document.querySelectorAll("#journal-med-chips .journal-chip[data-med]").forEach((btn) => {
     btn.classList.toggle("is-selected", draft.medChoices.includes(btn.dataset.med));
   });
   document.querySelectorAll("#journal-food-chips .journal-chip").forEach((btn) => {
     btn.classList.toggle("is-selected", draft.foodChoices.includes(btn.dataset.food));
   });
+
+  updateJournalAddToListHint();
 
   const hint = document.getElementById("journal-selected-hint");
   if (hint) {
@@ -9200,7 +9338,7 @@ function renderJournalHome(profile, series) {
           <div class="journal-recent-main">
             <span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span>
             <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${text}
-            <div class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}${j.case_id ? " · case-linked" : ""}</div>
+            <div class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</div>
           </div>
           <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Remove</button>
         </div>`;
@@ -9810,13 +9948,19 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
 
 async function refreshActivePatientProfile() {
   if (!state.activePatientId) {
+    state.patientProfile = null;
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
+    renderMedicationsHome(null);
     return;
   }
-  const r = await fetch(`/api/patients/${state.activePatientId}/profile`);
+  const patientId = state.activePatientId;
+  const r = await fetch(`/api/patients/${patientId}/profile`);
   if (!r.ok) return;
+  // Ignore stale responses if the user switched patients mid-flight
+  if (state.activePatientId !== patientId) return;
   const data = await r.json();
+  if (data.patient?.id && data.patient.id !== patientId) return;
   applyProfileResponse(data);
 }
 
@@ -10241,6 +10385,8 @@ document.getElementById("btn-journal")?.addEventListener("click", () => {
   state.journalDraft = emptyJournalDraft();
   ensureJournalChips();
   updateJournalDraftUi();
+  const addEl = document.getElementById("journal-add-to-list");
+  if (addEl) addEl.checked = false;
   showModal("modal-journal");
   document.getElementById("journal-text")?.focus();
 });
@@ -10297,6 +10443,48 @@ document.getElementById("journal-med-chips")?.addEventListener("click", (event) 
   draft.medChoices = toggleStringChoice(draft.medChoices || [], chip.dataset.med);
   state.journalDraft = draft;
   updateJournalDraftUi();
+});
+
+document.getElementById("journal-med-hidden-chips")?.addEventListener("click", async (event) => {
+  const chip = event.target.closest("[data-enable-log]");
+  if (!chip || !state.activePatientId) return;
+  const id = chip.dataset.enableLog;
+  const name = (chip.dataset.medName || "").trim();
+  if (!id) return;
+  chip.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ show_on_log: true }),
+    });
+    if (!res.ok) {
+      toast("Could not show on Log", "error");
+      return;
+    }
+    applyProfileResponse(await res.json());
+    const draft = state.journalDraft || emptyJournalDraft();
+    if (name && !(draft.medChoices || []).includes(name)) {
+      draft.medChoices = [...(draft.medChoices || []), name];
+    }
+    state.journalDraft = draft;
+    updateJournalDraftUi();
+    toast(`${name || "Medication"} shown on Log`);
+  } catch (err) {
+    toast(err.message || "Could not update", "error");
+  } finally {
+    chip.disabled = false;
+  }
+});
+
+document.getElementById("btn-journal-meds-settings")?.addEventListener("click", () => {
+  hideModal("modal-journal");
+  switchTab("settings", { settingsSection: "profile", settingsFocus: "#med-show-on-log" });
+  requestAnimationFrame(() => {
+    document
+      .getElementById("medications-settings-heading")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 });
 
 document.getElementById("journal-food-chips")?.addEventListener("click", (event) => {
@@ -10374,6 +10562,13 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
             severity: null,
           });
         }
+      } else if (text) {
+        entries.push({
+          kind: "note",
+          label: text.slice(0, 80),
+          text: "Ate/Drank",
+          severity: null,
+        });
       } else {
         entries.push({
           kind: "note",
@@ -10407,7 +10602,6 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
     return;
   }
 
-  const linkCase = document.getElementById("journal-link-case")?.checked;
   const whenRaw = document.getElementById("journal-when")?.value;
   let recorded_at = null;
   if (whenRaw) {
@@ -10418,6 +10612,73 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
   const btn = document.getElementById("btn-journal-log");
   if (btn) btn.disabled = true;
   try {
+    const addToList = document.getElementById("journal-add-to-list")?.checked;
+    if (addToList) {
+      const ate = (draft.actions || []).some((a) => {
+        const l = String(a.label || "").toLowerCase();
+        return l === "ate/drank" || l === "ate";
+      });
+      const tookMed = (draft.actions || []).some(
+        (a) => String(a.label || "").toLowerCase() === "took medication"
+      );
+      if (ate && text) {
+        const foodRes = await fetch(`/api/patients/${state.activePatientId}/food-drinks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: text.slice(0, 80) }),
+        });
+        if (foodRes.ok) applyProfileResponse(await foodRes.json());
+      }
+      if (tookMed) {
+        const onList = personMedNameSet();
+        const toAdd = [];
+        const seen = new Set();
+        const pushMed = (item) => {
+          const name = String(item.name || "").trim();
+          if (!name) return;
+          const key = name.toLowerCase();
+          if (onList.has(key) || seen.has(key)) return;
+          seen.add(key);
+          toAdd.push(item);
+        };
+        // From Log: only Details text adds a new personal med (opt-in to list + Log)
+        if (text) {
+          pushMed({ name: text.slice(0, 120), category: "remedy", show_on_log: true });
+        }
+        for (const item of toAdd) {
+          const medRes = await fetch(`/api/patients/${state.activePatientId}/medications`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: item.name,
+              category: item.category || "remedy",
+              dosage: item.dosage || null,
+              frequency: item.frequency || null,
+              show_on_log: true,
+            }),
+          });
+          if (medRes.ok) applyProfileResponse(await medRes.json());
+        }
+        // If Details names a med already on the list, turn Show on Log on
+        if (text && onList.has(text.trim().toLowerCase())) {
+          const match = activePatientMedications().find(
+            (m) => String(m.name || "").trim().toLowerCase() === text.trim().toLowerCase()
+          );
+          if (match?.id && !match.show_on_log) {
+            const patchRes = await fetch(
+              `/api/patients/${state.activePatientId}/medications/${match.id}`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ show_on_log: true }),
+              }
+            );
+            if (patchRes.ok) applyProfileResponse(await patchRes.json());
+          }
+        }
+      }
+    }
+
     let lastData = null;
     for (const entry of entries) {
       const body = {
@@ -10427,7 +10688,7 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
         severity:
           entry.kind === "symptom" || entry.kind === "feeling" ? entry.severity || null : null,
         recorded_at,
-        case_id: linkCase && state.activeCaseId ? state.activeCaseId : null,
+        case_id: null,
       };
       const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
         method: "POST",
@@ -10444,6 +10705,8 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
     if (textEl) textEl.value = "";
     const whenEl = document.getElementById("journal-when");
     if (whenEl) whenEl.value = "";
+    const addEl = document.getElementById("journal-add-to-list");
+    if (addEl) addEl.checked = false;
     state.journalDraft = emptyJournalDraft();
     if (lastData) applyProfileResponse(lastData);
     hideModal("modal-journal");
@@ -10522,6 +10785,7 @@ document.getElementById("remedy-quick-chips")?.addEventListener("click", async (
         category: chip.dataset.category || "remedy",
         dosage: chip.dataset.dosage || null,
         frequency: chip.dataset.frequency || null,
+        show_on_log: true,
       }),
     });
     if (!res.ok) {
@@ -10550,6 +10814,7 @@ document.getElementById("btn-save-medication")?.addEventListener("click", async 
     notes: document.getElementById("med-notes")?.value.trim() || null,
     started_at: document.getElementById("med-started")?.value || null,
     ended_at: document.getElementById("med-ended")?.value || null,
+    show_on_log: Boolean(document.getElementById("med-show-on-log")?.checked),
   };
   const btn = document.getElementById("btn-save-medication");
   if (btn) btn.disabled = true;
@@ -10640,6 +10905,76 @@ document.getElementById("patient-medications-list")?.addEventListener("click", a
     if (document.getElementById("med-edit-id")?.value === id) clearMedicationForm();
     toast("Medication removed");
   }
+});
+
+document.getElementById("patient-medications-list")?.addEventListener("change", async (event) => {
+  const toggle = event.target.closest?.(".med-show-on-log-toggle");
+  if (!toggle || !state.activePatientId) return;
+  const id = toggle.dataset.id;
+  if (!id) return;
+  const showOnLog = Boolean(toggle.checked);
+  toggle.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ show_on_log: showOnLog }),
+    });
+    if (!res.ok) {
+      toggle.checked = !showOnLog;
+      return toast("Could not update Log visibility", "error");
+    }
+    applyProfileResponse(await res.json());
+    toast(showOnLog ? "Shown on Log" : "Hidden from Log");
+  } catch {
+    toggle.checked = !showOnLog;
+    toast("Could not update Log visibility", "error");
+  } finally {
+    toggle.disabled = false;
+  }
+});
+
+document.getElementById("med-category")?.addEventListener("change", () => syncMedShowOnLogDefault());
+document.getElementById("med-frequency")?.addEventListener("input", () => syncMedShowOnLogDefault());
+
+document.getElementById("btn-save-food-drink")?.addEventListener("click", async () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const label = document.getElementById("food-drink-label")?.value.trim() || "";
+  if (!label) return toast("Enter a food or drink name", "error");
+  const btn = document.getElementById("btn-save-food-drink");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/food-drinks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not add item");
+    }
+    applyProfileResponse(await res.json());
+    const input = document.getElementById("food-drink-label");
+    if (input) input.value = "";
+    toast("Added to Ate/Drank list");
+  } catch (err) {
+    toast(err.message || "Could not add", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("patient-food-drinks-list")?.addEventListener("click", async (event) => {
+  const delBtn = event.target.closest(".btn-delete-food-drink");
+  if (!delBtn || !state.activePatientId) return;
+  const id = delBtn.dataset.id;
+  if (!id || !confirm("Remove this item from your Ate/Drank list?")) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/food-drinks/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) return toast("Could not remove item", "error");
+  applyProfileResponse(await res.json());
+  toast("Removed");
 });
 
 document.getElementById("medications-home-list")?.addEventListener("click", async (event) => {

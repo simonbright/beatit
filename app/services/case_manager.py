@@ -148,6 +148,16 @@ def _profile_path(patient_id: str) -> Path:
     return _patient_dir(patient_id) / "profile.json"
 
 
+def _default_food_drinks() -> list[dict[str, Any]]:
+    from uuid import uuid4
+
+    now = _now_iso()
+    return [
+        {"id": str(uuid4()), "label": label, "created_at": now}
+        for label in DEFAULT_FOOD_DRINKS
+    ]
+
+
 def _empty_profile() -> dict[str, Any]:
     return {
         "date_of_birth": None,
@@ -156,6 +166,7 @@ def _empty_profile() -> dict[str, Any]:
         "diagnostics": [],
         "journal": [],
         "medications": [],
+        "food_drinks": _default_food_drinks(),
         "milestones": [],
         "medication_safety": None,
     }
@@ -203,8 +214,47 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
                 continue
             med = dict(raw)
             med["category"] = _normalize_medication_category(med.get("category"))
+            if "show_on_log" not in med:
+                # Legacy rows without the flag are off Log until explicitly enabled
+                med["show_on_log"] = False
+            else:
+                med["show_on_log"] = _coerce_show_on_log(med.get("show_on_log"))
             normalized_meds.append(med)
-        profile["medications"] = annotate_medications(_sort_medications(normalized_meds))
+        profile["medications"] = annotate_medications(
+            _sort_medications(_dedupe_medications(normalized_meds))
+        )
+    if "food_drinks" not in data:
+        profile["food_drinks"] = _default_food_drinks()
+    else:
+        food_drinks = data.get("food_drinks")
+        cleaned_foods: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        if isinstance(food_drinks, list):
+            from uuid import uuid4
+
+            for raw in food_drinks:
+                if isinstance(raw, str):
+                    label = _normalize_food_drink_label(raw)
+                    item: dict[str, Any] = {"id": str(uuid4()), "label": label}
+                elif isinstance(raw, dict):
+                    label = _normalize_food_drink_label(
+                        str(raw.get("label") or raw.get("name") or "")
+                    )
+                    item = {
+                        "id": raw.get("id") or str(uuid4()),
+                        "label": label,
+                        "created_at": raw.get("created_at"),
+                    }
+                else:
+                    continue
+                if not label:
+                    continue
+                key = label.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned_foods.append(item)
+        profile["food_drinks"] = cleaned_foods
     milestones = data.get("milestones") or []
     if isinstance(milestones, list):
         profile["milestones"] = sorted(
@@ -226,11 +276,14 @@ def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, 
         if not isinstance(raw, dict):
             continue
         med = dict(raw)
+        med["category"] = _normalize_medication_category(med.get("category"))
+        med["show_on_log"] = _coerce_show_on_log(med.get("show_on_log"))
         # Persist identity snapshot when present
         for key in ("identity_status", "identity_match", "identity_score"):
             if key in med and med[key] is None:
                 med.pop(key, None)
         meds_out.append(med)
+    meds_out = _dedupe_medications(meds_out)
     cleaned = {
         "date_of_birth": profile.get("date_of_birth") or None,
         "gender": profile.get("gender") or None,
@@ -238,6 +291,15 @@ def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, 
         "diagnostics": profile.get("diagnostics") or [],
         "journal": profile.get("journal") or [],
         "medications": meds_out,
+        "food_drinks": [
+            {
+                "id": str(f.get("id") or ""),
+                "label": _normalize_food_drink_label(str(f.get("label") or "")),
+                "created_at": f.get("created_at"),
+            }
+            for f in (profile.get("food_drinks") or [])
+            if isinstance(f, dict) and _normalize_food_drink_label(str(f.get("label") or ""))
+        ],
         "milestones": [
             m for m in (profile.get("milestones") or []) if isinstance(m, dict)
         ],
@@ -245,6 +307,34 @@ def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, 
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     return get_patient_profile(patient_id)
+
+
+def scrub_all_patient_profiles() -> dict[str, Any]:
+    """Normalize show_on_log opt-in and dedupe medications for every patient."""
+    reg = load_registry()
+    fixed = 0
+    for patient in reg.get("patients") or []:
+        pid = patient.get("id")
+        if not pid:
+            continue
+        path = _profile_path(pid)
+        if not path.exists():
+            continue
+        before = json.loads(path.read_text(encoding="utf-8"))
+        before_meds = before.get("medications") or []
+        profile = get_patient_profile(pid)
+        after_meds = profile.get("medications") or []
+        # Persist cleaned profile when med list changed or flags were missing
+        needs_write = len(before_meds) != len(after_meds)
+        if not needs_write:
+            for raw in before_meds:
+                if isinstance(raw, dict) and "show_on_log" not in raw:
+                    needs_write = True
+                    break
+        if needs_write:
+            save_patient_profile(pid, profile)
+            fixed += 1
+    return {"patients_scrubbed": fixed}
 
 
 def update_patient_demographics(
@@ -432,7 +522,6 @@ MEDICATION_CATEGORIES = frozenset({"prescription", "otc", "remedy"})
 
 # Common non-Rx remedies offered as one-tap adds under Medications & remedies.
 COMMON_REMEDIES = [
-    {"name": "CBD Drops", "category": "remedy", "dosage": None, "frequency": None},
     {"name": "CBD 1 drop", "category": "remedy", "dosage": "1 drop", "frequency": "as needed"},
     {"name": "CBD 2 drops", "category": "remedy", "dosage": "2 drops", "frequency": "as needed"},
     {"name": "Magnesium", "category": "remedy", "dosage": None, "frequency": None},
@@ -441,6 +530,12 @@ COMMON_REMEDIES = [
     {"name": "Acetaminophen", "category": "otc", "dosage": None, "frequency": "as needed"},
     {"name": "Vitamin D", "category": "remedy", "dosage": None, "frequency": None},
 ]
+
+DEFAULT_FOOD_DRINKS = ["Water"]
+
+
+def _normalize_food_drink_label(label: str) -> str:
+    return " ".join((label or "").strip().split())[:80]
 
 
 def _normalize_medication_category(raw: str | None) -> str:
@@ -452,6 +547,120 @@ def _normalize_medication_category(raw: str | None) -> str:
     if value in {"remedy", "supplement", "natural", "herbal", "wellness"}:
         return "remedy"
     return "prescription"
+
+
+def _is_as_needed_frequency(frequency: str | None) -> bool:
+    f = (frequency or "").strip().lower()
+    if not f:
+        return False
+    markers = (
+        "as needed",
+        "as required",
+        "when needed",
+        "if needed",
+        "prn",
+        "p.r.n",
+        "on demand",
+        "when required",
+    )
+    return any(m in f for m in markers)
+
+
+def _is_daily_scheduled_frequency(frequency: str | None) -> bool:
+    """True for blank or clearly daily/scheduled dosing (not PRN)."""
+    f = (frequency or "").strip().lower()
+    if not f:
+        return True
+    if _is_as_needed_frequency(f):
+        return False
+    markers = (
+        "daily",
+        "every day",
+        "each day",
+        "once a day",
+        "twice a day",
+        "three times a day",
+        "four times a day",
+        "times a day",
+        "times daily",
+        "per day",
+        "/day",
+        "qd",
+        "q.d",
+        "qday",
+        "bid",
+        "b.i.d",
+        "tid",
+        "t.i.d",
+        "qid",
+        "q.i.d",
+        "qam",
+        "qpm",
+        "qhs",
+        "bedtime",
+        "nightly",
+        "every morning",
+        "every night",
+        "every evening",
+        "morning and night",
+        "mane",
+        "nocte",
+    )
+    return any(m in f for m in markers)
+
+
+def default_show_on_log(category: str | None, frequency: str | None) -> bool:
+    """Opt-in only: Log chips require an explicit Show on Log choice."""
+    return False
+
+
+def _coerce_show_on_log(raw: Any, *, category: str | None = None, frequency: str | None = None) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)) and raw in (0, 1):
+        return bool(raw)
+    if isinstance(raw, str):
+        v = raw.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        if v in {"0", "false", "no", "off"}:
+            return False
+    return False
+
+
+def _medication_name_key(name: Any) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
+
+def _dedupe_medications(meds: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop duplicate active meds with the same name (keep newest). Stopped rows kept once each name."""
+    active_best: dict[str, dict[str, Any]] = {}
+    stopped_best: dict[str, dict[str, Any]] = {}
+    for med in meds:
+        if not isinstance(med, dict):
+            continue
+        key = _medication_name_key(med.get("name"))
+        if not key:
+            continue
+        status = str(med.get("status") or "active").lower()
+        stamp = str(med.get("updated_at") or med.get("created_at") or "")
+        bucket = stopped_best if status == "stopped" else active_best
+        prev = bucket.get(key)
+        if not prev:
+            bucket[key] = med
+            continue
+        prev_stamp = str(prev.get("updated_at") or prev.get("created_at") or "")
+        if stamp >= prev_stamp:
+            # Prefer explicit show_on_log True if either has it
+            if prev.get("show_on_log") and not med.get("show_on_log"):
+                med = dict(med)
+                med["show_on_log"] = True
+            bucket[key] = med
+        elif med.get("show_on_log") and not prev.get("show_on_log"):
+            kept = dict(prev)
+            kept["show_on_log"] = True
+            bucket[key] = kept
+    return list(active_best.values()) + list(stopped_best.values())
 
 JOURNAL_PRESETS = [
     # Positive first — so a day can read headache → med → better
@@ -526,11 +735,7 @@ def add_patient_journal_entry(
             raise ValueError("severity must be an integer 1–5") from exc
         if severity_val < 1 or severity_val > 5:
             raise ValueError("severity must be 1–5")
-    case_clean = (case_id or "").strip() or None
-    if case_clean:
-        patient = _find_patient(reg, patient_id)
-        if patient and not _find_case(patient, case_clean):
-            raise ValueError("case_id does not belong to this patient")
+    # Self-reports are person-level (not case-scoped). Ignore any case_id.
     entry = {
         "id": str(uuid4()),
         "recorded_at": _parse_journal_datetime(recorded_at),
@@ -538,7 +743,7 @@ def add_patient_journal_entry(
         "label": label_clean,
         "text": (text or "").strip() or None,
         "severity": severity_val,
-        "case_id": case_clean,
+        "case_id": None,
         "created_at": _now_iso(),
     }
     profile = get_patient_profile(patient_id)
@@ -709,6 +914,7 @@ def add_patient_medication(
     started_at: str | None = None,
     ended_at: str | None = None,
     category: str | None = None,
+    show_on_log: bool | None = None,
 ) -> dict[str, Any] | None:
     from uuid import uuid4
 
@@ -722,15 +928,36 @@ def add_patient_medication(
     end = _normalize_med_date(ended_at)
     if start and end and end < start:
         raise ValueError("End date must be on or after the start date")
+    cat = _normalize_medication_category(category)
+    freq = (frequency or "").strip() or None
+    profile = get_patient_profile(patient_id)
+    # Reuse existing active med with same name instead of creating duplicates
+    existing = next(
+        (
+            m
+            for m in (profile.get("medications") or [])
+            if _medication_name_key(m.get("name")) == _medication_name_key(cleaned_name)
+            and str(m.get("status") or "active") != "stopped"
+        ),
+        None,
+    )
+    if existing:
+        if show_on_log is True and not existing.get("show_on_log"):
+            updated = update_patient_medication(
+                patient_id, existing["id"], show_on_log=True
+            )
+            return updated or existing
+        return existing
     now = _now_iso()
     entry = {
         "id": str(uuid4()),
         "name": cleaned_name[:120],
         "dosage": (dosage or "").strip() or None,
-        "frequency": (frequency or "").strip() or None,
+        "frequency": freq,
         "conditions": _normalize_conditions(conditions),
         "notes": (notes or "").strip() or None,
-        "category": _normalize_medication_category(category),
+        "category": cat,
+        "show_on_log": bool(show_on_log) if show_on_log is not None else False,
         "status": "stopped" if end else "active",
         "started_at": start,
         "stopped_at": end,
@@ -741,7 +968,6 @@ def add_patient_medication(
     from app.services.medication_identity import apply_identity_fields
 
     apply_identity_fields(entry)
-    profile = get_patient_profile(patient_id)
     profile.setdefault("medications", []).append(entry)
     saved = save_patient_profile(patient_id, profile)
     return next((m for m in saved["medications"] if m["id"] == entry["id"]), entry)
@@ -759,6 +985,7 @@ def update_patient_medication(
     started_at: str | None = ...,  # type: ignore[assignment]
     ended_at: str | None = ...,  # type: ignore[assignment]
     category: str | None = ...,  # type: ignore[assignment]
+    show_on_log: bool | None = ...,  # type: ignore[assignment]
     history_note: str | None = None,
     effective_at: str | None = None,
 ) -> dict[str, Any] | None:
@@ -796,6 +1023,10 @@ def update_patient_medication(
         med["notes"] = (notes or "").strip() or None
     if category is not ...:
         med["category"] = _normalize_medication_category(category)
+    if show_on_log is not ...:
+        med["show_on_log"] = bool(show_on_log)
+    elif "show_on_log" not in med:
+        med["show_on_log"] = default_show_on_log(med.get("category"), med.get("frequency"))
     if started_at is not ...:
         med["started_at"] = _normalize_med_date(started_at)
     if ended_at is not ...:
@@ -872,6 +1103,80 @@ def delete_patient_medication(patient_id: str, medication_id: str) -> bool:
     return True
 
 
+def add_patient_food_drink(patient_id: str, label: str) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = _normalize_food_drink_label(label)
+    if not cleaned:
+        raise ValueError("Food or drink name is required")
+    profile = get_patient_profile(patient_id)
+    foods = list(profile.get("food_drinks") or [])
+    existing = next(
+        (f for f in foods if str(f.get("label") or "").lower() == cleaned.lower()),
+        None,
+    )
+    if existing:
+        return existing
+    entry = {"id": str(uuid4()), "label": cleaned, "created_at": _now_iso()}
+    foods.append(entry)
+    profile["food_drinks"] = foods
+    saved = save_patient_profile(patient_id, profile)
+    return next((f for f in saved.get("food_drinks") or [] if f.get("id") == entry["id"]), entry)
+
+
+def update_patient_food_drink(
+    patient_id: str,
+    food_id: str,
+    *,
+    label: str,
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = _normalize_food_drink_label(label)
+    if not cleaned:
+        raise ValueError("Food or drink name is required")
+    profile = get_patient_profile(patient_id)
+    foods = list(profile.get("food_drinks") or [])
+    idx = next((i for i, f in enumerate(foods) if f.get("id") == food_id), None)
+    if idx is None:
+        return None
+    dup = next(
+        (
+            f
+            for i, f in enumerate(foods)
+            if i != idx and str(f.get("label") or "").lower() == cleaned.lower()
+        ),
+        None,
+    )
+    if dup:
+        raise ValueError("That item is already on the list")
+    item = dict(foods[idx])
+    item["label"] = cleaned
+    foods[idx] = item
+    profile["food_drinks"] = foods
+    saved = save_patient_profile(patient_id, profile)
+    return next((f for f in saved.get("food_drinks") or [] if f.get("id") == food_id), item)
+
+
+def delete_patient_food_drink(patient_id: str, food_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    before = len(profile.get("food_drinks") or [])
+    profile["food_drinks"] = [
+        f for f in profile.get("food_drinks") or [] if f.get("id") != food_id
+    ]
+    if len(profile["food_drinks"]) == before:
+        return False
+    save_patient_profile(patient_id, profile)
+    return True
+
+
 def group_journal_for_charts(
     profile: dict[str, Any] | None,
     *,
@@ -882,6 +1187,8 @@ def group_journal_for_charts(
 
     groups: dict[str, dict[str, Any]] = {}
     for row in (profile or {}).get("journal") or []:
+        if not isinstance(row, dict):
+            continue
         label = _normalize_journal_label(str(row.get("label") or ""))
         if not label:
             continue
@@ -979,6 +1286,8 @@ def recent_journal_for_prompt(
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rows: list[dict[str, Any]] = []
     for row in (profile or {}).get("journal") or []:
+        if not isinstance(row, dict):
+            continue
         raw = str(row.get("recorded_at") or "")
         try:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -1167,8 +1476,6 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
                 bits.append(f"severity {row['severity']}/5")
             if row.get("text"):
                 bits.append(str(row["text"])[:120])
-            if row.get("case_id"):
-                bits.append(f"case:{row['case_id']}")
             lines.append("  · " + " · ".join(b for b in bits if b))
     meds = profile.get("medications") or []
     active_meds = [m for m in meds if (m.get("status") or "active") == "active"]
