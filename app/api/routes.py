@@ -652,16 +652,25 @@ async def document_index():
 @router.get("/handling/flagged")
 async def list_handling_flagged():
     """Labs / diagnostic reports that still need handling."""
-    from app.services.clinical_report_handling import list_flagged_documents_for_patient
+    from app.services.clinical_report_handling import (
+        auto_reextract_needs_ocr_for_patient,
+        list_flagged_documents_for_patient,
+    )
 
     ctx = get_active_context()
     patient_id = ctx.get("patient_id")
     if not patient_id:
         return {"items": [], "count": 0, "critical_count": 0}
-    return await list_flagged_documents_for_patient(
+    ocr_result = await auto_reextract_needs_ocr_for_patient(
         patient_id,
         active_case_id=ctx.get("case_id"),
     )
+    payload = await list_flagged_documents_for_patient(
+        patient_id,
+        active_case_id=ctx.get("case_id"),
+    )
+    payload["auto_ocr"] = ocr_result
+    return payload
 
 
 @router.post("/documents/{doc_id}/handling/dismiss")
@@ -712,6 +721,7 @@ async def dismiss_document_handling_flag(doc_id: str, request: Request):
 async def refresh_all_handling_flags():
     """Re-evaluate handled/flagged state for all patient clinical PDFs."""
     from app.services.clinical_report_handling import (
+        auto_reextract_needs_ocr_for_patient,
         list_flagged_documents_for_patient,
         open_store_for_patient_document,
         refresh_document_handling,
@@ -723,6 +733,11 @@ async def refresh_all_handling_flags():
     if not patient_id:
         return {"items": [], "count": 0, "critical_count": 0, "refreshed": 0}
     profile = get_patient_profile(patient_id)
+    # Auto-OCR first so the user is not asked to switch cases or click Re-extract
+    ocr_result = await auto_reextract_needs_ocr_for_patient(
+        patient_id,
+        active_case_id=ctx.get("case_id"),
+    )
     docs = await list_patient_documents(
         patient_id,
         active_case_id=ctx.get("case_id"),
@@ -755,6 +770,7 @@ async def refresh_all_handling_flags():
         profile=profile,
     )
     payload["refreshed"] = refreshed
+    payload["auto_ocr"] = ocr_result
     return payload
 
 
@@ -1091,21 +1107,32 @@ async def update_document_citation(
 
 @router.post("/documents/{doc_id}/reextract")
 async def reextract_document(doc_id: str, request: Request):
-    """Re-run PDF text extraction / OCR for a stored PDF."""
+    """Re-run PDF text extraction / OCR for a stored PDF (any case for the active patient)."""
+    from app.services.clinical_report_handling import open_store_for_patient_document
+
     db, store, _, _, _ = await _get_services()
-    patient_doc = await resolve_active_patient_document(doc_id)
-    if patient_doc and not patient_doc.get("is_active_case"):
-        raise HTTPException(
-            status_code=403,
-            detail="Switch to that focus case to re-extract this document",
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
+    target_store = store
+    doc = None
+
+    if patient_id:
+        opened = await open_store_for_patient_document(
+            patient_id,
+            doc_id,
+            active_case_id=ctx.get("case_id"),
         )
-    doc = await db.get_document(doc_id)
+        if opened:
+            target_store, doc = opened
+    if doc is None:
+        doc = await db.get_document(doc_id)
+        target_store = store
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     if (doc.get("source_type") or "").lower() != "pdf":
         raise HTTPException(status_code=400, detail="Only PDF documents can be re-extracted")
     try:
-        updated = await reextract_pdf_document(store, doc)
+        updated = await reextract_pdf_document(target_store, doc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _audit(
@@ -1122,14 +1149,15 @@ async def reextract_document(doc_id: str, request: Request):
             "clinical_report_kind": (updated.get("metadata") or {}).get("clinical_report_kind"),
         },
     )
-    updated, lab_import = await _finalize_clinical_report_document(store, updated)
-    catalog = await _source_catalog(db)
+    updated, lab_import = await _finalize_clinical_report_document(target_store, updated)
+    catalog = await _source_catalog(target_store.db)
     updated["source_info"] = catalog.describe_document(updated)
-    text = await store.read_extracted_text(updated)
+    text = await target_store.read_extracted_text(updated)
     payload: dict[str, Any] = {
         "document": updated,
         "extracted_preview": (text or "")[:500],
         "handling": updated.get("handling"),
+        **build_document_view(updated),
     }
     if lab_import is not None:
         payload["lab_import"] = lab_import
@@ -1143,14 +1171,25 @@ async def replace_document_file(
     file: UploadFile = File(...),
 ):
     """Re-upload the original PDF when the stored file is missing or corrupt."""
+    from app.services.clinical_report_handling import open_store_for_patient_document
+
     db, store, _, _, _ = await _get_services()
-    patient_doc = await resolve_active_patient_document(doc_id)
-    if patient_doc and not patient_doc.get("is_active_case"):
-        raise HTTPException(
-            status_code=403,
-            detail="Switch to that focus case to replace this document’s file",
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
+    target_store = store
+    doc = None
+
+    if patient_id:
+        opened = await open_store_for_patient_document(
+            patient_id,
+            doc_id,
+            active_case_id=ctx.get("case_id"),
         )
-    doc = await db.get_document(doc_id)
+        if opened:
+            target_store, doc = opened
+    if doc is None:
+        doc = await db.get_document(doc_id)
+        target_store = store
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     content = await file.read()
@@ -1163,27 +1202,27 @@ async def replace_document_file(
         raise HTTPException(status_code=400, detail="Upload a PDF to replace this document")
 
     # Remove stale file at the old path if present
-    old = resolve_document_file_path(doc)
+    old = resolve_document_file_path(doc, prefer_dirs=[target_store.documents_dir])
     if old and old.is_file():
         try:
             old.unlink()
         except OSError:
             pass
 
-    saved = await store.save_raw_file(doc_id, filename, content)
+    saved = await target_store.save_raw_file(doc_id, filename, content)
     meta = dict(doc.get("metadata") or {})
     meta["original_filename"] = filename
     meta["file_size"] = len(content)
     meta["replaced_file_at"] = datetime.now(timezone.utc).isoformat()
-    await store.db.update_document_paths(doc_id, file_path=str(saved))
-    updated = await store.db.update_document_metadata(doc_id, metadata=meta)
+    await target_store.db.update_document_paths(doc_id, file_path=str(saved))
+    updated = await target_store.db.update_document_metadata(doc_id, metadata=meta)
     updated = updated or {**doc, "file_path": str(saved), "metadata": meta}
 
     lab_import = None
     if source_type == "pdf" or lower.endswith(".pdf"):
         try:
-            updated = await reextract_pdf_document(store, updated)
-            updated, lab_import = await _finalize_clinical_report_document(store, updated)
+            updated = await reextract_pdf_document(target_store, updated)
+            updated, lab_import = await _finalize_clinical_report_document(target_store, updated)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1200,9 +1239,9 @@ async def replace_document_file(
             "extraction_method": (updated.get("metadata") or {}).get("extraction_method"),
         },
     )
-    catalog = await _source_catalog(db)
+    catalog = await _source_catalog(target_store.db)
     updated["source_info"] = catalog.describe_document(updated)
-    text = await store.read_extracted_text(updated)
+    text = await target_store.read_extracted_text(updated)
     payload: dict[str, Any] = {
         "document": updated,
         "extracted_preview": (text or "")[:500],

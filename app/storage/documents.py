@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any
 
-from app.config import settings
 from app.storage.database import Database
 
 
@@ -9,21 +8,38 @@ class DocumentStore:
     def __init__(self, db: Database):
         self.db = db
 
+    @property
+    def case_dir(self) -> Path:
+        """Directory that owns this store's beatit.db (active or pinned case)."""
+        return Path(self.db.db_path).resolve().parent
+
+    @property
+    def documents_dir(self) -> Path:
+        path = self.case_dir / "documents"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def extracted_dir(self) -> Path:
+        path = self.case_dir / "extracted"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     async def save_extracted_text(self, doc_id: str, text: str) -> Path:
-        path = settings.extracted_dir / f"{doc_id}.txt"
+        path = self.extracted_dir / f"{doc_id}.txt"
         path.write_text(text, encoding="utf-8")
         return path
 
     async def save_raw_file(self, doc_id: str, filename: str, content: bytes) -> Path:
         safe_name = Path(filename).name
-        path = settings.documents_dir / f"{doc_id}_{safe_name}"
+        path = self.documents_dir / f"{doc_id}_{safe_name}"
         path.write_bytes(content)
         return path
 
     async def read_extracted_text(self, doc: dict[str, Any]) -> str | None:
         from app.services.document_paths import resolve_extracted_path
 
-        path = resolve_extracted_path(doc)
+        path = resolve_extracted_path(doc, prefer_dirs=[self.extracted_dir])
         if not path:
             return None
         return path.read_text(encoding="utf-8")

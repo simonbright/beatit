@@ -345,7 +345,8 @@ async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> d
     from app.services.document_paths import heal_document_paths, resolve_document_file_path
 
     doc = await heal_document_paths(store, doc)
-    path = resolve_document_file_path(doc)
+    prefer = [store.documents_dir] if hasattr(store, "documents_dir") else None
+    path = resolve_document_file_path(doc, prefer_dirs=prefer)
     if not path:
         raise ValueError(
             "Stored PDF file is missing on disk. Re-upload the PDF with Replace file, then try Re-extract again."

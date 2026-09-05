@@ -1,6 +1,7 @@
 """Patient-wide document catalog (read across all cases for one patient).
 
-Writes (ingest, delete, re-extract) stay on the active case DocumentStore.
+Re-extract / replace-file / handling open the owning case DocumentStore so the
+user does not need to switch focus cases for those writes.
 """
 
 from __future__ import annotations

@@ -168,10 +168,35 @@ class OptionsChatService:
             needs_ocr = (doc.get("metadata") or {}).get("needs_ocr")
             note = ""
             if needs_ocr or (text.startswith("[No extractable text")):
+                # Try OCR ourselves before asking the user
+                try:
+                    from app.ingest.pdf import reextract_pdf_document
+                    from app.services.clinical_report_handling import open_store_for_patient_document
+
+                    ctx = get_active_context()
+                    pid = ctx.get("patient_id")
+                    opened = (
+                        await open_store_for_patient_document(
+                            pid,
+                            doc["id"],
+                            active_case_id=ctx.get("case_id"),
+                        )
+                        if pid
+                        else None
+                    )
+                    if opened:
+                        case_store, raw = opened
+                        updated = await reextract_pdf_document(case_store, raw)
+                        text = await case_store.read_extracted_text(updated) or text
+                        method = (updated.get("metadata") or {}).get("extraction_method")
+                        needs_ocr = (updated.get("metadata") or {}).get("needs_ocr")
+                        doc = {**doc, **updated}
+                except Exception:
+                    pass
+            if needs_ocr or (text.startswith("[No extractable text")):
                 note = (
-                    "\n[WARNING: This PDF has little/no extractable text. "
-                    "It may be a scanned image. Ask the user to run Re-extract/OCR in Library, "
-                    "or paste OCR text.]"
+                    "\n[WARNING: This PDF still has little/no extractable text after automatic OCR. "
+                    "The scan may be unreadable, or Replace file may be needed if the PDF is missing.]"
                 )
             elif method == "ocr":
                 note = "\n[Text recovered via OCR.]"

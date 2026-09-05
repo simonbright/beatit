@@ -102,7 +102,11 @@ def _find_by_names(names: list[str], *, prefer_dirs: list[Path] | None = None) -
     return None
 
 
-def resolve_document_file_path(doc: dict[str, Any]) -> Path | None:
+def resolve_document_file_path(
+    doc: dict[str, Any],
+    *,
+    prefer_dirs: list[Path] | None = None,
+) -> Path | None:
     """Return an existing path for the stored original file, if any."""
     stored = str(doc.get("file_path") or "").strip()
     if stored:
@@ -110,25 +114,35 @@ def resolve_document_file_path(doc: dict[str, Any]) -> Path | None:
         if path.is_file():
             return path
     names = _basename_candidates(doc, kind="file")
-    prefer = [settings.documents_dir, settings.data_dir / "documents"]
+    prefer = list(prefer_dirs or []) + [settings.documents_dir, settings.data_dir / "documents"]
     return _find_by_names(names, prefer_dirs=prefer)
 
 
-def resolve_extracted_path(doc: dict[str, Any]) -> Path | None:
+def resolve_extracted_path(
+    doc: dict[str, Any],
+    *,
+    prefer_dirs: list[Path] | None = None,
+) -> Path | None:
     stored = str(doc.get("extracted_path") or "").strip()
     if stored:
         path = Path(stored)
         if path.is_file():
             return path
     names = _basename_candidates(doc, kind="extracted")
-    prefer = [settings.extracted_dir, settings.data_dir / "extracted"]
+    prefer = list(prefer_dirs or []) + [settings.extracted_dir, settings.data_dir / "extracted"]
     return _find_by_names(names, prefer_dirs=prefer)
 
 
 async def heal_document_paths(store: Any, doc: dict[str, Any]) -> dict[str, Any]:
     """If files exist under a different root, rewrite DB paths and return updated doc."""
-    file_path = resolve_document_file_path(doc)
-    extracted_path = resolve_extracted_path(doc)
+    prefer_docs = []
+    prefer_ext = []
+    if hasattr(store, "documents_dir"):
+        prefer_docs.append(store.documents_dir)
+    if hasattr(store, "extracted_dir"):
+        prefer_ext.append(store.extracted_dir)
+    file_path = resolve_document_file_path(doc, prefer_dirs=prefer_docs or None)
+    extracted_path = resolve_extracted_path(doc, prefer_dirs=prefer_ext or None)
     updates: dict[str, str] = {}
     if file_path and str(file_path) != str(doc.get("file_path") or ""):
         updates["file_path"] = str(file_path)

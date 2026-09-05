@@ -436,14 +436,15 @@ def flag_item_from_document(
         "severity": evaluation.get("severity") or "warning",
         "created_at": doc.get("created_at"),
         "updated_at": meta.get("handling_updated_at") or doc.get("updated_at"),
-        "actions": _suggested_actions(evaluation["reasons"]),
+        "actions": _suggested_actions(evaluation["reasons"], meta=meta),
     }
 
 
-def _suggested_actions(reasons: list[str]) -> list[dict[str, str]]:
+def _suggested_actions(reasons: list[str], *, meta: dict[str, Any] | None = None) -> list[dict[str, str]]:
     actions: list[dict[str, str]] = []
     if REASON_NEEDS_OCR in reasons:
-        actions.append({"id": "reextract", "label": "Re-extract / OCR"})
+        label = "Retry OCR" if (meta or {}).get("auto_ocr_attempted") else "Re-extract / OCR"
+        actions.append({"id": "reextract", "label": label})
     if any(
         r in reasons
         for r in (REASON_LAB_CHARTS_PENDING, REASON_LAB_PARTIAL, REASON_IMPORT_FAILED)
@@ -502,3 +503,100 @@ async def dismiss_document_handling(store: Any, doc: dict[str, Any]) -> dict[str
     meta["handling_message"] = "Dismissed — marked as reviewed"
     updated = await store.db.update_document_metadata(doc["id"], metadata=meta)
     return updated or {**doc, "metadata": meta}
+
+
+async def auto_reextract_needs_ocr_for_patient(
+    patient_id: str,
+    *,
+    active_case_id: str | None = None,
+    max_docs: int = 12,
+) -> dict[str, Any]:
+    """Re-run OCR for PDFs that still need text — no user case-switch required.
+
+    Skips documents already auto-attempted that still lack text (avoids loops).
+    Explicit Re-extract from the UI clears that gate by calling reextract directly.
+    """
+    from app.ingest.pdf import reextract_pdf_document
+    from app.services.patient_documents import list_patient_documents
+
+    docs = await list_patient_documents(
+        patient_id,
+        active_case_id=active_case_id,
+        source_type="pdf",
+    )
+    attempted: list[str] = []
+    recovered: list[str] = []
+    failed: list[dict[str, str]] = []
+
+    for doc in docs:
+        if len(attempted) >= max_docs:
+            break
+        meta = _meta(doc)
+        needs = bool(meta.get("needs_ocr")) or str(meta.get("extraction_method") or "") == "empty"
+        if not needs:
+            continue
+        if meta.get("auto_ocr_attempted") and needs:
+            # Already tried automatically; leave for explicit retry / replace-file
+            continue
+        opened = await open_store_for_patient_document(
+            patient_id,
+            doc["id"],
+            active_case_id=active_case_id,
+        )
+        if not opened:
+            failed.append({"document_id": doc["id"], "error": "Document store not found"})
+            continue
+        store, raw = opened
+        doc_id = str(raw.get("id") or doc["id"])
+        attempted.append(doc_id)
+        try:
+            updated = await reextract_pdf_document(store, raw)
+            new_meta = dict(updated.get("metadata") or {})
+            new_meta["auto_ocr_attempted"] = True
+            new_meta["auto_ocr_attempted_at"] = _now_iso()
+            saved = await store.db.update_document_metadata(doc_id, metadata=new_meta)
+            updated = saved or {**updated, "metadata": new_meta}
+            still_needs = bool(new_meta.get("needs_ocr")) or str(
+                new_meta.get("extraction_method") or ""
+            ) == "empty"
+            if still_needs:
+                failed.append(
+                    {
+                        "document_id": doc_id,
+                        "error": new_meta.get("ocr_hint")
+                        or "Still little extractable text after OCR",
+                    }
+                )
+            else:
+                recovered.append(doc_id)
+                # Refresh handling so lab flags update after successful OCR
+                try:
+                    from app.services.case_manager import get_patient_profile
+
+                    await refresh_document_handling(
+                        store,
+                        updated,
+                        profile=get_patient_profile(patient_id),
+                    )
+                except Exception:
+                    pass
+        except Exception as exc:
+            # Mark attempted so we do not spin forever
+            try:
+                fail_meta = dict(raw.get("metadata") or {})
+                fail_meta["auto_ocr_attempted"] = True
+                fail_meta["auto_ocr_attempted_at"] = _now_iso()
+                fail_meta["auto_ocr_error"] = str(exc)[:400]
+                await store.db.update_document_metadata(doc_id, metadata=fail_meta)
+            except Exception:
+                pass
+            failed.append({"document_id": doc_id, "error": str(exc)[:400]})
+
+    return {
+        "attempted": attempted,
+        "recovered": recovered,
+        "failed": failed,
+        "attempted_count": len(attempted),
+        "recovered_count": len(recovered),
+        "failed_count": len(failed),
+    }

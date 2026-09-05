@@ -858,13 +858,28 @@ function updateHomeWorkflow() {
 async function refreshHandlingFlags({ rescan = false } = {}) {
   try {
     const data = rescan
-      ? await api("/api/handling/refresh", { method: "POST", timeoutMs: 120000 })
-      : await api("/api/handling/flagged");
+      ? await api("/api/handling/refresh", { method: "POST", timeoutMs: 600000 })
+      : await api("/api/handling/flagged", { timeoutMs: 600000 });
     state.handlingFlags = {
       items: data.items || [],
       count: data.count || 0,
       critical_count: data.critical_count || 0,
     };
+    const ocr = data.auto_ocr;
+    if (ocr?.recovered_count) {
+      toast(
+        ocr.recovered_count === 1
+          ? "OCR recovered text for 1 document"
+          : `OCR recovered text for ${ocr.recovered_count} documents`
+      );
+      loadDocuments().catch(() => {});
+      loadDocumentIndex().catch(() => {});
+    } else if (ocr?.failed_count && !ocr?.recovered_count && ocr?.attempted_count) {
+      // Only surface when auto-OCR ran and still failed — user may need Replace file
+      const first = (ocr.failed || [])[0];
+      const detail = first?.error ? `: ${first.error}` : "";
+      toast(`OCR still incomplete for ${ocr.failed_count} document(s)${detail}`, "error");
+    }
   } catch {
     state.handlingFlags = { items: [], count: 0, critical_count: 0 };
   }
