@@ -66,17 +66,26 @@ def milestone_color_for(key: str | None) -> str:
 
 
 def colorize_milestone_events(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Attach a stable color to each event (same med keeps one color across start/dose/stop)."""
+    """Attach distinct colors; same medication name shares a color, lifestyle events get their own."""
+    key_index: dict[str, int] = {}
+
+    def _key(row: dict[str, Any]) -> str:
+        name = str(row.get("medication_name") or "").strip().lower()
+        if name:
+            return f"medname:{name}"
+        if row.get("medication_id"):
+            return f"med:{row['medication_id']}"
+        return f"life:{row.get('id') or row.get('label') or 'milestone'}"
+
     out: list[dict[str, Any]] = []
     for ev in events or []:
         if not isinstance(ev, dict):
             continue
         row = dict(ev)
-        if row.get("medication_id"):
-            key = f"med:{row['medication_id']}"
-        else:
-            key = f"life:{row.get('id') or row.get('label') or 'milestone'}"
-        row["color"] = milestone_color_for(key)
+        key = _key(row)
+        if key not in key_index:
+            key_index[key] = len(key_index)
+        row["color"] = MILESTONE_COLORS[key_index[key] % len(MILESTONE_COLORS)]
         out.append(row)
     return out
 

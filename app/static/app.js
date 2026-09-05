@@ -7603,16 +7603,16 @@ function medicationChartEvents(medications) {
 }
 
 const MILESTONE_COLORS = [
-  "#0f766e",
-  "#b45309",
-  "#7c3aed",
-  "#0369a1",
-  "#be123c",
-  "#15803d",
-  "#c2410c",
-  "#4338ca",
-  "#0e7490",
-  "#a21caf",
+  "#0f766e", // teal
+  "#c2410c", // orange
+  "#7c3aed", // violet
+  "#0369a1", // blue
+  "#be123c", // rose
+  "#15803d", // green
+  "#a16207", // amber
+  "#4338ca", // indigo
+  "#0e7490", // cyan
+  "#a21caf", // fuchsia
 ];
 
 const DEFAULT_MILESTONE_PRESETS = [
@@ -7626,34 +7626,25 @@ const DEFAULT_MILESTONE_PRESETS = [
   { label: "Other", kind: "other" },
 ];
 
-function crc32Unsigned(str) {
-  let crc = 0 ^ -1;
-  for (let i = 0; i < str.length; i++) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ str.charCodeAt(i)) & 0xff];
-  }
-  return (crc ^ -1) >>> 0;
-}
-
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function milestoneColorFor(key) {
-  return MILESTONE_COLORS[crc32Unsigned(String(key || "milestone")) % MILESTONE_COLORS.length];
+function milestoneColorKey(ev) {
+  const name = String(ev?.medication_name || "")
+    .trim()
+    .toLowerCase();
+  if (name) return `medname:${name}`;
+  if (ev?.medication_id) return `med:${ev.medication_id}`;
+  return `life:${ev?.id || ev?.label || "milestone"}`;
 }
 
 function colorizeMilestoneEvents(events) {
+  // Sequential palette so adjacent meds / lifestyle events are obviously different
+  const keyIndex = new Map();
+  for (const ev of events || []) {
+    const key = milestoneColorKey(ev);
+    if (!keyIndex.has(key)) keyIndex.set(key, keyIndex.size);
+  }
   return (events || []).map((ev) => {
-    const key = ev.medication_id
-      ? `med:${ev.medication_id}`
-      : `life:${ev.id || ev.label || "milestone"}`;
-    return { ...ev, color: milestoneColorFor(key) };
+    const idx = keyIndex.get(milestoneColorKey(ev)) || 0;
+    return { ...ev, color: MILESTONE_COLORS[idx % MILESTONE_COLORS.length] };
   });
 }
 
@@ -7846,9 +7837,9 @@ function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = [])
     .map((ev) => {
       const checked = (prefs.selected || []).includes(ev.id);
       const color = ev.color || "#0f766e";
-      return `<label class="diag-milestone-chip${checked ? "" : " is-off"}" title="${escapeHtml(ev.label)}" style="--ms-color:${escapeHtml(color)}">
+      return `<label class="diag-milestone-chip${checked ? "" : " is-off"}" title="${escapeHtml(ev.label)}" style="border-color:${escapeHtml(color)};background:color-mix(in srgb, ${escapeHtml(color)} 14%, var(--surface))">
         <input type="checkbox" class="diag-milestone-toggle" data-id="${escapeHtml(ev.id)}" ${checked ? "checked" : ""}>
-        <span class="diag-milestone-swatch" aria-hidden="true"></span>
+        <span class="diag-milestone-swatch" style="background:${escapeHtml(color)}" aria-hidden="true"></span>
         <span>${escapeHtml(ev.label)}</span>
       </label>`;
     })
@@ -8106,10 +8097,12 @@ function renderMilestonesSettings(profile) {
     .map((m) => {
       const when = formatDiagDate(m.date) || m.date || "";
       const notes = m.notes ? ` · ${escapeHtml(m.notes)}` : "";
-      const color = milestoneColorFor(`life:${m.id || m.label}`);
+      const tint =
+        colorizeMilestoneEvents([{ id: m.id, label: m.label, source: "custom" }])[0]?.color ||
+        MILESTONE_COLORS[0];
       return `<div class="medication-row" data-id="${escapeHtml(m.id || "")}">
         <div class="medication-row-main">
-          <strong><span class="diag-milestone-swatch" style="--ms-color:${escapeHtml(color)};margin-right:0.35rem"></span>${escapeHtml(m.label || "")}</strong>
+          <strong><span class="diag-milestone-swatch" style="background:${escapeHtml(tint)};margin-right:0.35rem"></span>${escapeHtml(m.label || "")}</strong>
           <p class="medication-row-meta">${escapeHtml(when)}${notes}</p>
         </div>
         <div class="medication-row-actions">
@@ -9060,11 +9053,11 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
         const top = padTop - 2;
         const bot = h - padBottom;
         return `<g class="diag-milestone-mark">
-          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${color}" stroke-width="2" stroke-dasharray="5 4" opacity="0.95">
+          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${color}" stroke-width="2.6" stroke-dasharray="6 4" opacity="1">
             <title>${escapeHtml(ev.label)}</title>
           </line>
-          <polygon points="${(x - 5).toFixed(1)},${top} ${(x + 5).toFixed(1)},${top} ${x.toFixed(1)},${(top + 8).toFixed(1)}" fill="${color}" />
-          <circle cx="${x.toFixed(1)}" cy="${bot}" r="3.2" fill="${color}" />
+          <polygon points="${(x - 5.5).toFixed(1)},${top} ${(x + 5.5).toFixed(1)},${top} ${x.toFixed(1)},${(top + 9).toFixed(1)}" fill="${color}" />
+          <circle cx="${x.toFixed(1)}" cy="${bot}" r="3.6" fill="${color}" stroke="#fff" stroke-width="1" />
         </g>`;
       })
       .join("");
@@ -9076,7 +9069,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
               ? `${String(ev.label).slice(0, 41)}…`
               : ev.label;
           const color = ev.color || "#0f766e";
-          return `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}" style="--ms-color:${escapeHtml(color)}"><span class="diag-milestone-badge-dot" aria-hidden="true"></span>${escapeHtml(short)}</span>`;
+          return `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}" style="border-color:${escapeHtml(color)};background:color-mix(in srgb, ${escapeHtml(color)} 16%, var(--surface));color:color-mix(in srgb, ${escapeHtml(color)} 82%, #0f172a)"><span class="diag-milestone-badge-dot" style="background:${escapeHtml(color)}" aria-hidden="true"></span>${escapeHtml(short)}</span>`;
         })
         .join("")}
     </div>`;
