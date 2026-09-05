@@ -32,7 +32,13 @@ const state = {
   diagnosticPresets: [],
   journalPresets: [],
   milestonePresets: [],
-  journalDraft: { kind: "note", label: "", severity: null },
+  journalDraft: {
+    feelings: [],
+    actions: [],
+    severity: null,
+    medChoices: [],
+    foodChoices: [],
+  },
   diagMilestonePrefs: { enabled: true, selected: null },
   diagStatusFilter: "all",
   coverageReport: null,
@@ -8849,7 +8855,7 @@ function defaultJournalPresets() {
     { label: "Pain", kind: "symptom" },
     { label: "Anxiety", kind: "feeling" },
     { label: "Took medication", kind: "medication" },
-    { label: "Ate", kind: "note" },
+    { label: "Ate/Drank", kind: "note" },
     { label: "Slept", kind: "note" },
     { label: "Note", kind: "note" },
   ];
@@ -8863,39 +8869,143 @@ const POSITIVE_JOURNAL_LABELS = new Set([
   "pain-free",
 ]);
 
+const JOURNAL_CBD_OPTIONS = ["CBD Drops", "CBD 1 drop", "CBD 2 drops"];
+const JOURNAL_FOOD_OPTIONS = ["Water"];
+
+function emptyJournalDraft() {
+  return {
+    feelings: [],
+    actions: [],
+    severity: null,
+    medChoices: [],
+    foodChoices: [],
+  };
+}
+
+function chipKey(kind, label) {
+  return `${kind || ""}::${label || ""}`;
+}
+
+function toggleJournalSelection(list, item) {
+  const key = chipKey(item.kind, item.label);
+  const idx = list.findIndex((x) => chipKey(x.kind, x.label) === key);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+  } else {
+    list.push({ kind: item.kind, label: item.label });
+  }
+  return list;
+}
+
+function toggleStringChoice(list, value) {
+  const idx = list.indexOf(value);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(value);
+  return list;
+}
+
+function actionSelected(label) {
+  return (state.journalDraft.actions || []).some(
+    (a) => String(a.label || "").toLowerCase() === String(label).toLowerCase()
+  );
+}
+
 function ensureJournalChips() {
   const feelingEl = document.getElementById("journal-feeling-chips");
   const actionEl = document.getElementById("journal-action-chips");
   if (!feelingEl || !actionEl) return;
   const presets = state.journalPresets.length ? state.journalPresets : defaultJournalPresets();
-  const sig = presets.map((p) => `${p.kind}:${p.label}`).join("|");
-  if (feelingEl.dataset.sig === sig) return;
-  const feelings = presets.filter((p) => p.kind === "symptom" || p.kind === "feeling");
-  const actions = presets.filter((p) => p.kind === "medication" || p.kind === "note");
-  const chipHtml = (p) =>
-    `<button type="button" class="journal-chip" data-kind="${escapeHtml(p.kind)}" data-label="${escapeHtml(p.label)}">${escapeHtml(p.label)}</button>`;
-  feelingEl.innerHTML = feelings.map(chipHtml).join("");
-  actionEl.innerHTML = actions.map(chipHtml).join("");
-  feelingEl.dataset.sig = sig;
-  actionEl.dataset.sig = sig;
+  // Migrate legacy "Ate" preset label if still coming from an older server
+  const normalized = presets.map((p) =>
+    p.label === "Ate" ? { ...p, label: "Ate/Drank" } : p
+  );
+  const sig = normalized.map((p) => `${p.kind}:${p.label}`).join("|");
+  if (feelingEl.dataset.sig !== sig) {
+    const feelings = normalized.filter((p) => p.kind === "symptom" || p.kind === "feeling");
+    const actions = normalized.filter((p) => p.kind === "medication" || p.kind === "note");
+    const chipHtml = (p) =>
+      `<button type="button" class="journal-chip" data-kind="${escapeHtml(p.kind)}" data-label="${escapeHtml(p.label)}">${escapeHtml(p.label)}</button>`;
+    feelingEl.innerHTML = feelings.map(chipHtml).join("");
+    actionEl.innerHTML = actions.map(chipHtml).join("");
+    feelingEl.dataset.sig = sig;
+    actionEl.dataset.sig = sig;
+  }
+  renderJournalMedChips();
+  renderJournalFoodChips();
+}
+
+function activePatientMedications() {
+  const meds = state.patientProfile?.medications || [];
+  return meds.filter((m) => m && !m.ended_at && (m.name || "").trim());
+}
+
+function renderJournalMedChips() {
+  const wrap = document.getElementById("journal-med-options");
+  const el = document.getElementById("journal-med-chips");
+  if (!wrap || !el) return;
+  const show = actionSelected("Took medication");
+  wrap.classList.toggle("hidden", !show);
+  if (!show) return;
+  const personMeds = activePatientMedications().map((m) => String(m.name).trim());
+  const options = [...personMeds];
+  for (const cbd of JOURNAL_CBD_OPTIONS) {
+    if (!options.some((o) => o.toLowerCase() === cbd.toLowerCase())) options.push(cbd);
+  }
+  el.innerHTML = options
+    .map(
+      (name) =>
+        `<button type="button" class="journal-chip" data-med="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+    )
+    .join("");
+}
+
+function renderJournalFoodChips() {
+  const wrap = document.getElementById("journal-food-options");
+  const el = document.getElementById("journal-food-chips");
+  if (!wrap || !el) return;
+  const show = actionSelected("Ate/Drank") || actionSelected("Ate");
+  wrap.classList.toggle("hidden", !show);
+  if (!show) return;
+  el.innerHTML = JOURNAL_FOOD_OPTIONS.map(
+    (name) =>
+      `<button type="button" class="journal-chip" data-food="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+  ).join("");
 }
 
 function updateJournalDraftUi() {
-  const draft = state.journalDraft || { kind: "note", label: "", severity: null };
-  document.querySelectorAll(".journal-chip").forEach((btn) => {
-    const on =
-      btn.dataset.label === draft.label && btn.dataset.kind === draft.kind;
-    btn.classList.toggle("is-selected", on);
+  const draft = state.journalDraft || emptyJournalDraft();
+  if (!Array.isArray(draft.feelings)) draft.feelings = [];
+  if (!Array.isArray(draft.actions)) draft.actions = [];
+  if (!Array.isArray(draft.medChoices)) draft.medChoices = [];
+  if (!Array.isArray(draft.foodChoices)) draft.foodChoices = [];
+  state.journalDraft = draft;
+
+  const feelingKeys = new Set(draft.feelings.map((f) => chipKey(f.kind, f.label)));
+  const actionKeys = new Set(draft.actions.map((a) => chipKey(a.kind, a.label)));
+  document.querySelectorAll("#journal-feeling-chips .journal-chip").forEach((btn) => {
+    btn.classList.toggle("is-selected", feelingKeys.has(chipKey(btn.dataset.kind, btn.dataset.label)));
   });
+  document.querySelectorAll("#journal-action-chips .journal-chip").forEach((btn) => {
+    btn.classList.toggle("is-selected", actionKeys.has(chipKey(btn.dataset.kind, btn.dataset.label)));
+  });
+  document.querySelectorAll("#journal-med-chips .journal-chip").forEach((btn) => {
+    btn.classList.toggle("is-selected", draft.medChoices.includes(btn.dataset.med));
+  });
+  document.querySelectorAll("#journal-food-chips .journal-chip").forEach((btn) => {
+    btn.classList.toggle("is-selected", draft.foodChoices.includes(btn.dataset.food));
+  });
+
   document.querySelectorAll(".journal-sev-btn").forEach((btn) => {
     btn.classList.toggle("is-selected", String(draft.severity || "") === btn.dataset.sev);
   });
   const severityRow = document.getElementById("journal-severity-row");
   const severityLabel = severityRow?.querySelector(":scope > .muted, :scope > span");
   if (severityRow) {
-    const show = draft.kind === "symptom" || draft.kind === "feeling";
+    const show = draft.feelings.length > 0;
     severityRow.classList.toggle("hidden", !show);
-    const positive = POSITIVE_JOURNAL_LABELS.has(String(draft.label || "").toLowerCase());
+    const positive = draft.feelings.some((f) =>
+      POSITIVE_JOURNAL_LABELS.has(String(f.label || "").toLowerCase())
+    );
     if (severityLabel) {
       severityLabel.textContent = positive ? "How good (optional)" : "Severity";
     }
@@ -8908,13 +9018,30 @@ function updateJournalDraftUi() {
       }
     });
   }
+
+  renderJournalMedChips();
+  renderJournalFoodChips();
+  // re-apply med/food selection after re-render
+  document.querySelectorAll("#journal-med-chips .journal-chip").forEach((btn) => {
+    btn.classList.toggle("is-selected", draft.medChoices.includes(btn.dataset.med));
+  });
+  document.querySelectorAll("#journal-food-chips .journal-chip").forEach((btn) => {
+    btn.classList.toggle("is-selected", draft.foodChoices.includes(btn.dataset.food));
+  });
+
   const hint = document.getElementById("journal-selected-hint");
   if (hint) {
-    if (draft.label) {
+    const bits = [
+      ...draft.feelings.map((f) => f.label),
+      ...draft.actions.map((a) => a.label),
+      ...draft.medChoices,
+      ...draft.foodChoices,
+    ].filter(Boolean);
+    if (bits.length) {
       const sev = draft.severity ? ` · severity ${draft.severity}` : "";
-      hint.textContent = `${draft.label}${sev}`;
+      hint.textContent = `${bits.join(", ")}${sev}`;
     } else {
-      hint.textContent = "Pick a chip or type a note";
+      hint.textContent = "Pick one or more chips, or type a note";
     }
   }
 }
@@ -10053,6 +10180,7 @@ document.getElementById("journal-recent")?.addEventListener("click", async (even
 });
 
 document.getElementById("btn-journal")?.addEventListener("click", () => {
+  state.journalDraft = emptyJournalDraft();
   ensureJournalChips();
   updateJournalDraftUi();
   showModal("modal-journal");
@@ -10074,25 +10202,51 @@ document.getElementById("modal-journal")?.addEventListener("click", (event) => {
 document.getElementById("journal-feeling-chips")?.addEventListener("click", (event) => {
   const chip = event.target.closest(".journal-chip");
   if (!chip) return;
-  state.journalDraft = {
-    ...state.journalDraft,
-    kind: chip.dataset.kind || "symptom",
+  const draft = state.journalDraft || emptyJournalDraft();
+  draft.feelings = toggleJournalSelection(draft.feelings || [], {
+    kind: chip.dataset.kind || "feeling",
     label: chip.dataset.label || "",
-  };
+  });
+  state.journalDraft = draft;
   updateJournalDraftUi();
 });
 
 document.getElementById("journal-action-chips")?.addEventListener("click", (event) => {
   const chip = event.target.closest(".journal-chip");
   if (!chip) return;
-  state.journalDraft = {
-    ...state.journalDraft,
+  const draft = state.journalDraft || emptyJournalDraft();
+  draft.actions = toggleJournalSelection(draft.actions || [], {
     kind: chip.dataset.kind || "note",
     label: chip.dataset.label || "",
-    severity: chip.dataset.kind === "medication" || chip.dataset.kind === "note"
-      ? null
-      : state.journalDraft.severity,
-  };
+  });
+  const hasMed = draft.actions.some(
+    (a) => String(a.label || "").toLowerCase() === "took medication"
+  );
+  const hasFood = draft.actions.some((a) => {
+    const l = String(a.label || "").toLowerCase();
+    return l === "ate/drank" || l === "ate";
+  });
+  if (!hasMed) draft.medChoices = [];
+  if (!hasFood) draft.foodChoices = [];
+  state.journalDraft = draft;
+  updateJournalDraftUi();
+});
+
+document.getElementById("journal-med-chips")?.addEventListener("click", (event) => {
+  const chip = event.target.closest(".journal-chip");
+  if (!chip?.dataset.med) return;
+  const draft = state.journalDraft || emptyJournalDraft();
+  draft.medChoices = toggleStringChoice(draft.medChoices || [], chip.dataset.med);
+  state.journalDraft = draft;
+  updateJournalDraftUi();
+});
+
+document.getElementById("journal-food-chips")?.addEventListener("click", (event) => {
+  const chip = event.target.closest(".journal-chip");
+  if (!chip?.dataset.food) return;
+  const draft = state.journalDraft || emptyJournalDraft();
+  draft.foodChoices = toggleStringChoice(draft.foodChoices || [], chip.dataset.food);
+  state.journalDraft = draft;
   updateJournalDraftUi();
 });
 
@@ -10101,14 +10255,14 @@ document.getElementById("journal-severity")?.addEventListener("click", (event) =
   if (!btn) return;
   const sev = Number(btn.dataset.sev);
   state.journalDraft = {
-    ...state.journalDraft,
-    severity: state.journalDraft.severity === sev ? null : sev,
+    ...(state.journalDraft || emptyJournalDraft()),
+    severity: state.journalDraft?.severity === sev ? null : sev,
   };
   updateJournalDraftUi();
 });
 
 document.getElementById("btn-journal-clear-sev")?.addEventListener("click", () => {
-  state.journalDraft = { ...state.journalDraft, severity: null };
+  state.journalDraft = { ...(state.journalDraft || emptyJournalDraft()), severity: null };
   updateJournalDraftUi();
 });
 
@@ -10117,19 +10271,84 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
     toast("Select a patient first", "error");
     return;
   }
+  const draft = state.journalDraft || emptyJournalDraft();
   const text = document.getElementById("journal-text")?.value.trim() || "";
-  let kind = state.journalDraft.kind || "note";
-  let label = (state.journalDraft.label || "").trim();
-  let detail = text || null;
-  if (!label && text) {
-    kind = "note";
-    label = text.slice(0, 80);
-    detail = null;
+  const entries = [];
+
+  for (const feeling of draft.feelings || []) {
+    entries.push({
+      kind: feeling.kind || "feeling",
+      label: feeling.label,
+      text: null,
+      severity: draft.severity || null,
+    });
   }
-  if (!label) {
-    toast("Pick a chip or type a detail", "error");
+
+  for (const action of draft.actions || []) {
+    const labelLower = String(action.label || "").toLowerCase();
+    if (labelLower === "took medication") {
+      if ((draft.medChoices || []).length) {
+        for (const med of draft.medChoices) {
+          entries.push({
+            kind: "medication",
+            label: med,
+            text: text || null,
+            severity: null,
+          });
+        }
+      } else {
+        entries.push({
+          kind: "medication",
+          label: "Took medication",
+          text: text || null,
+          severity: null,
+        });
+      }
+      continue;
+    }
+    if (labelLower === "ate/drank" || labelLower === "ate") {
+      if ((draft.foodChoices || []).length) {
+        for (const food of draft.foodChoices) {
+          entries.push({
+            kind: "note",
+            label: food,
+            text: text || "Ate/Drank",
+            severity: null,
+          });
+        }
+      } else {
+        entries.push({
+          kind: "note",
+          label: "Ate/Drank",
+          text: text || null,
+          severity: null,
+        });
+      }
+      continue;
+    }
+    entries.push({
+      kind: action.kind || "note",
+      label: action.label,
+      text: text || null,
+      severity: null,
+    });
+  }
+
+  // Free-text only note when nothing else selected
+  if (!entries.length && text) {
+    entries.push({
+      kind: "note",
+      label: text.slice(0, 80),
+      text: null,
+      severity: null,
+    });
+  }
+
+  if (!entries.length) {
+    toast("Pick one or more chips, or type a detail", "error");
     return;
   }
+
   const linkCase = document.getElementById("journal-link-case")?.checked;
   const whenRaw = document.getElementById("journal-when")?.value;
   let recorded_at = null;
@@ -10137,37 +10356,40 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
     const local = new Date(whenRaw);
     recorded_at = Number.isNaN(local.getTime()) ? whenRaw : local.toISOString();
   }
-  const body = {
-    kind,
-    label,
-    text: detail,
-    severity:
-      kind === "symptom" || kind === "feeling" ? state.journalDraft.severity || null : null,
-    recorded_at,
-    case_id: linkCase && state.activeCaseId ? state.activeCaseId : null,
-  };
 
   const btn = document.getElementById("btn-journal-log");
   if (btn) btn.disabled = true;
   try {
-    const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Could not save self-report");
+    let lastData = null;
+    for (const entry of entries) {
+      const body = {
+        kind: entry.kind,
+        label: entry.label,
+        text: entry.text,
+        severity:
+          entry.kind === "symptom" || entry.kind === "feeling" ? entry.severity || null : null,
+        recorded_at,
+        case_id: linkCase && state.activeCaseId ? state.activeCaseId : null,
+      };
+      const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Could not save self-report");
+      }
+      lastData = await res.json();
     }
-    const data = await res.json();
     const textEl = document.getElementById("journal-text");
     if (textEl) textEl.value = "";
     const whenEl = document.getElementById("journal-when");
     if (whenEl) whenEl.value = "";
-    state.journalDraft = { kind: "note", label: "", severity: null };
-    applyProfileResponse(data);
+    state.journalDraft = emptyJournalDraft();
+    if (lastData) applyProfileResponse(lastData);
     hideModal("modal-journal");
-    toast("Logged");
+    toast(entries.length === 1 ? "Logged" : `Logged ${entries.length} items`);
   } catch (err) {
     toast(err.message || "Could not save", "error");
   } finally {

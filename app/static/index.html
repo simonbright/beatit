@@ -129,10 +129,18 @@
       </div>
       <p class="muted small">Log symptoms, when you feel better, or a med — with a date and time — so you can see headache → medicine → better. Patient-wide by default.</p>
       <div class="journal-chip-block">
-        <p class="journal-chip-label muted small">How I feel (good or bad)</p>
+        <p class="journal-chip-label muted small">How I feel (good or bad) — tap several</p>
         <div class="journal-chips" id="journal-feeling-chips" role="group" aria-label="Feeling and symptom chips"></div>
-        <p class="journal-chip-label muted small">What I did</p>
+        <p class="journal-chip-label muted small">What I did — tap several</p>
         <div class="journal-chips" id="journal-action-chips" role="group" aria-label="Action chips"></div>
+        <div id="journal-med-options" class="journal-subchip-block hidden">
+          <p class="journal-chip-label muted small">Which medicine?</p>
+          <div class="journal-chips" id="journal-med-chips" role="group" aria-label="Medication taken"></div>
+        </div>
+        <div id="journal-food-options" class="journal-subchip-block hidden">
+          <p class="journal-chip-label muted small">What did you eat or drink?</p>
+          <div class="journal-chips" id="journal-food-chips" role="group" aria-label="Food or drink"></div>
+        </div>
       </div>
       <div class="journal-severity-row" id="journal-severity-row">
         <span class="muted small">Severity</span>
