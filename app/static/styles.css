@@ -1121,6 +1121,66 @@ body {
   margin-top: 0.85rem;
 }
 
+.diag-status-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  align-items: center;
+}
+
+.diag-status-filter.hidden {
+  display: none;
+}
+
+.diag-status-filter-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.32rem 0.65rem;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.diag-status-filter-btn:hover {
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+}
+
+.diag-status-filter-btn.is-active {
+  border-color: color-mix(in srgb, var(--text) 45%, var(--border));
+  background: color-mix(in srgb, var(--text) 8%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.diag-status-filter-btn.diag-filter-red.is-active {
+  border-color: color-mix(in srgb, #b91c1c 55%, var(--border));
+  background: color-mix(in srgb, #ef4444 14%, var(--surface));
+  color: #7f1d1d;
+}
+
+.diag-status-filter-btn.diag-filter-yellow.is-active {
+  border-color: color-mix(in srgb, #ca8a04 55%, var(--border));
+  background: color-mix(in srgb, #eab308 18%, var(--surface));
+  color: #713f12;
+}
+
+.diag-status-filter-btn.diag-filter-green.is-active {
+  border-color: color-mix(in srgb, #15803d 55%, var(--border));
+  background: color-mix(in srgb, #22c55e 14%, var(--surface));
+  color: #14532d;
+}
+
+.diag-status-filter-count {
+  font-weight: 700;
+  opacity: 0.72;
+  margin-left: 0.15rem;
+}
+
 .diag-milestone-controls {
   margin-top: 0.55rem;
   border: 1px solid var(--border);

@@ -33,6 +33,7 @@ const state = {
   milestonePresets: [],
   journalDraft: { kind: "note", label: "", severity: null },
   diagMilestonePrefs: { enabled: true, selected: null },
+  diagStatusFilter: "all",
   analysisJobId: null,
   auditEvents: [],
   auditOffset: 0,
@@ -7231,6 +7232,7 @@ async function loadCaseContext() {
 
     state.activePatientId = ctx.patient_id || null;
     state.activeCaseId = ctx.case_id || null;
+    state.diagStatusFilter = "all";
     if (ctx.patient_id) {
       await refreshActivePatientProfile();
     } else {
@@ -8907,6 +8909,57 @@ function statusLabel(status) {
   return "";
 }
 
+const DIAG_STATUS_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "red", label: "Off target" },
+  { id: "yellow", label: "Near target" },
+  { id: "green", label: "On target" },
+];
+
+function diagSeriesStatus(s) {
+  const latest = s?.latest;
+  return (
+    s?.status ||
+    latest?.status ||
+    clientStatusForValue(latest?.value, s?.reference) ||
+    null
+  );
+}
+
+function diagStatusSortRank(status) {
+  if (status === "red") return 0;
+  if (status === "yellow") return 1;
+  if (status === "green") return 2;
+  return 3;
+}
+
+function renderDiagnosticsStatusFilter(cards) {
+  const bar = document.getElementById("diagnostics-status-filter");
+  if (!bar) return;
+  if (!cards.length) {
+    bar.classList.add("hidden");
+    bar.innerHTML = "";
+    return;
+  }
+  const counts = { all: cards.length, red: 0, yellow: 0, green: 0, none: 0 };
+  for (const s of cards) {
+    const st = diagSeriesStatus(s);
+    if (st === "red" || st === "yellow" || st === "green") counts[st] += 1;
+    else counts.none += 1;
+  }
+  const active = DIAG_STATUS_FILTERS.some((f) => f.id === state.diagStatusFilter)
+    ? state.diagStatusFilter
+    : "all";
+  state.diagStatusFilter = active;
+  bar.classList.remove("hidden");
+  bar.innerHTML = DIAG_STATUS_FILTERS.map((f) => {
+    const n = counts[f.id] ?? 0;
+    const pressed = active === f.id;
+    const tone = f.id === "all" ? "" : ` diag-filter-${f.id}`;
+    return `<button type="button" class="diag-status-filter-btn${tone}${pressed ? " is-active" : ""}" data-diag-status-filter="${f.id}" aria-pressed="${pressed ? "true" : "false"}">${escapeHtml(f.label)} <span class="diag-status-filter-count">${n}</span></button>`;
+  }).join("");
+}
+
 function clientStatusForValue(value, reference) {
   if (value == null || !reference) return null;
   const v = Number(value);
@@ -9169,20 +9222,41 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
     renderDiagnosticsMilestoneControls(profile, allEvents, cards);
   }
   if (!cards.length) {
+    renderDiagnosticsStatusFilter([]);
     wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
     return;
   }
+
+  const ranked = cards
+    .map((s, i) => ({ s, i, status: diagSeriesStatus(s) }))
+    .sort((a, b) => {
+      const byStatus = diagStatusSortRank(a.status) - diagStatusSortRank(b.status);
+      if (byStatus) return byStatus;
+      return a.i - b.i;
+    });
+  renderDiagnosticsStatusFilter(ranked.map((r) => r.s));
+  const filter = DIAG_STATUS_FILTERS.some((f) => f.id === state.diagStatusFilter)
+    ? state.diagStatusFilter
+    : "all";
+  const visible =
+    filter === "all" ? ranked : ranked.filter((r) => r.status === filter);
 
   const span = seriesDateSpan(cards);
   const inSpan = milestonesForLabSpan(allEvents, span);
   const prefs = state.diagMilestonePrefs || loadDiagMilestonePrefs(state.activePatientId, inSpan);
   const milestones = opts.milestones || visibleDiagMilestones(inSpan, prefs);
 
-  wrap.innerHTML = cards
-    .map((s) => {
+  if (!visible.length) {
+    const label =
+      DIAG_STATUS_FILTERS.find((f) => f.id === filter)?.label || "this filter";
+    wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No labs marked ${escapeHtml(label.toLowerCase())}. Choose All to see every chart.</p>`;
+    return;
+  }
+
+  wrap.innerHTML = visible
+    .map(({ s, status }) => {
       const unit = s.unit ? ` ${s.unit}` : "";
       const latest = s.latest;
-      const status = s.status || latest?.status || clientStatusForValue(latest?.value, s.reference);
       const latestLabel = latest
         ? `${formatDiagValue(latest.value)}${unit} · ${formatDiagDate(latest.recorded_at)}`
         : "—";
@@ -10120,6 +10194,19 @@ document.getElementById("diag-milestones-enabled")?.addEventListener("change", (
   prefs.enabled = !!e.target.checked;
   state.diagMilestonePrefs = prefs;
   applyDiagMilestonePrefsAndRedraw();
+});
+
+document.getElementById("diagnostics-status-filter")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-diag-status-filter]");
+  if (!btn) return;
+  const next = btn.getAttribute("data-diag-status-filter") || "all";
+  if (next === state.diagStatusFilter) return;
+  state.diagStatusFilter = next;
+  const profile = state.patientProfile || null;
+  const series = resolveDiagnosticSeries(profile, {
+    diagnostic_series: state.diagnosticSeriesCache,
+  });
+  renderDiagnosticsCharts(profile, series, { skipControls: true });
 });
 
 document.getElementById("diag-milestones-all")?.addEventListener("click", () => {
