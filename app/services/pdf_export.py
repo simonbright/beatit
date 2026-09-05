@@ -1332,3 +1332,197 @@ def build_diagnostics_pdf(
     buffer = BytesIO()
     pdf.output(buffer)
     return buffer.getvalue()
+
+
+def coverage_pdf_filename(
+    *,
+    patient_label: str | None = None,
+    exported_at: datetime | None = None,
+) -> str:
+    stamp = _format_filename_stamp(
+        (exported_at or datetime.now(timezone.utc)).isoformat()
+    )
+    slug = ""
+    if patient_label:
+        slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
+    if slug:
+        return f"beatit-coverage-{slug}-{stamp}.pdf"
+    return f"beatit-coverage-{stamp}.pdf"
+
+
+def _format_coverage_doc_date(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        raw = str(iso)
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        eastern = dt.astimezone(EASTERN)
+        return eastern.strftime("%b %d, %Y").replace(" 0", " ")
+    except ValueError:
+        return str(iso)[:10]
+
+
+def build_document_coverage_pdf(
+    coverage: dict[str, Any],
+    *,
+    patient_label: str | None = None,
+    patient_subline: str | None = None,
+) -> bytes:
+    """Documentation coverage / inventory PDF."""
+    now = datetime.now(timezone.utc)
+    exported_at = _format_timestamp(now.isoformat())
+    report_date, report_time = _format_timestamp_parts(now.isoformat())
+
+    pdf = AssessmentPDF(
+        report_date=report_date,
+        report_time=report_time,
+        report_type="Documentation coverage",
+        exported_at=exported_at,
+        patient_label=patient_label,
+        patient_subline=patient_subline,
+    )
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=26)
+    pdf.set_margins(14, 36, 14)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(14, 116, 144)
+    title = "Documentation coverage"
+    if patient_label:
+        title = f"Documentation coverage - {_safe_text(patient_label)}"
+    pdf.cell(0, 7, title, new_x="LMARGIN", new_y="NEXT", align="L")
+
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(80, 80, 80)
+    total = int(coverage.get("total") or 0)
+    present = int(coverage.get("present_count") or 0)
+    missing = int(coverage.get("missing_count") or 0)
+    meta = [
+        f"Exported: {exported_at}",
+        f"{total} document{'s' if total != 1 else ''}",
+        f"{present} coverage areas present",
+        f"{missing} missing",
+    ]
+    pdf.cell(0, 4, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 8)
+    _pdf_multiline(
+        pdf,
+        "Inventory of stored documentation by clinical type and upload date. "
+        "Use this to align on what is present, what is missing, and what needs attention.",
+        h=3.6,
+    )
+    pdf.set_draw_color(14, 165, 233)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(3.5)
+
+    # Checklist
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(0, 6, "Coverage checklist", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1)
+    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+    for item in coverage.get("checklist") or []:
+        status = "Present" if item.get("present") else "MISSING"
+        count = int(item.get("count") or 0)
+        label = str(item.get("label") or item.get("id") or "")
+        line = f"[{status}] {label}"
+        if count:
+            line += f" ({count})"
+        pdf.set_font("Helvetica", "B" if not item.get("present") else "", 9)
+        if item.get("present"):
+            pdf.set_text_color(21, 128, 61)
+        else:
+            pdf.set_text_color(185, 28, 28)
+        pdf.cell(usable_w * 0.22, 4.5, _safe_text(status), new_x="END", new_y="TOP")
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 4.5, _safe_text(f"{label} ({count})" if count else label), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # Attention
+    attn = coverage.get("attention") or {}
+    counts = attn.get("counts") or {}
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(0, 6, "Needs attention", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1)
+    sections = [
+        ("needs_ocr", "Needs OCR"),
+        ("flagged", "Flagged"),
+        ("file_missing", "Original file missing"),
+        ("unclassified_pdf", "Unclassified PDFs"),
+    ]
+    any_attention = False
+    for key, heading in sections:
+        items = attn.get(key) or []
+        n = int(counts.get(key) or len(items))
+        if not n:
+            continue
+        any_attention = True
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(146, 64, 14)
+        pdf.cell(0, 5, _safe_text(f"{heading} ({n})"), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(40, 40, 40)
+        for row in items[:40]:
+            name = str(row.get("display_name") or row.get("title") or "Untitled")
+            case = str(row.get("case_label") or "").strip()
+            when = _format_coverage_doc_date(row.get("created_at"))
+            bit = f"- {name}"
+            if case:
+                bit += f" · {case}"
+            bit += f" · {when}"
+            _pdf_multiline(pdf, _safe_text(bit), h=3.4)
+        if len(items) > 40:
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.cell(0, 4, _safe_text(f"… and {len(items) - 40} more"), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1.5)
+    if not any_attention:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5, "Nothing flagged for attention.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    # Inventory by type
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(30, 30, 30)
+    pdf.cell(0, 6, "Inventory by type", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1)
+    for group in coverage.get("by_type") or []:
+        if pdf.get_y() > pdf.h - 40:
+            pdf.add_page()
+        label = str(group.get("label") or group.get("id") or "")
+        count = int(group.get("count") or 0)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(14, 116, 144)
+        pdf.cell(0, 5, _safe_text(f"{label} ({count})"), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(40, 40, 40)
+        for row in group.get("documents") or []:
+            name = str(row.get("display_name") or "Untitled")
+            case = str(row.get("case_label") or "").strip()
+            when = _format_coverage_doc_date(row.get("created_at"))
+            chips: list[str] = []
+            if row.get("needs_ocr"):
+                chips.append("OCR")
+            if row.get("flagged"):
+                chips.append("Flagged")
+            if row.get("file_missing"):
+                chips.append("File missing")
+            bit = f"- {name} · {when}"
+            if case:
+                bit += f" · {case}"
+            if chips:
+                bit += f" · [{', '.join(chips)}]"
+            _pdf_multiline(pdf, _safe_text(bit), h=3.4)
+        pdf.ln(1.5)
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()

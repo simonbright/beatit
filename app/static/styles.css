@@ -2868,6 +2868,175 @@ textarea { resize: vertical; min-height: 100px; }
   background: #b91c1c;
 }
 
+.coverage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.coverage-summary {
+  margin: 0.55rem 0 0;
+}
+
+.coverage-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.75rem 0 0.35rem;
+}
+
+.coverage-filter-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.32rem 0.65rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.coverage-filter-btn.is-active {
+  border-color: color-mix(in srgb, var(--text) 40%, var(--border));
+  background: color-mix(in srgb, var(--text) 8%, var(--surface));
+}
+
+.coverage-body {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.coverage-section-title,
+.coverage-group-title {
+  margin: 0 0 0.45rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.coverage-group-count {
+  font-weight: 600;
+  opacity: 0.65;
+  font-size: 0.85rem;
+}
+
+.coverage-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.4rem;
+}
+
+.coverage-check {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+}
+
+.coverage-check.is-present {
+  border-color: color-mix(in srgb, #15803d 40%, var(--border));
+}
+
+.coverage-check.is-missing {
+  border-color: color-mix(in srgb, #b91c1c 40%, var(--border));
+}
+
+.coverage-check-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.coverage-check.is-present .coverage-check-status {
+  color: #14532d;
+}
+
+.coverage-check.is-missing .coverage-check-status {
+  color: #7f1d1d;
+}
+
+.coverage-check-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.coverage-doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.coverage-doc-link {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.coverage-doc-link:hover {
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+}
+
+.coverage-doc-name {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+
+.coverage-doc-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.coverage-doc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+}
+
+.coverage-chip {
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.coverage-chip-warn {
+  color: #713f12;
+  background: color-mix(in srgb, #eab308 22%, transparent);
+}
+
+.coverage-chip-danger {
+  color: #7f1d1d;
+  background: color-mix(in srgb, #ef4444 18%, transparent);
+}
+
+.coverage-group {
+  margin-bottom: 0.85rem;
+}
+
 .flagged-list {
   display: flex;
   flex-direction: column;

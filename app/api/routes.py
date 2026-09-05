@@ -65,6 +65,8 @@ from app.services.pdf_export import (
     assessment_pdf_filename,
     build_assessment_pdf,
     build_diagnostics_pdf,
+    build_document_coverage_pdf,
+    coverage_pdf_filename,
     diagnostics_pdf_filename,
 )
 from app.services.source_catalog import (
@@ -2497,6 +2499,71 @@ async def export_patient_diagnostics_pdf(patient_id: str, request: Request):
             "filename": filename,
             "export_kind": "diagnostics",
             "series_count": len(series),
+        },
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/patients/{patient_id}/documents/coverage")
+async def api_patient_document_coverage(patient_id: str):
+    from app.services.document_coverage import build_document_coverage
+
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    coverage = await build_document_coverage(patient_id)
+    return {
+        "patient": {"id": patient["id"], "label": patient["label"]},
+        "coverage": coverage,
+    }
+
+
+@router.get("/patients/{patient_id}/documents/coverage/export.pdf")
+async def export_patient_document_coverage_pdf(patient_id: str, request: Request):
+    from app.services.document_coverage import build_document_coverage
+
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    coverage = await build_document_coverage(patient_id)
+
+    sub_bits: list[str] = []
+    age = age_years_from_dob(profile.get("date_of_birth"))
+    if age is not None:
+        sub_bits.append(f"Age {age}")
+    if profile.get("gender"):
+        sub_bits.append(str(profile["gender"]))
+    patient_subline = " · ".join(sub_bits) if sub_bits else None
+
+    exported_at = datetime.now(timezone.utc)
+    pdf_bytes = build_document_coverage_pdf(
+        coverage,
+        patient_label=patient.get("label"),
+        patient_subline=patient_subline,
+    )
+    filename = coverage_pdf_filename(
+        patient_label=patient.get("label"),
+        exported_at=exported_at,
+    )
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        PDF_EXPORTED,
+        resource_type="patient",
+        resource_id=patient_id,
+        metadata={
+            "filename": filename,
+            "export_kind": "document_coverage",
+            "document_count": coverage.get("total"),
+            "missing_count": coverage.get("missing_count"),
         },
     )
     return FastAPIResponse(

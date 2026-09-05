@@ -266,6 +266,10 @@
           <span class="section-subtab-label">Flagged</span>
           <span id="flagged-subtab-count" class="section-subtab-count hidden" aria-hidden="true"></span>
         </button>
+        <button type="button" class="section-subtab" data-home-section="coverage" role="tab" aria-selected="false" title="Documentation coverage">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="9" y="3" width="6" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Coverage</span>
+        </button>
         <button type="button" class="section-subtab" data-home-section="gaps" role="tab" aria-selected="false" title="Open items">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Gaps</span>
@@ -429,6 +433,31 @@
           </div>
           <div id="flagged-list" class="flagged-list">
             <p class="muted small">No flagged reports.</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="home-pane-coverage" class="section-pane hidden" data-home-pane="coverage">
+        <div class="card coverage-card" id="coverage-card">
+          <div class="row-between wrap">
+            <div>
+              <h3>Documentation coverage</h3>
+              <p class="muted small">What documentation you have, what kinds are missing, and what still needs attention — across all cases for this person.</p>
+            </div>
+            <div class="coverage-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-export-coverage-pdf" title="Download coverage report PDF">Export PDF</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-coverage-refresh">Refresh</button>
+            </div>
+          </div>
+          <p id="coverage-summary" class="coverage-summary muted small"></p>
+          <div class="coverage-filter-bar" role="group" aria-label="Coverage view">
+            <button type="button" class="coverage-filter-btn is-active" data-coverage-view="all">All</button>
+            <button type="button" class="coverage-filter-btn" data-coverage-view="type">By type</button>
+            <button type="button" class="coverage-filter-btn" data-coverage-view="month">By month</button>
+            <button type="button" class="coverage-filter-btn" data-coverage-view="attention">Needs attention</button>
+          </div>
+          <div id="coverage-body" class="coverage-body">
+            <p class="muted small">Select a patient to see documentation coverage.</p>
           </div>
         </div>
       </div>
@@ -873,6 +902,7 @@
           <h3>Stored documents</h3>
           <div class="row wrap library-header-actions">
             <button type="button" class="btn primary" id="btn-library-add">Add documents</button>
+            <button type="button" class="btn secondary" id="btn-export-coverage-pdf-lib" title="Download documentation coverage PDF">Export coverage</button>
             <button class="btn secondary" id="btn-refresh-docs">Refresh</button>
           </div>
         </div>

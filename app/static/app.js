@@ -34,6 +34,8 @@ const state = {
   journalDraft: { kind: "note", label: "", severity: null },
   diagMilestonePrefs: { enabled: true, selected: null },
   diagStatusFilter: "all",
+  coverageReport: null,
+  coverageView: "all",
   analysisJobId: null,
   auditEvents: [],
   auditOffset: 0,
@@ -956,6 +958,200 @@ function renderFlaggedList() {
     .join("");
 }
 
+function formatCoverageDate(iso) {
+  if (!iso) return "—";
+  try {
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return String(iso).slice(0, 10);
+    return dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return String(iso).slice(0, 10);
+  }
+}
+
+function coverageDocChips(row) {
+  const chips = [];
+  if (row.clinical_report_kind_label) {
+    chips.push(`<span class="coverage-chip">${escapeHtml(row.clinical_report_kind_label)}</span>`);
+  } else if (row.source_type_label) {
+    chips.push(`<span class="coverage-chip">${escapeHtml(row.source_type_label)}</span>`);
+  }
+  if (row.needs_ocr) chips.push(`<span class="coverage-chip coverage-chip-warn">Needs OCR</span>`);
+  if (row.flagged) chips.push(`<span class="coverage-chip coverage-chip-warn">Flagged</span>`);
+  if (row.file_missing) chips.push(`<span class="coverage-chip coverage-chip-danger">File missing</span>`);
+  if (row.unclassified_pdf) chips.push(`<span class="coverage-chip">Unclassified</span>`);
+  return chips.join("");
+}
+
+function coverageDocRowHtml(row) {
+  const caseBit = row.case_label
+    ? `<span class="coverage-doc-case">${escapeHtml(row.case_label)}</span>`
+    : "";
+  return `<li class="coverage-doc-row">
+    <button type="button" class="coverage-doc-link" data-doc-id="${escapeHtml(row.id || "")}">
+      <span class="coverage-doc-name">${escapeHtml(row.display_name || row.title || "Untitled")}</span>
+      <span class="coverage-doc-meta">${escapeHtml(formatCoverageDate(row.created_at))}${caseBit ? ` · ${caseBit}` : ""}</span>
+      <span class="coverage-doc-chips">${coverageDocChips(row)}</span>
+    </button>
+  </li>`;
+}
+
+function coverageGroupHtml(group) {
+  const docs = group.documents || [];
+  return `<section class="coverage-group">
+    <h4 class="coverage-group-title">${escapeHtml(group.label || "")} <span class="coverage-group-count">${docs.length}</span></h4>
+    <ul class="coverage-doc-list">${docs.map(coverageDocRowHtml).join("") || `<li class="muted small">None</li>`}</ul>
+  </section>`;
+}
+
+function renderCoverageAttention(coverage) {
+  const attn = coverage.attention || {};
+  const counts = attn.counts || {};
+  const sections = [
+    ["needs_ocr", "Needs OCR", attn.needs_ocr],
+    ["flagged", "Flagged", attn.flagged],
+    ["file_missing", "Original file missing", attn.file_missing],
+    ["unclassified_pdf", "Unclassified PDFs", attn.unclassified_pdf],
+  ];
+  const blocks = sections
+    .filter(([, , items]) => (items || []).length)
+    .map(([id, label, items]) => {
+      const n = counts[id] ?? items.length;
+      return `<section class="coverage-group coverage-attention-group" id="coverage-attn-${id}">
+        <h4 class="coverage-group-title">${escapeHtml(label)} <span class="coverage-group-count">${n}</span></h4>
+        <ul class="coverage-doc-list">${items.map(coverageDocRowHtml).join("")}</ul>
+      </section>`;
+    });
+  if (!blocks.length) {
+    return `<p class="muted small coverage-attention-empty">Nothing needs attention right now.</p>`;
+  }
+  return blocks.join("");
+}
+
+function renderCoverageChecklist(coverage) {
+  const items = coverage.checklist || [];
+  return `<section class="coverage-section" id="coverage-checklist">
+    <h4 class="coverage-section-title">Coverage checklist</h4>
+    <ul class="coverage-checklist">
+      ${items
+        .map((item) => {
+          const present = !!item.present;
+          const count = item.count ? ` · ${item.count}` : "";
+          return `<li class="coverage-check ${present ? "is-present" : "is-missing"}">
+            <span class="coverage-check-status">${present ? "Present" : "Missing"}</span>
+            <span class="coverage-check-label">${escapeHtml(item.label || item.id || "")}${escapeHtml(count)}</span>
+          </li>`;
+        })
+        .join("")}
+    </ul>
+  </section>`;
+}
+
+function renderCoverageReport() {
+  const body = document.getElementById("coverage-body");
+  const summary = document.getElementById("coverage-summary");
+  const coverage = state.coverageReport;
+  if (!body) return;
+  document.querySelectorAll(".coverage-filter-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.coverageView === state.coverageView);
+  });
+  if (!coverage) {
+    if (summary) summary.textContent = "";
+    body.innerHTML = `<p class="muted small">${
+      state.activePatientId ? "Loading coverage…" : "Select a patient to see documentation coverage."
+    }</p>`;
+    return;
+  }
+  const total = coverage.total || 0;
+  const present = coverage.present_count || 0;
+  const missing = coverage.missing_count || 0;
+  const attnCounts = coverage.attention?.counts || {};
+  const attnTotal =
+    (attnCounts.needs_ocr || 0) +
+    (attnCounts.flagged || 0) +
+    (attnCounts.file_missing || 0) +
+    (attnCounts.unclassified_pdf || 0);
+  if (summary) {
+    summary.textContent = `${total} document${total === 1 ? "" : "s"} · ${present} coverage areas present · ${missing} missing · ${attnTotal} need attention`;
+  }
+
+  const view = state.coverageView || "all";
+  let inventory = "";
+  if (view === "attention") {
+    inventory = renderCoverageAttention(coverage);
+  } else if (view === "month") {
+    inventory = `<section class="coverage-section"><h4 class="coverage-section-title">By upload month</h4>${(coverage.by_month || [])
+      .map(coverageGroupHtml)
+      .join("") || `<p class="muted small">No documents.</p>`}</section>`;
+  } else if (view === "type") {
+    inventory = `<section class="coverage-section"><h4 class="coverage-section-title">By type</h4>${(coverage.by_type || [])
+      .map(coverageGroupHtml)
+      .join("") || `<p class="muted small">No documents.</p>`}</section>`;
+  } else {
+    inventory = `${renderCoverageChecklist(coverage)}
+      <section class="coverage-section" id="coverage-attention">
+        <h4 class="coverage-section-title">Needs attention</h4>
+        ${renderCoverageAttention(coverage)}
+      </section>
+      <section class="coverage-section">
+        <h4 class="coverage-section-title">Inventory by type</h4>
+        ${(coverage.by_type || []).map(coverageGroupHtml).join("") || `<p class="muted small">No documents.</p>`}
+      </section>`;
+  }
+  body.innerHTML = inventory;
+}
+
+async function loadCoverageReport() {
+  const body = document.getElementById("coverage-body");
+  if (!state.activePatientId) {
+    state.coverageReport = null;
+    renderCoverageReport();
+    return;
+  }
+  if (body && !state.coverageReport) {
+    body.innerHTML = `<p class="muted small">Loading coverage…</p>`;
+  }
+  const data = await api(`/api/patients/${state.activePatientId}/documents/coverage`);
+  state.coverageReport = data.coverage || null;
+  renderCoverageReport();
+}
+
+async function exportCoveragePdf() {
+  const patientId = state.activePatientId;
+  if (!patientId) return toast("Select a patient first", "error");
+  const btns = [
+    document.getElementById("btn-export-coverage-pdf"),
+    document.getElementById("btn-export-coverage-pdf-lib"),
+  ].filter(Boolean);
+  btns.forEach((b) => {
+    b.disabled = true;
+  });
+  try {
+    const res = await fetch(`/api/patients/${patientId}/documents/coverage/export.pdf`, {
+      credentials: "include",
+    });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Export failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = filenameFromContentDisposition(res, `beatit-coverage-${stamp}.pdf`);
+    triggerPdfDownload(blob, filename);
+    toast("Coverage PDF downloaded");
+  } catch (err) {
+    toast(err.message || "Export failed", "error");
+  } finally {
+    btns.forEach((b) => {
+      b.disabled = false;
+    });
+  }
+}
+
 async function handleFlaggedAction(action, docId) {
   if (!docId) return;
   if (action === "view") {
@@ -1306,6 +1502,7 @@ const HOME_SECTIONS = new Set([
   "medications",
   "diagnostics",
   "flagged",
+  "coverage",
   "gaps",
   "run",
 ]);
@@ -1329,6 +1526,9 @@ function setHomeSection(section, { scroll = false } = {}) {
   }
   if (changed && next === "flagged") {
     refreshHandlingFlags().catch(() => {});
+  }
+  if (changed && next === "coverage") {
+    loadCoverageReport().catch((e) => toast(e.message || "Could not load coverage", "error"));
   }
   if (scroll) {
     requestAnimationFrame(() => {
@@ -7310,10 +7510,14 @@ async function loadCaseContext() {
     state.activePatientId = ctx.patient_id || null;
     state.activeCaseId = ctx.case_id || null;
     state.diagStatusFilter = "all";
+    state.coverageReport = null;
     if (ctx.patient_id) {
       await refreshActivePatientProfile();
     } else {
       renderPatientProfile({}, null);
+    }
+    if (state.homeSection === "coverage") {
+      loadCoverageReport().catch(() => {});
     }
   } catch { /* ignore */ }
 }
@@ -10236,6 +10440,28 @@ document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click",
   } finally {
     if (btn) btn.disabled = false;
   }
+});
+
+document.getElementById("btn-export-coverage-pdf")?.addEventListener("click", () => {
+  exportCoveragePdf().catch((e) => toast(e.message, "error"));
+});
+document.getElementById("btn-export-coverage-pdf-lib")?.addEventListener("click", () => {
+  exportCoveragePdf().catch((e) => toast(e.message, "error"));
+});
+document.getElementById("btn-coverage-refresh")?.addEventListener("click", () => {
+  state.coverageReport = null;
+  loadCoverageReport().catch((e) => toast(e.message || "Could not load coverage", "error"));
+});
+document.querySelector(".coverage-filter-bar")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-coverage-view]");
+  if (!btn) return;
+  state.coverageView = btn.dataset.coverageView || "all";
+  renderCoverageReport();
+});
+document.getElementById("coverage-body")?.addEventListener("click", (e) => {
+  const link = e.target.closest(".coverage-doc-link");
+  if (!link?.dataset.docId) return;
+  viewDocument(link.dataset.docId).catch((err) => toast(err.message, "error"));
 });
 
 document.getElementById("diag-milestones-enabled")?.addEventListener("change", (e) => {
