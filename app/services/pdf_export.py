@@ -707,6 +707,21 @@ def _sparkline_png_bytes(
 
     day_vals = [_day(p[0]) for p in points]
     t_min, t_max = min(day_vals), max(day_vals)
+    # Keep med starts that land shortly after the last lab on the timeline
+    range_events = filter_events_for_range(
+        milestones,
+        start=points[0][0],
+        end=points[-1][0],
+        pad_days=60,
+    )
+    for ev in range_events:
+        d = str(ev.get("date") or "")[:10]
+        if not d:
+            continue
+        day = _day(d)
+        if day:
+            t_min = min(t_min, day)
+            t_max = max(t_max, day)
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)
@@ -717,12 +732,6 @@ def _sparkline_png_bytes(
     draw.rectangle((pad_l, pad_t, pad_l + chart_w, pad_t + chart_h), outline=(148, 163, 184), width=2)
 
     # Medication milestones — one dashed line per date, stacked labels
-    range_events = filter_events_for_range(
-        milestones,
-        start=points[0][0],
-        end=points[-1][0],
-        pad_days=0,
-    )
     marker_fill = (100, 116, 139)
     by_day: dict[str, list[dict[str, Any]]] = {}
     for ev in range_events:
