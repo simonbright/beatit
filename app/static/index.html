@@ -38,17 +38,12 @@
         </div>
       </div>
       <div class="header-patient" id="header-patient">
-        <button type="button" class="patient-photo-btn" id="btn-patient-photo" title="Add or change patient photo" aria-label="Add or change patient photo">
+        <button type="button" class="patient-photo-btn" id="btn-header-switch-patient" title="Switch who / case" aria-label="Switch who or case">
           <img id="header-patient-photo" class="patient-photo-img hidden" alt="">
           <span id="header-patient-initials" class="patient-photo-initials">?</span>
         </button>
-        <input type="file" id="input-patient-photo" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
         <div class="header-patient-meta">
-          <button type="button" class="header-patient-switcher" id="btn-header-switch-patient" title="Switch patient or case" aria-label="Switch patient or case">
-            <h2 class="header-patient-name" id="header-patient-name">No patient</h2>
-            <p class="header-patient-sub" id="header-patient-sub"></p>
-            <span class="header-patient-switch-hint muted small">Tap to switch</span>
-          </button>
+          <h2 class="header-patient-name" id="header-patient-name">No patient</h2>
         </div>
       </div>
       <div class="header-actions">
@@ -89,11 +84,7 @@
         </button>
       </div>
     </div>
-    <div class="header-context-bar" id="header-context-bar" aria-label="Patient and case">
-      <label class="header-select-wrap hidden" id="header-patient-select-wrap">
-        <span>Patient</span>
-        <select id="header-patient-select" aria-label="Switch patient"></select>
-      </label>
+    <div class="header-context-bar" id="header-context-bar" aria-label="Case">
       <label class="header-select-wrap" id="header-case-select-wrap">
         <span>Case</span>
         <select id="header-case-select" aria-label="Switch case"></select>
@@ -1160,7 +1151,7 @@
       <div id="settings-pane-patients" class="section-pane" data-settings-pane="patients">
       <div class="card settings-card">
         <h3>Patients &amp; cases</h3>
-        <p class="muted">Each person is a patient. Each condition or workup is a separate case with its own library and assessments. Switch from the header, or add them here.</p>
+        <p class="muted">Each person is a patient. Each condition or workup is a separate case with its own library and assessments. Tap the photo in the header to switch who, or add people here.</p>
         <div class="settings-identity-row">
           <div class="settings-identity-current">
             <p class="muted small">Current patient</p>
@@ -1181,6 +1172,18 @@
       <div class="card settings-card">
         <h3>Who profile</h3>
         <p class="muted">Basic demographics for the current patient. Date of birth and gender stay fixed; height and weight can be recorded over time.</p>
+        <div class="settings-photo-row">
+          <button type="button" class="patient-photo-btn settings-photo-btn" id="btn-patient-photo" title="Add or change photo" aria-label="Add or change photo">
+            <img id="settings-patient-photo" class="patient-photo-img hidden" alt="">
+            <span id="settings-patient-initials" class="patient-photo-initials">?</span>
+          </button>
+          <div class="settings-photo-meta">
+            <p class="settings-photo-label">Photo</p>
+            <p class="muted small">Shown in the header. Tap the header photo to switch who.</p>
+            <button type="button" class="btn secondary btn-sm" id="btn-patient-photo-pick">Upload photo</button>
+            <input type="file" id="input-patient-photo" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
+          </div>
+        </div>
         <div class="patient-profile-grid">
           <label for="profile-dob">Date of birth
             <input type="date" id="profile-dob">

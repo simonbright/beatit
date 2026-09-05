@@ -7269,12 +7269,12 @@ async function loadCaseContext() {
     const ctx = data.active || {};
     const patients = data.patients || [];
     const nameEl = document.getElementById("header-patient-name");
-    const subEl = document.getElementById("header-patient-sub");
     const initialsEl = document.getElementById("header-patient-initials");
     const photoEl = document.getElementById("header-patient-photo");
-    const photoBtn = document.getElementById("btn-patient-photo");
-    const patientSelectWrap = document.getElementById("header-patient-select-wrap");
-    const patientSelect = document.getElementById("header-patient-select");
+    const photoBtn = document.getElementById("btn-header-switch-patient");
+    const settingsPhotoEl = document.getElementById("settings-patient-photo");
+    const settingsInitialsEl = document.getElementById("settings-patient-initials");
+    const settingsPhotoBtn = document.getElementById("btn-patient-photo");
     const caseSelect = document.getElementById("header-case-select");
     const settingsPatient = document.getElementById("settings-current-patient");
     const settingsCase = document.getElementById("settings-current-case");
@@ -7282,28 +7282,25 @@ async function loadCaseContext() {
     const label = ctx.patient_label || "No patient";
     if (nameEl) nameEl.textContent = label;
     if (initialsEl) initialsEl.textContent = patientInitials(label);
+    if (settingsInitialsEl) settingsInitialsEl.textContent = patientInitials(label);
     if (settingsPatient) settingsPatient.textContent = label;
     if (settingsCase) settingsCase.textContent = ctx.case_label || "No case";
 
-    if (photoEl && photoBtn) {
+    const applyPhoto = (imgEl, btnEl) => {
+      if (!imgEl || !btnEl) return;
       if (ctx.photo_url) {
-        photoEl.src = ctx.photo_url;
-        photoEl.alt = label;
-        photoEl.classList.remove("hidden");
-        photoBtn.classList.add("has-photo");
+        imgEl.src = ctx.photo_url;
+        imgEl.alt = label;
+        imgEl.classList.remove("hidden");
+        btnEl.classList.add("has-photo");
       } else {
-        photoEl.removeAttribute("src");
-        photoEl.classList.add("hidden");
-        photoBtn.classList.remove("has-photo");
+        imgEl.removeAttribute("src");
+        imgEl.classList.add("hidden");
+        btnEl.classList.remove("has-photo");
       }
-    }
-
-    if (patients.length >= 1) {
-      patientSelectWrap?.classList.remove("hidden");
-      fillSelect(patientSelect, patients, ctx.patient_id);
-    } else {
-      patientSelectWrap?.classList.add("hidden");
-    }
+    };
+    applyPhoto(photoEl, photoBtn);
+    applyPhoto(settingsPhotoEl, settingsPhotoBtn);
 
     const activePatient = patients.find((p) => p.id === ctx.patient_id);
     const cases = activePatient?.cases || ctx.cases || [];
@@ -7318,7 +7315,6 @@ async function loadCaseContext() {
     } else {
       renderPatientProfile({}, null);
     }
-    if (subEl && !ctx.patient_id) subEl.textContent = "";
   } catch { /* ignore */ }
 }
 
@@ -7331,14 +7327,6 @@ function ageFromDob(dob) {
   const m = today.getMonth() - d.getMonth();
   if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age -= 1;
   return age >= 0 ? age : null;
-}
-
-function formatPatientSubline(profile) {
-  const bits = [];
-  const age = ageFromDob(profile.date_of_birth);
-  if (age != null) bits.push(`Age ${age}`);
-  if (profile.gender) bits.push(String(profile.gender));
-  return bits.join(" · ");
 }
 
 function bmiFor(heightCm, weightKg) {
@@ -8817,8 +8805,6 @@ function applyProfileResponse(data) {
     journal_presets: data.journal_presets,
     milestone_presets: data.milestone_presets,
   });
-  const subEl = document.getElementById("header-patient-sub");
-  if (subEl) subEl.textContent = formatPatientSubline(data.profile || {});
 }
 
 function resolveDiagnosticSeries(profile, extras = {}) {
@@ -9569,29 +9555,11 @@ document.getElementById("header-case-select")?.addEventListener("change", async 
   await activatePatientCase(patientId, caseId, { label: `Switching to ${label}…` });
 });
 
-document.getElementById("header-patient-select")?.addEventListener("change", async (event) => {
-  const patientId = event.target.value;
-  const r = await fetch("/api/patients");
-  const data = await r.json();
-  const patient = (data.patients || []).find((p) => p.id === patientId);
-  if (!patient) return;
-  const firstCase = (patient.cases || [])[0];
-  if (!firstCase) {
-    document.getElementById("modal-new-case").dataset.patientId = patient.id;
-    document.getElementById("new-case-patient-label").textContent = `for ${patient.label}`;
-    showModal("modal-new-case");
-    return;
-  }
-  if (patientId === data.active?.patient_id && firstCase.id === data.active?.case_id) return;
-  event.target.disabled = true;
-  await activatePatientCase(patientId, firstCase.id, {
-    label: `Switching to ${patient.label}…`,
-  });
-});
-
-document.getElementById("btn-patient-photo")?.addEventListener("click", () => {
+function pickPatientPhoto() {
   document.getElementById("input-patient-photo")?.click();
-});
+}
+document.getElementById("btn-patient-photo")?.addEventListener("click", pickPatientPhoto);
+document.getElementById("btn-patient-photo-pick")?.addEventListener("click", pickPatientPhoto);
 document.getElementById("input-patient-photo")?.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   event.target.value = "";
@@ -9599,7 +9567,7 @@ document.getElementById("input-patient-photo")?.addEventListener("change", async
   const r = await fetch("/api/cases/active");
   const ctx = await r.json();
   if (!ctx.patient_id) {
-    alert("Add a patient first.");
+    toast("Add a patient first", "error");
     return;
   }
   const body = new FormData();
@@ -9607,9 +9575,10 @@ document.getElementById("input-patient-photo")?.addEventListener("change", async
   const res = await fetch(`/api/patients/${ctx.patient_id}/photo`, { method: "POST", body });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.detail || "Could not save photo");
+    toast(err.detail || "Could not save photo", "error");
     return;
   }
+  toast("Photo updated");
   await loadCaseContext();
 });
 
