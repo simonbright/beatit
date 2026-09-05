@@ -11135,6 +11135,81 @@ document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click",
   }
 });
 
+function medicationExportScope() {
+  const home = document.getElementById("med-export-scope");
+  const settings = document.getElementById("med-export-scope-settings");
+  const raw = home?.value || settings?.value || "all";
+  return String(raw || "all");
+}
+
+function syncMedicationExportScope(fromId, value) {
+  const next = String(value || "all");
+  ["med-export-scope", "med-export-scope-settings"].forEach((id) => {
+    if (id === fromId) return;
+    const el = document.getElementById(id);
+    if (el && el.value !== next) el.value = next;
+  });
+}
+
+async function exportMedicationsPdf(triggerBtn) {
+  const patientId = state.activePatientId;
+  if (!patientId) return toast("Select a patient first", "error");
+  const scope = medicationExportScope();
+  const buttons = [
+    document.getElementById("btn-export-medications-pdf"),
+    document.getElementById("btn-export-medications-pdf-settings"),
+  ].filter(Boolean);
+  buttons.forEach((b) => {
+    b.disabled = true;
+  });
+  if (triggerBtn) triggerBtn.disabled = true;
+  try {
+    const res = await fetch(
+      `/api/patients/${patientId}/medications/export.pdf?scope=${encodeURIComponent(scope)}`,
+      { credentials: "include" }
+    );
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Export failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = filenameFromContentDisposition(
+      res,
+      `beatit-medications-${scope}-${stamp}.pdf`
+    );
+    triggerPdfDownload(blob, filename);
+    toast("Medications PDF downloaded");
+  } catch (err) {
+    toast(err.message || "Export failed", "error");
+  } finally {
+    buttons.forEach((b) => {
+      b.disabled = false;
+    });
+  }
+}
+
+document.getElementById("med-export-scope")?.addEventListener("change", (e) => {
+  syncMedicationExportScope("med-export-scope", e.target.value);
+});
+document.getElementById("med-export-scope-settings")?.addEventListener("change", (e) => {
+  syncMedicationExportScope("med-export-scope-settings", e.target.value);
+});
+document.getElementById("btn-export-medications-pdf")?.addEventListener("click", () => {
+  exportMedicationsPdf(document.getElementById("btn-export-medications-pdf")).catch((e) =>
+    toast(e.message, "error")
+  );
+});
+document.getElementById("btn-export-medications-pdf-settings")?.addEventListener("click", () => {
+  exportMedicationsPdf(document.getElementById("btn-export-medications-pdf-settings")).catch((e) =>
+    toast(e.message, "error")
+  );
+});
+
 document.getElementById("btn-export-coverage-pdf")?.addEventListener("click", () => {
   exportCoveragePdf().catch((e) => toast(e.message, "error"));
 });

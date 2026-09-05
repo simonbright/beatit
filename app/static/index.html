@@ -387,6 +387,15 @@
               <p class="muted small hidden" id="med-safety-home-status" role="status"></p>
             </div>
             <div class="medications-home-actions">
+              <div class="med-export-controls" role="group" aria-label="Medications export scope">
+                <select id="med-export-scope" aria-label="Export scope" title="What to include in the PDF">
+                  <option value="rx">Rx</option>
+                  <option value="non_rx">Non-Rx</option>
+                  <option value="history">History</option>
+                  <option value="all" selected>All</option>
+                </select>
+                <button type="button" class="btn secondary btn-sm" id="btn-export-medications-pdf" title="Download medications PDF">Export PDF</button>
+              </div>
               <button type="button" class="btn secondary btn-sm" id="btn-med-safety-home">Health oversight</button>
               <button type="button" class="btn ghost btn-sm" id="btn-medications-settings">Manage in Settings</button>
             </div>
@@ -1362,6 +1371,17 @@
 
         <h4 class="patient-measurements-title" id="medications-settings-heading">Medications &amp; remedies</h4>
         <p class="muted small">Anything this person uses — prescriptions, OTC, and remedies. Check <strong>Show on Log</strong> for meds that should appear under Took medication. Log only shows this person’s opted-in meds (nothing shared between people).</p>
+        <div class="med-export-controls med-export-controls-settings" role="group" aria-label="Export medications PDF">
+          <label class="med-export-scope-label" for="med-export-scope-settings">Export
+            <select id="med-export-scope-settings" aria-label="Export scope">
+              <option value="rx">Rx</option>
+              <option value="non_rx">Non-Rx</option>
+              <option value="history">History</option>
+              <option value="all" selected>All</option>
+            </select>
+          </label>
+          <button type="button" class="btn secondary btn-sm" id="btn-export-medications-pdf-settings" title="Download medications PDF">Export PDF</button>
+        </div>
         <div class="medication-import-block" id="medication-import-block">
           <p class="muted small">Have a printed or photo list? Import a PDF or image, review the parsed rows, then add what looks right.</p>
           <div class="medication-import-controls row-between wrap">

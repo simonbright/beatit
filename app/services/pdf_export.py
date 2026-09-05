@@ -187,8 +187,9 @@ class AssessmentPDF(FPDF):
         exported_at: str | None = None,
         patient_label: str | None = None,
         patient_subline: str | None = None,
+        orientation: str = "P",
     ):
-        super().__init__()
+        super().__init__(orientation=orientation)
         self.report_date = report_date
         self.report_time = report_time
         self.report_type = report_type
@@ -1556,6 +1557,329 @@ def build_document_coverage_pdf(
             pdf.set_font("Helvetica", "", 11)
             pdf.set_text_color(40, 40, 40)
         pdf.ln(4)
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()
+
+
+MEDICATION_EXPORT_SCOPES = frozenset({"rx", "non_rx", "history", "all"})
+
+_MED_SCOPE_LABELS = {
+    "rx": "Prescriptions (active)",
+    "non_rx": "Non-prescription (active)",
+    "history": "History / stopped",
+    "all": "All medications",
+}
+
+
+def normalize_medication_export_scope(raw: str | None) -> str:
+    value = (raw or "all").strip().lower().replace("-", "_")
+    aliases = {
+        "prescription": "rx",
+        "prescriptions": "rx",
+        "otc": "non_rx",
+        "nonrx": "non_rx",
+        "non_prescription": "non_rx",
+        "remedy": "non_rx",
+        "remedies": "non_rx",
+        "stopped": "history",
+        "past": "history",
+    }
+    value = aliases.get(value, value)
+    if value not in MEDICATION_EXPORT_SCOPES:
+        raise ValueError("scope must be rx, non_rx, history, or all")
+    return value
+
+
+def medication_export_scope_label(scope: str) -> str:
+    return _MED_SCOPE_LABELS.get(normalize_medication_export_scope(scope), "Medications")
+
+
+def filter_medications_for_export(
+    medications: list[dict[str, Any]] | None,
+    scope: str,
+) -> list[dict[str, Any]]:
+    """Filter patient medications for PDF export by Rx / non-Rx / history / all."""
+    scope_key = normalize_medication_export_scope(scope)
+    rows = [m for m in (medications or []) if isinstance(m, dict) and (m.get("name") or "").strip()]
+
+    def is_active(m: dict[str, Any]) -> bool:
+        return (m.get("status") or "active") != "stopped"
+
+    def is_rx(m: dict[str, Any]) -> bool:
+        return (m.get("category") or "prescription") == "prescription"
+
+    if scope_key == "rx":
+        filtered = [m for m in rows if is_active(m) and is_rx(m)]
+    elif scope_key == "non_rx":
+        filtered = [m for m in rows if is_active(m) and not is_rx(m)]
+    elif scope_key == "history":
+        filtered = [m for m in rows if not is_active(m)]
+    else:
+        filtered = list(rows)
+
+    def sort_key(m: dict[str, Any]) -> tuple:
+        active = 0 if is_active(m) else 1
+        cat = str(m.get("category") or "prescription")
+        cat_rank = 0 if cat == "prescription" else 1 if cat == "otc" else 2
+        name = str(m.get("name") or "").lower()
+        return (active, cat_rank, name)
+
+    return sorted(filtered, key=sort_key)
+
+
+def _format_med_export_date(raw: str | None) -> str:
+    if not raw:
+        return "—"
+    text = str(raw).strip()[:10]
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return text or "—"
+    return dt.strftime("%b %d, %Y").replace(" 0", " ")
+
+
+def _med_category_label(category: str | None) -> str:
+    cat = (category or "prescription").strip().lower()
+    if cat == "otc":
+        return "OTC"
+    if cat == "remedy":
+        return "Remedy"
+    return "Rx"
+
+
+def _med_dose_line(med: dict[str, Any]) -> str:
+    dosage = (med.get("dosage") or "").strip()
+    frequency = (med.get("frequency") or "").strip()
+    if dosage and frequency:
+        return f"{dosage} · {frequency}"
+    return dosage or frequency or "—"
+
+
+def _med_conditions_line(med: dict[str, Any]) -> str:
+    conditions = med.get("conditions") or []
+    if isinstance(conditions, str):
+        return conditions.strip() or "—"
+    if isinstance(conditions, list):
+        parts = [str(c).strip() for c in conditions if str(c).strip()]
+        return ", ".join(parts) if parts else "—"
+    return "—"
+
+
+def medications_pdf_filename(
+    *,
+    patient_label: str | None = None,
+    scope: str = "all",
+    exported_at: datetime | None = None,
+) -> str:
+    stamp = _format_filename_stamp(
+        (exported_at or datetime.now(timezone.utc)).isoformat()
+    )
+    scope_key = normalize_medication_export_scope(scope)
+    slug = ""
+    if patient_label:
+        slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
+    if slug:
+        return f"beatit-medications-{scope_key}-{slug}-{stamp}.pdf"
+    return f"beatit-medications-{scope_key}-{stamp}.pdf"
+
+
+def _estimate_med_row_height(pdf: FPDF, cells: list[tuple[float, str]], line_h: float = 3.6) -> float:
+    pdf.set_font("Helvetica", "", 8)
+    max_lines = 1
+    for width, text in cells:
+        cleaned = _break_long_words(_safe_text(text or "—"), limit=max(12, int(width * 1.6)))
+        lines = pdf.multi_cell(width, line_h, cleaned, dry_run=True, output="LINES")
+        max_lines = max(max_lines, len(lines) or 1)
+    return max(line_h * max_lines + 2.2, 7.0)
+
+
+def _write_med_table_header(pdf: FPDF, cols: list[tuple[str, float]], row_h: float = 7.0) -> None:
+    x0 = pdf.l_margin
+    y0 = pdf.get_y()
+    pdf.set_fill_color(14, 116, 144)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_draw_color(10, 90, 112)
+    x = x0
+    for label, width in cols:
+        pdf.set_xy(x, y0)
+        pdf.rect(x, y0, width, row_h, style="DF")
+        pdf.set_xy(x + 1.2, y0 + 1.6)
+        pdf.cell(width - 2.4, 4, _safe_text(label), align="L")
+        x += width
+    pdf.set_y(y0 + row_h)
+
+
+def _write_med_table_row(
+    pdf: FPDF,
+    cols: list[tuple[str, float]],
+    values: list[str],
+    *,
+    fill: bool,
+    row_h: float,
+) -> None:
+    x0 = pdf.l_margin
+    y0 = pdf.get_y()
+    if fill:
+        pdf.set_fill_color(240, 249, 255)
+        pdf.rect(x0, y0, sum(w for _, w in cols), row_h, style="F")
+    pdf.set_draw_color(196, 214, 224)
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_font("Helvetica", "", 8)
+    x = x0
+    line_h = 3.6
+    for (_label, width), value in zip(cols, values):
+        pdf.rect(x, y0, width, row_h, style="D")
+        cleaned = _break_long_words(_safe_text(value or "—"), limit=max(12, int(width * 1.6)))
+        pdf.set_xy(x + 1.2, y0 + 1.2)
+        pdf.multi_cell(width - 2.4, line_h, cleaned, new_x="RIGHT", new_y="TOP")
+        x += width
+    pdf.set_y(y0 + row_h)
+
+
+def build_medications_pdf(
+    medications: list[dict[str, Any]],
+    *,
+    scope: str = "all",
+    patient_label: str | None = None,
+    patient_subline: str | None = None,
+) -> bytes:
+    """Landscape medications list PDF with a clean filterable table."""
+    scope_key = normalize_medication_export_scope(scope)
+    scope_label = medication_export_scope_label(scope_key)
+    rows = filter_medications_for_export(medications, scope_key)
+
+    now = datetime.now(timezone.utc)
+    exported_at = _format_timestamp(now.isoformat())
+    report_date, report_time = _format_timestamp_parts(now.isoformat())
+
+    pdf = AssessmentPDF(
+        report_date=report_date,
+        report_time=report_time,
+        report_type="Medications export",
+        exported_at=exported_at,
+        patient_label=patient_label,
+        patient_subline=patient_subline,
+        orientation="L",
+    )
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=26)
+    pdf.set_margins(12, 36, 12)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(14, 116, 144)
+    title = "Medications & remedies"
+    if patient_label:
+        title = f"Medications & remedies - {_safe_text(patient_label)}"
+    pdf.cell(0, 7, title, new_x="LMARGIN", new_y="NEXT", align="L")
+
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(80, 80, 80)
+    meta = [f"Scope: {scope_label}", f"Exported: {exported_at}", f"{len(rows)} row{'s' if len(rows) != 1 else ''}"]
+    if patient_subline:
+        meta.append(_safe_text(patient_subline))
+    pdf.cell(0, 4.5, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(70, 70, 70)
+    legend = (
+        "Rx = prescription. Non-Rx includes OTC and remedies/supplements. "
+        "History lists stopped medications. All includes active and stopped."
+    )
+    _pdf_multiline(pdf, _safe_text(legend), h=3.6)
+    pdf.set_draw_color(14, 165, 233)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(3.5)
+
+    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+    include_status = scope_key in {"all", "history"}
+    include_ended = scope_key in {"all", "history"}
+
+    # Column plan tuned for landscape A4 (~273mm usable with 12mm margins).
+    if include_ended and include_status:
+        cols: list[tuple[str, float]] = [
+            ("Medication", usable_w * 0.20),
+            ("Type", usable_w * 0.07),
+            ("Status", usable_w * 0.07),
+            ("Dose / frequency", usable_w * 0.18),
+            ("Started", usable_w * 0.09),
+            ("Ended", usable_w * 0.09),
+            ("For", usable_w * 0.14),
+            ("Notes", usable_w * 0.16),
+        ]
+    elif include_ended:
+        cols = [
+            ("Medication", usable_w * 0.22),
+            ("Type", usable_w * 0.08),
+            ("Dose / frequency", usable_w * 0.20),
+            ("Started", usable_w * 0.10),
+            ("Ended", usable_w * 0.10),
+            ("For", usable_w * 0.14),
+            ("Notes", usable_w * 0.16),
+        ]
+    else:
+        cols = [
+            ("Medication", usable_w * 0.24),
+            ("Type", usable_w * 0.08),
+            ("Dose / frequency", usable_w * 0.22),
+            ("Started", usable_w * 0.10),
+            ("For", usable_w * 0.16),
+            ("Notes", usable_w * 0.20),
+        ]
+
+    # Normalize widths to exact usable width (float drift).
+    total = sum(w for _, w in cols)
+    if total > 0:
+        cols = [(label, width * usable_w / total) for label, width in cols]
+
+    if not rows:
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 8, "No medications match this export scope.", new_x="LMARGIN", new_y="NEXT")
+    else:
+        header_h = 7.0
+        _write_med_table_header(pdf, cols, row_h=header_h)
+        for idx, med in enumerate(rows):
+            active = (med.get("status") or "active") != "stopped"
+            values = [_safe_text(str(med.get("name") or "").strip() or "—")]
+            values.append(_med_category_label(med.get("category")))
+            if include_status:
+                values.append("Active" if active else "Stopped")
+            values.append(_med_dose_line(med))
+            values.append(_format_med_export_date(med.get("started_at")))
+            if include_ended:
+                values.append(_format_med_export_date(med.get("stopped_at")))
+            values.append(_med_conditions_line(med))
+            values.append((med.get("notes") or "").strip() or "—")
+
+            row_h = _estimate_med_row_height(pdf, list(zip([w for _, w in cols], values)))
+            # Leave room for footer
+            if pdf.get_y() + row_h > pdf.h - pdf.b_margin - 4:
+                pdf.add_page()
+                _write_med_table_header(pdf, cols, row_h=header_h)
+
+            _write_med_table_row(
+                pdf,
+                cols,
+                values,
+                fill=(idx % 2 == 1),
+                row_h=row_h,
+            )
+
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(
+            0,
+            4,
+            _safe_text(f"End of list · {len(rows)} medication{'s' if len(rows) != 1 else ''}"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
     buffer = BytesIO()
     pdf.output(buffer)

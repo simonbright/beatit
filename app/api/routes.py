@@ -66,8 +66,13 @@ from app.services.pdf_export import (
     build_assessment_pdf,
     build_diagnostics_pdf,
     build_document_coverage_pdf,
+    build_medications_pdf,
     coverage_pdf_filename,
     diagnostics_pdf_filename,
+    filter_medications_for_export,
+    medication_export_scope_label,
+    medications_pdf_filename,
+    normalize_medication_export_scope,
 )
 from app.services.source_catalog import (
     DEFAULT_SOURCE_TYPES,
@@ -3009,6 +3014,71 @@ class PatientMedicationConfirmItem(BaseModel):
 
 class PatientMedicationConfirmRequest(BaseModel):
     medications: list[PatientMedicationConfirmItem] = Field(default_factory=list, max_length=80)
+
+
+@router.get("/patients/{patient_id}/medications/export.pdf")
+async def export_patient_medications_pdf(
+    patient_id: str,
+    request: Request,
+    scope: str = "all",
+):
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    try:
+        scope_key = normalize_medication_export_scope(scope)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    profile = get_patient_profile(patient_id)
+    meds = profile.get("medications") or []
+    filtered = filter_medications_for_export(meds, scope_key)
+    if not filtered:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No medications to export for scope “{medication_export_scope_label(scope_key)}”",
+        )
+
+    sub_bits: list[str] = []
+    age = age_years_from_dob(profile.get("date_of_birth"))
+    if age is not None:
+        sub_bits.append(f"Age {age}")
+    if profile.get("gender"):
+        sub_bits.append(str(profile["gender"]))
+    patient_subline = " · ".join(sub_bits) if sub_bits else None
+
+    exported_at = datetime.now(timezone.utc)
+    pdf_bytes = build_medications_pdf(
+        meds,
+        scope=scope_key,
+        patient_label=patient.get("label"),
+        patient_subline=patient_subline,
+    )
+    filename = medications_pdf_filename(
+        patient_label=patient.get("label"),
+        scope=scope_key,
+        exported_at=exported_at,
+    )
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        PDF_EXPORTED,
+        resource_type="patient",
+        resource_id=patient_id,
+        metadata={
+            "filename": filename,
+            "export_kind": "medications",
+            "scope": scope_key,
+            "row_count": len(filtered),
+        },
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/patients/{patient_id}/medications/safety-review")

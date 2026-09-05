@@ -573,6 +573,37 @@ body {
   align-items: center;
 }
 
+.med-export-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.med-export-controls select,
+.med-export-scope-label select {
+  min-height: 2rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.med-export-controls-settings {
+  margin: 0 0 0.85rem;
+}
+
+.med-export-scope-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted, #666);
+}
+
 .medication-identity-badge {
   display: inline-block;
   margin-left: 0.4rem;
