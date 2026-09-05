@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="BeatIt — Patient Care Workspace",
-    description="Store clinical research material and synthesize oncology insights",
+    description="Store clinical research material and synthesize clinical insights",
     version=APP_VERSION,
     lifespan=lifespan,
 )

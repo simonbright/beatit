@@ -97,6 +97,10 @@ def should_scrub_legacy_oncology_reviewer_context(
     case_label: str | None = None,
     case_id: str | None = None,
 ) -> bool:
-    if not is_legacy_oncology_reviewer_context(value):
-        return False
-    return not case_implies_oncology(case_label=case_label, case_id=case_id)
+    """Replace the old medical-oncologist seed with the general clinical default.
+
+    Specialty comes from the case and patient context as needed — not from a
+    global oncology persona default.
+    """
+    _ = (case_label, case_id)
+    return is_legacy_oncology_reviewer_context(value)

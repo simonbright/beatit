@@ -16,6 +16,8 @@ const state = {
   assessmentLoading: true,
   models: [],
   settings: {},
+  defaultReviewerContext: "",
+  defaultPatientContext: "",
   selectedOpenItemId: null,
   selectedOpenItem: null,
   analysisRunning: false,
@@ -2246,6 +2248,8 @@ async function loadSettings() {
   const data = await api("/api/settings");
   state.models = data.models || [];
   state.settings = data.settings || {};
+  state.defaultReviewerContext = data.default_reviewer_context || "";
+  state.defaultPatientContext = data.default_patient_context || "";
   state.sourceLegend = data.source_legend || [];
   renderModelSelect();
   renderSourceLabelsForm();
@@ -2254,12 +2258,12 @@ async function loadSettings() {
   const patientEl = $("#settings-patient-context");
   if (patientEl) {
     patientEl.value =
-      state.settings.patient_context || data.default_patient_context || "";
+      state.settings.patient_context || state.defaultPatientContext || "";
   }
   const reviewerEl = $("#settings-reviewer-context");
   if (reviewerEl) {
     reviewerEl.value =
-      state.settings.reviewer_context || data.default_reviewer_context || "";
+      state.settings.reviewer_context || state.defaultReviewerContext || "";
   }
 
   const current = $("#settings-current");
@@ -2397,6 +2401,15 @@ async function saveReviewerContext() {
   state.settings = { ...state.settings, ...data.settings };
   toast("Clinical reviewer context saved");
   if ($("#panel-settings")?.classList.contains("active")) loadAuditTrail(true);
+}
+
+function resetReviewerContextToDefault() {
+  const el = $("#settings-reviewer-context");
+  if (!el) return;
+  const next = (state.defaultReviewerContext || "").trim();
+  if (!next) return toast("Default reviewer context unavailable", "error");
+  el.value = next;
+  toast("Restored general clinical reviewer default — click Save to apply");
 }
 
 async function savePatientContext() {
@@ -6783,6 +6796,7 @@ $("#btn-save-settings")?.addEventListener("click", () =>
 $("#btn-save-reviewer")?.addEventListener("click", () =>
   saveReviewerContext().catch((e) => toast(e.message, "error"))
 );
+$("#btn-reset-reviewer")?.addEventListener("click", () => resetReviewerContextToDefault());
 $("#btn-save-patient")?.addEventListener("click", () =>
   savePatientContext().catch((e) => toast(e.message, "error"))
 );

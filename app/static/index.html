@@ -1048,7 +1048,7 @@
     <section id="panel-howto" class="panel">
       <div class="card howto-intro-card">
         <h3>How BeatIt works</h3>
-        <p class="muted howto-lead">BeatIt builds an oncology case assessment from your stored documents. Start with the three steps below, then explore each tab when you need it.</p>
+        <p class="muted howto-lead">BeatIt builds a clinical case assessment from your stored documents. Start with the three steps below, then explore each tab when you need it.</p>
 
         <div class="workflow-steps howto-quickstart" aria-label="Quick start">
           <button type="button" class="workflow-step" data-howto-nav="library" data-howto-open-add="1">
@@ -1059,7 +1059,7 @@
           <button type="button" class="workflow-step" data-howto-nav="settings">
             <span class="workflow-step-num">Step 2</span>
             <span class="workflow-step-label">Patient context</span>
-            <span class="workflow-step-hint">Diagnosis, line of therapy, biomarkers, ECOG</span>
+            <span class="workflow-step-hint">Key facts for this person and case</span>
           </button>
           <button type="button" class="workflow-step" data-howto-nav="analyze">
             <span class="workflow-step-num">Step 3</span>
@@ -1483,20 +1483,23 @@
       <div id="settings-pane-analysis" class="section-pane hidden" data-settings-pane="analysis">
       <div class="card settings-card">
         <h3>Clinical reviewer context</h3>
-        <p class="muted">Persona and synthesis instructions for every analysis. Default: medical oncologist. Controls how the model reads and integrates all selected documents.</p>
+        <p class="muted">Persona and synthesis instructions for every analysis. Default: general clinical reviewer (specialty inferred from the case as needed). Controls how the model reads and integrates all selected documents.</p>
         <label for="settings-reviewer-context">Reviewer role &amp; synthesis standards
-          <textarea id="settings-reviewer-context" rows="6" placeholder="Role, specialty, and how to synthesize all sources…"></textarea>
+          <textarea id="settings-reviewer-context" rows="6" placeholder="General clinical reviewer — specialty follows the case and patient context…"></textarea>
         </label>
         <div class="row-between wrap settings-actions">
           <span class="muted small">Prepended to the system prompt for baseline, custom tasks, and investigations</span>
-          <button class="btn primary" id="btn-save-reviewer">Save reviewer context</button>
+          <div class="settings-actions-btns">
+            <button type="button" class="btn ghost" id="btn-reset-reviewer">Reset to default</button>
+            <button type="button" class="btn primary" id="btn-save-reviewer">Save reviewer context</button>
+          </div>
         </div>
       </div>
       <div class="card settings-card patient-banner">
         <div class="banner-duck" aria-hidden="true">🦆</div>
         <h3>Patient &amp; case context</h3>
         <p class="muted">Case-specific facts used in every medical analysis. Update as you learn more.</p>
-        <p class="muted small">For trial searches, include line of therapy, biomarkers (BRCA, KRAS, etc.), ECOG status, and prior treatments — the model uses this to tailor trial lists.</p>
+        <p class="muted small">Add whatever matters for this case (diagnoses, history, goals). For oncology trial searches, include line of therapy, biomarkers, ECOG, and prior treatments when known.</p>
 
         <label for="settings-patient-context">Case summary
           <textarea id="settings-patient-context" rows="6" placeholder="Short accurate summary for THIS person and case. Do not copy another patient's diagnoses."></textarea>

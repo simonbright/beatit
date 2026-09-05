@@ -4362,6 +4362,12 @@ textarea { resize: vertical; min-height: 100px; }
 .settings-model-desc { margin-top: 0.5rem; min-height: 2.5rem; }
 .settings-actions { margin-top: 1rem; }
 .settings-actions .btn { margin-top: 0; }
+.settings-actions-btns {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
 
 .audit-trail-card h3 {
   margin: 0;
