@@ -45,7 +45,7 @@ from app.services.chat_observations import (
     resolve_observations_for_analysis,
     save_observation_to_library,
 )
-from app.services.document_view import build_document_view, file_is_available, guess_media_type
+from app.services.document_view import build_document_view, guess_media_type
 from app.services.document_paths import heal_document_paths, resolve_document_file_path
 from app.services.dicom_preview import is_dicom_document, render_dicom_preview_png
 from app.services.investigation import InvestigationService
