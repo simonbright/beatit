@@ -945,7 +945,7 @@ def _write_diagnostics_charts(
         pdf,
         _safe_text(
             "Blood-test trends use collection / date of service. "
-            "Shaded band shows age- and sex-aware reference targets. "
+            "Shaded band shows age- and gender-aware reference targets. "
             "Green = on target; yellow = within 10% beyond bound; red = farther. "
             "Dashed vertical markers show medication starts, dose changes, and stops."
         ),

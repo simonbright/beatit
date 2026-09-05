@@ -382,7 +382,7 @@
           <div class="row-between wrap">
             <div>
               <h3>Key diagnostics</h3>
-              <p class="muted small">Blood-test trends with collection dates. Green = on target; yellow = within 10% of the bound; red = farther. Dashed lines are age- and sex-aware references. Hover a metric for what it means; open the link for a reliable source.</p>
+              <p class="muted small">Blood-test trends with collection dates. Green = on target; yellow = within 10% of the bound; red = farther. Dashed lines are age- and gender-aware references. Hover a metric for what it means; open the link for a reliable source.</p>
             </div>
             <div class="diagnostics-actions">
               <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with date and time stamp">Export PDF</button>
@@ -1282,12 +1282,34 @@
         </div>
         <div class="patient-measurement-form patient-medication-form" id="medication-form">
           <input type="hidden" id="med-edit-id" value="">
+          <p class="muted small med-identity-hint hidden" id="med-identity-hint" role="status"></p>
           <label for="med-name">Name
             <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin" autocomplete="off">
           </label>
-          <label for="med-dosage">Dosage
-            <input type="text" id="med-dosage" maxlength="80" placeholder="e.g. 20 mg" autocomplete="off">
-          </label>
+          <div class="med-dosage-fields med-span-2">
+            <label for="med-dose-amount">Dose
+              <input type="text" id="med-dose-amount" maxlength="40" inputmode="decimal" placeholder="e.g. 20" autocomplete="off">
+            </label>
+            <label for="med-dose-unit">Unit
+              <select id="med-dose-unit">
+                <option value="">—</option>
+                <option value="mg">mg</option>
+                <option value="mcg">mcg</option>
+                <option value="µg">µg</option>
+                <option value="g">g</option>
+                <option value="mL">mL</option>
+                <option value="IU">IU</option>
+                <option value="units">units</option>
+                <option value="%">%</option>
+                <option value="mg/mL">mg/mL</option>
+                <option value="mcg/mL">mcg/mL</option>
+                <option value="other">Other…</option>
+              </select>
+            </label>
+            <label for="med-dose-unit-other" id="med-dose-unit-other-wrap" class="hidden">Custom unit
+              <input type="text" id="med-dose-unit-other" maxlength="24" placeholder="e.g. drops" autocomplete="off">
+            </label>
+          </div>
           <label for="med-frequency">Frequency
             <input type="text" id="med-frequency" maxlength="80" placeholder="e.g. once daily" autocomplete="off">
           </label>

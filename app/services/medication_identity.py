@@ -83,6 +83,23 @@ def identify_medication(name: str | None) -> dict[str, Any]:
             "normalized": norm,
         }
 
+    # Brand + generic combos ("Xolair omalizumab") — any whole known phrase counts
+    phrase_hits: list[tuple[str, str, int]] = []
+    for key, display in known.items():
+        if len(key) < 4:
+            continue
+        if re.search(rf"(?:^|\s){re.escape(key)}(?:\s|$)", norm):
+            phrase_hits.append((key, display, len(key)))
+    if phrase_hits:
+        phrase_hits.sort(key=lambda row: row[2], reverse=True)
+        _key, display, _n = phrase_hits[0]
+        return {
+            "status": "known",
+            "matched_name": display,
+            "score": 1.0,
+            "normalized": norm,
+        }
+
     best_key = None
     best_score = 0.0
     # Prefer candidates sharing a token prefix to keep lookups cheap

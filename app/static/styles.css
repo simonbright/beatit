@@ -607,6 +607,9 @@ body {
   font-weight: 600;
   letter-spacing: 0.02em;
   vertical-align: middle;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.3;
 }
 
 .medication-identity-badge.unknown {
@@ -619,6 +622,26 @@ body {
   color: #a16207;
   border: 1px solid color-mix(in srgb, #ca8a04 45%, var(--border));
   background: color-mix(in srgb, #ca8a04 10%, transparent);
+}
+
+.med-dosage-fields {
+  display: grid;
+  grid-template-columns: minmax(5rem, 1fr) minmax(5.5rem, 0.8fr) minmax(5rem, 1fr);
+  gap: 0.5rem 0.65rem;
+  align-items: end;
+}
+
+.med-identity-hint {
+  grid-column: 1 / -1;
+  margin: 0 0 0.25rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, #ca8a04 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, #ca8a04 35%, var(--border));
+}
+
+.med-identity-hint .btn {
+  margin-left: 0.35rem;
 }
 
 .med-safety-card {

@@ -1,4 +1,4 @@
-"""Age/sex-aware reference bands for key diagnostic charts.
+"""Age/gender-aware reference bands for key diagnostic charts.
 
 Ranges are approximate clinical targets / typical lab reference intervals
 in SI units commonly used in Canadian reports (mmol/L, g/L, µmol/L, etc.).

@@ -7438,7 +7438,7 @@ function renderMedicationsHome(profile) {
     const started = m.started_at ? `since ${formatDiagDate(m.started_at)}` : "";
     const ended = m.stopped_at ? `ended ${formatDiagDate(m.stopped_at)}` : "";
     const meta = [formatMedicationDoseLine(m), started, ended].filter(Boolean).join(" · ");
-    return `<div class="medication-home-row${isStopped ? " is-stopped" : ""}">
+    return `<div class="medication-home-row${isStopped ? " is-stopped" : ""}" data-id="${escapeHtml(m.id || "")}">
       <div class="medication-row-main">
         <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationIdentityBadge(m)}${
           isStopped ? `<span class="medication-stopped-pill">Stopped</span>` : ""
@@ -7447,6 +7447,7 @@ function renderMedicationsHome(profile) {
         ${formatMedicationConditions(m)}
         ${formatMedicationHistory(m)}
       </div>
+      <div class="medication-row-actions">${formatMedicationFixActions(m)}</div>
     </div>`;
   };
   let html = active.map((m) => rowHtml(m)).join("");
@@ -7744,10 +7745,118 @@ function formatMedicationIdentityBadge(m) {
   const status = m.identity_status || "known";
   if (status === "known") return "";
   if (status === "uncertain") {
-    const tip = m.identity_match ? `Did you mean ${m.identity_match}?` : "Name may need checking";
-    return `<span class="medication-identity-badge uncertain" title="${escapeHtml(tip)}">Check name</span>`;
+    const tip = m.identity_match ? `Did you mean ${m.identity_match}? Click to fix.` : "Name may need checking. Click to fix.";
+    return `<button type="button" class="medication-identity-badge uncertain btn-fix-medication" data-id="${escapeHtml(m.id || "")}" title="${escapeHtml(tip)}">Check name</button>`;
   }
-  return `<span class="medication-identity-badge unknown" title="Not found in known medication list">Unknown</span>`;
+  return `<button type="button" class="medication-identity-badge unknown btn-fix-medication" data-id="${escapeHtml(m.id || "")}" title="Not found in known medication list. Click to fix.">Unknown</button>`;
+}
+
+const MED_DOSE_UNITS = ["mg", "mcg", "µg", "g", "mL", "IU", "units", "%", "mg/mL", "mcg/mL"];
+
+function parseDosageParts(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return { amount: "", unit: "", other: "" };
+  const compact = text.replace(/\s+/g, " ");
+  const re = new RegExp(
+    `^(\\d+(?:\\.\\d+)?)\\s*(${MED_DOSE_UNITS.map((u) => u.replace("/", "\\/")).join("|")}|ug|mcgs?|mgs?|mls?|ius?)\\b(.*)$`,
+    "i"
+  );
+  const m = compact.match(re);
+  if (m) {
+    let unit = m[2];
+    const rest = (m[3] || "").trim();
+    const lower = unit.toLowerCase();
+    if (lower === "ug" || lower === "mcgs") unit = "mcg";
+    else if (lower === "mgs") unit = "mg";
+    else if (lower === "mls" || lower === "ml") unit = "mL";
+    else if (lower === "ius" || lower === "iu") unit = "IU";
+    else {
+      const hit = MED_DOSE_UNITS.find((u) => u.toLowerCase() === lower);
+      unit = hit || unit;
+    }
+    if (rest) return { amount: compact, unit: "other", other: "" };
+    return { amount: m[1], unit, other: "" };
+  }
+  // "300mg" without space already covered; free-text fallback
+  return { amount: compact, unit: "other", other: "" };
+}
+
+function composeDosageFromForm() {
+  const amount = document.getElementById("med-dose-amount")?.value.trim() || "";
+  const unitSel = document.getElementById("med-dose-unit")?.value || "";
+  const other = document.getElementById("med-dose-unit-other")?.value.trim() || "";
+  if (!amount && !unitSel && !other) return null;
+  if (unitSel === "other") {
+    if (other) return `${amount} ${other}`.trim();
+    return amount || null;
+  }
+  if (unitSel) return `${amount} ${unitSel}`.trim();
+  return amount || null;
+}
+
+function syncMedDoseUnitOtherVisibility() {
+  const unit = document.getElementById("med-dose-unit")?.value;
+  const wrap = document.getElementById("med-dose-unit-other-wrap");
+  wrap?.classList.toggle("hidden", unit !== "other");
+}
+
+function setMedicationDosageFields(dosage) {
+  const parts = parseDosageParts(dosage);
+  const amountEl = document.getElementById("med-dose-amount");
+  const unitEl = document.getElementById("med-dose-unit");
+  const otherEl = document.getElementById("med-dose-unit-other");
+  if (amountEl) amountEl.value = parts.amount;
+  if (unitEl) {
+    if (parts.unit && MED_DOSE_UNITS.includes(parts.unit)) unitEl.value = parts.unit;
+    else if (parts.unit === "other" || (parts.amount && !parts.unit)) unitEl.value = parts.unit === "other" ? "other" : "";
+    else unitEl.value = "";
+  }
+  if (otherEl) otherEl.value = parts.other;
+  // If free-text didn't match a known unit, keep full string in amount with Other
+  if (parts.unit === "other" && parts.amount && !/^\d/.test(String(dosage || "").trim())) {
+    if (amountEl) amountEl.value = String(dosage || "").trim();
+    if (unitEl) unitEl.value = "other";
+  }
+  syncMedDoseUnitOtherVisibility();
+}
+
+function updateMedIdentityHint(m) {
+  const el = document.getElementById("med-identity-hint");
+  if (!el) return;
+  const status = m?.identity_status || "known";
+  if (!m || status === "known") {
+    el.innerHTML = "";
+    el.classList.add("hidden");
+    return;
+  }
+  if (status === "uncertain" && m.identity_match) {
+    el.innerHTML = `Name may need checking — similar to <strong>${escapeHtml(m.identity_match)}</strong>.
+      <button type="button" class="btn secondary btn-sm" id="btn-med-use-suggested" data-name="${escapeHtml(m.identity_match)}">Use ${escapeHtml(m.identity_match)}</button>`;
+  } else if (status === "unknown") {
+    el.innerHTML = `Not found on the known medication list. Rename to a standard brand or generic if you can, or keep as written.`;
+  } else {
+    el.innerHTML = `Check the medication name and dose, then save.`;
+  }
+  el.classList.remove("hidden");
+}
+
+function formatMedicationFixActions(m) {
+  const status = m.identity_status || "known";
+  const bits = [];
+  bits.push(
+    `<button type="button" class="btn ghost btn-sm btn-edit-medication" data-id="${escapeHtml(m.id || "")}">Edit</button>`
+  );
+  if (status !== "known") {
+    bits.push(
+      `<button type="button" class="btn secondary btn-sm btn-fix-medication" data-id="${escapeHtml(m.id || "")}">Fix</button>`
+    );
+  }
+  if (status === "uncertain" && m.identity_match) {
+    bits.push(
+      `<button type="button" class="btn secondary btn-sm btn-accept-med-name" data-id="${escapeHtml(m.id || "")}" data-name="${escapeHtml(m.identity_match)}">Use ${escapeHtml(m.identity_match)}</button>`
+    );
+  }
+  return bits.join("");
 }
 
 function formatMedSafetyWhen(iso) {
@@ -7848,7 +7957,7 @@ function renderMedicationsSettings(profile) {
     const endedBit = m.stopped_at ? `Ended ${formatDiagDate(m.stopped_at)}` : "";
     const notes = m.notes ? escapeHtml(m.notes) : "";
     const meta = [formatMedicationDoseLine(m), started, endedBit, notes].filter(Boolean).join(" · ");
-    const actions = `<button type="button" class="btn ghost btn-sm btn-edit-medication" data-id="${escapeHtml(m.id)}">Edit</button>
+    const actions = `${formatMedicationFixActions(m)}
          ${isStopped ? "" : `<button type="button" class="btn ghost btn-sm btn-stop-medication" data-id="${escapeHtml(m.id)}">Stop</button>`}
          <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
     return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
@@ -7872,10 +7981,14 @@ function renderMedicationsSettings(profile) {
 function clearMedicationForm() {
   const idEl = document.getElementById("med-edit-id");
   if (idEl) idEl.value = "";
-  ["med-name", "med-dosage", "med-frequency", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
+  ["med-name", "med-dose-amount", "med-dose-unit-other", "med-frequency", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
+  const unitEl = document.getElementById("med-dose-unit");
+  if (unitEl) unitEl.value = "";
+  syncMedDoseUnitOtherVisibility();
+  updateMedIdentityHint(null);
   const started = document.getElementById("med-started");
   if (started) started.value = "";
   const ended = document.getElementById("med-ended");
@@ -7891,7 +8004,7 @@ function clearMedicationForm() {
 function fillMedicationForm(m) {
   document.getElementById("med-edit-id").value = m.id || "";
   document.getElementById("med-name").value = m.name || "";
-  document.getElementById("med-dosage").value = m.dosage || "";
+  setMedicationDosageFields(m.dosage || "");
   document.getElementById("med-frequency").value = m.frequency || "";
   document.getElementById("med-conditions").value = (m.conditions || []).join(", ");
   document.getElementById("med-notes").value = m.notes || "";
@@ -7905,10 +8018,43 @@ function fillMedicationForm(m) {
     effective.value = iso;
   }
   document.querySelectorAll(".med-history-note-wrap").forEach((el) => el.classList.remove("hidden"));
+  updateMedIdentityHint(m);
   const saveBtn = document.getElementById("btn-save-medication");
   if (saveBtn) saveBtn.textContent = "Save changes";
   document.getElementById("btn-cancel-med-edit")?.classList.remove("hidden");
   document.getElementById("med-name")?.focus();
+}
+
+async function openMedicationEditor(medId, { focusDose = false } = {}) {
+  if (!state.activePatientId || !medId) return toast("Select a patient first", "error");
+  const res = await fetch(`/api/patients/${state.activePatientId}/profile`);
+  if (!res.ok) return toast("Could not load medication", "error");
+  const data = await res.json();
+  const med = (data.profile?.medications || []).find((m) => m.id === medId);
+  if (!med) return toast("Medication not found", "error");
+  fillMedicationForm(med);
+  switchTab("settings", {
+    settingsSection: "profile",
+    settingsFocus: focusDose ? "#med-dose-amount" : "#med-name",
+  });
+  requestAnimationFrame(() => {
+    document.getElementById("medication-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+async function acceptSuggestedMedName(medId, suggestedName) {
+  if (!state.activePatientId || !medId || !suggestedName) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/medications/${medId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: suggestedName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    return toast(err.detail || "Could not rename medication", "error");
+  }
+  applyProfileResponse(await res.json());
+  toast(`Renamed to ${suggestedName}`);
 }
 
 function setMedImportStatus(text, { error = false } = {}) {
@@ -9475,7 +9621,7 @@ document.getElementById("btn-save-medication")?.addEventListener("click", async 
   if (!name) return toast("Enter a medication name", "error");
   const body = {
     name,
-    dosage: document.getElementById("med-dosage")?.value.trim() || null,
+    dosage: composeDosageFromForm(),
     frequency: document.getElementById("med-frequency")?.value.trim() || null,
     conditions: parseConditionsInput(document.getElementById("med-conditions")?.value),
     notes: document.getElementById("med-notes")?.value.trim() || null,
@@ -9528,20 +9674,21 @@ document.getElementById("btn-save-medication")?.addEventListener("click", async 
 });
 
 document.getElementById("patient-medications-list")?.addEventListener("click", async (event) => {
-  const editBtn = event.target.closest(".btn-edit-medication");
+  const editBtn = event.target.closest(".btn-edit-medication, .btn-fix-medication");
+  const acceptBtn = event.target.closest(".btn-accept-med-name");
   const stopBtn = event.target.closest(".btn-stop-medication");
   const delBtn = event.target.closest(".btn-delete-medication");
   if (!state.activePatientId) return;
 
+  if (acceptBtn) {
+    await acceptSuggestedMedName(acceptBtn.dataset.id, acceptBtn.dataset.name);
+    return;
+  }
+
   if (editBtn) {
-    const id = editBtn.dataset.id;
-    const res = await fetch(`/api/patients/${state.activePatientId}/profile`);
-    if (!res.ok) return toast("Could not load medication", "error");
-    const data = await res.json();
-    const med = (data.profile?.medications || []).find((m) => m.id === id);
-    if (!med) return toast("Medication not found", "error");
-    fillMedicationForm(med);
-    setSettingsSection("profile", { scroll: true, focusSelector: "#med-name" });
+    await openMedicationEditor(editBtn.dataset.id, {
+      focusDose: editBtn.classList.contains("btn-fix-medication"),
+    });
     return;
   }
 
@@ -9569,6 +9716,36 @@ document.getElementById("patient-medications-list")?.addEventListener("click", a
     applyProfileResponse(await res.json());
     if (document.getElementById("med-edit-id")?.value === id) clearMedicationForm();
     toast("Medication removed");
+  }
+});
+
+document.getElementById("medications-home-list")?.addEventListener("click", async (event) => {
+  const acceptBtn = event.target.closest(".btn-accept-med-name");
+  const editBtn = event.target.closest(".btn-edit-medication, .btn-fix-medication");
+  if (acceptBtn) {
+    await acceptSuggestedMedName(acceptBtn.dataset.id, acceptBtn.dataset.name);
+    return;
+  }
+  if (editBtn) {
+    await openMedicationEditor(editBtn.dataset.id, {
+      focusDose: editBtn.classList.contains("btn-fix-medication"),
+    });
+  }
+});
+
+document.getElementById("med-dose-unit")?.addEventListener("change", () => {
+  syncMedDoseUnitOtherVisibility();
+});
+
+document.getElementById("med-identity-hint")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("#btn-med-use-suggested");
+  if (!btn) return;
+  const name = btn.dataset.name || "";
+  const nameEl = document.getElementById("med-name");
+  if (nameEl && name) {
+    nameEl.value = name;
+    toast(`Name set to ${name} — save to apply`);
+    nameEl.focus();
   }
 });
 
