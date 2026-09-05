@@ -30,6 +30,7 @@ const state = {
   activeCaseId: null,
   diagnosticPresets: [],
   journalPresets: [],
+  milestonePresets: [],
   journalDraft: { kind: "note", label: "", severity: null },
   diagMilestonePrefs: { enabled: true, selected: null },
   analysisJobId: null,
@@ -7279,6 +7280,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   const presets = extras.diagnostic_presets || state.diagnosticPresets || [];
   if (presets.length) state.diagnosticPresets = presets;
   if (extras.journal_presets?.length) state.journalPresets = extras.journal_presets;
+  if (extras.milestone_presets?.length) state.milestonePresets = extras.milestone_presets;
 
   const nameList = document.getElementById("diag-name-presets");
   const unitList = document.getElementById("diag-unit-presets");
@@ -7363,6 +7365,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   }
 
   renderMedicationsSettings(profile);
+  renderMilestonesSettings(profile);
   const series = resolveDiagnosticSeries(profile, extras);
   state.patientProfile = profile || null;
   state.diagnosticSeriesCache = extras.diagnostic_series || series;
@@ -7599,6 +7602,136 @@ function medicationChartEvents(medications) {
   });
 }
 
+const MILESTONE_COLORS = [
+  "#0f766e",
+  "#b45309",
+  "#7c3aed",
+  "#0369a1",
+  "#be123c",
+  "#15803d",
+  "#c2410c",
+  "#4338ca",
+  "#0e7490",
+  "#a21caf",
+];
+
+const DEFAULT_MILESTONE_PRESETS = [
+  { label: "Exercise regularly", kind: "exercise" },
+  { label: "Change in diet", kind: "diet" },
+  { label: "Started sleep routine", kind: "lifestyle" },
+  { label: "Quit / cut smoking", kind: "lifestyle" },
+  { label: "Stress management", kind: "lifestyle" },
+  { label: "Weight goal started", kind: "lifestyle" },
+  { label: "Travel / schedule change", kind: "lifestyle" },
+  { label: "Other", kind: "other" },
+];
+
+function crc32Unsigned(str) {
+  let crc = 0 ^ -1;
+  for (let i = 0; i < str.length; i++) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ str.charCodeAt(i)) & 0xff];
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function milestoneColorFor(key) {
+  return MILESTONE_COLORS[crc32Unsigned(String(key || "milestone")) % MILESTONE_COLORS.length];
+}
+
+function colorizeMilestoneEvents(events) {
+  return (events || []).map((ev) => {
+    const key = ev.medication_id
+      ? `med:${ev.medication_id}`
+      : `life:${ev.id || ev.label || "milestone"}`;
+    return { ...ev, color: milestoneColorFor(key) };
+  });
+}
+
+function customMilestoneEvents(milestones) {
+  const short = (text, max = 48) => {
+    const t = String(text || "").replace(/\s+/g, " ").trim();
+    return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+  };
+  const compactDate = (iso) => {
+    const raw = String(iso || "").slice(0, 10);
+    const d = new Date(`${raw}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return raw;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  };
+  const out = [];
+  for (const row of milestones || []) {
+    const when = String(row.date || row.recorded_at || "").slice(0, 10);
+    const labelBody = String(row.label || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(when) || !labelBody) continue;
+    const note = String(row.notes || "").trim();
+    const body = note ? `${labelBody} — ${note}` : labelBody;
+    const kind = String(row.kind || "lifestyle");
+    out.push({
+      id: row.id || `${when}|lifestyle|${labelBody}`,
+      date: when,
+      label: short(`${compactDate(when)} · ${body}`),
+      body,
+      kind: ["start", "dose_change", "stop"].includes(kind) ? "lifestyle" : kind,
+      medication_id: "",
+      medication_name: "",
+      source: "custom",
+    });
+  }
+  return out;
+}
+
+function allChartMilestones(profile) {
+  const med = medicationChartEvents(profile?.medications);
+  const custom = customMilestoneEvents(profile?.milestones);
+  const merged = [...med, ...custom].sort(
+    (a, b) => String(a.date).localeCompare(String(b.date)) || String(a.label).localeCompare(String(b.label))
+  );
+  return colorizeMilestoneEvents(merged);
+}
+
+function milestonePresets() {
+  return state.milestonePresets?.length ? state.milestonePresets : DEFAULT_MILESTONE_PRESETS;
+}
+
+function fillMilestonePresetSelects() {
+  const presets = milestonePresets();
+  for (const id of ["diag-milestone-preset", "ms-preset"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const cur = el.value;
+    el.innerHTML = presets
+      .map((p) => `<option value="${escapeHtml(p.label)}" data-kind="${escapeHtml(p.kind)}">${escapeHtml(p.label)}</option>`)
+      .join("");
+    if ([...el.options].some((o) => o.value === cur)) el.value = cur;
+  }
+  syncMilestoneCustomVisibility();
+}
+
+function syncMilestoneCustomVisibility() {
+  const pairs = [
+    ["diag-milestone-preset", "diag-milestone-custom"],
+    ["ms-preset", "ms-custom-wrap"],
+  ];
+  for (const [selId, customId] of pairs) {
+    const sel = document.getElementById(selId);
+    const custom = document.getElementById(customId);
+    if (!sel || !custom) continue;
+    const other = String(sel.value || "").toLowerCase() === "other";
+    custom.classList.toggle("hidden", !other);
+  }
+}
+
 function diagMilestoneStorageKey(patientId) {
   return `beatit.diagMilestones.${patientId || "none"}`;
 }
@@ -7686,13 +7819,19 @@ function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = [])
   const span = seriesDateSpan(seriesList);
   // Include milestones shortly after the last lab (e.g. med started Sep 1, labs through late Aug)
   const events = milestonesForLabSpan(allEvents, span);
+  wrap.classList.remove("hidden");
   if (!events.length) {
-    wrap.classList.add("hidden");
     state.diagMilestonePrefs = { enabled: true, selected: [] };
-    if (metaEl) metaEl.textContent = "";
+    if (metaEl) metaEl.textContent = "add milestones below";
+    list.innerHTML = `<p class="muted small">No medication or lifestyle milestones in this labs date range yet.</p>`;
+    fillMilestonePresetSelects();
+    const dateEl = document.getElementById("diag-milestone-date");
+    if (dateEl && !dateEl.value) {
+      const today = new Date();
+      dateEl.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    }
     return;
   }
-  wrap.classList.remove("hidden");
   const prefs = loadDiagMilestonePrefs(state.activePatientId, events);
   state.diagMilestonePrefs = prefs;
   enabledEl.checked = !!prefs.enabled;
@@ -7706,18 +7845,26 @@ function renderDiagnosticsMilestoneControls(profile, allEvents, seriesList = [])
   list.innerHTML = events
     .map((ev) => {
       const checked = (prefs.selected || []).includes(ev.id);
-      return `<label class="diag-milestone-chip${checked ? "" : " is-off"}" title="${escapeHtml(ev.label)}">
+      const color = ev.color || "#0f766e";
+      return `<label class="diag-milestone-chip${checked ? "" : " is-off"}" title="${escapeHtml(ev.label)}" style="--ms-color:${escapeHtml(color)}">
         <input type="checkbox" class="diag-milestone-toggle" data-id="${escapeHtml(ev.id)}" ${checked ? "checked" : ""}>
+        <span class="diag-milestone-swatch" aria-hidden="true"></span>
         <span>${escapeHtml(ev.label)}</span>
       </label>`;
     })
     .join("");
+  fillMilestonePresetSelects();
+  const dateEl = document.getElementById("diag-milestone-date");
+  if (dateEl && !dateEl.value) {
+    const today = new Date();
+    dateEl.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  }
 }
 
 function applyDiagMilestonePrefsAndRedraw() {
   const prefs = state.diagMilestonePrefs || { enabled: true, selected: [] };
   const profile = state.patientProfile || null;
-  const allEvents = medicationChartEvents(profile?.medications);
+  const allEvents = allChartMilestones(profile);
   const series = resolveDiagnosticSeries(profile, {
     diagnostic_series: state.diagnosticSeriesCache,
   });
@@ -7944,6 +8091,67 @@ function renderMedSafetyResult(saved) {
   }
   el.innerHTML = html;
   el.classList.remove("hidden");
+}
+
+function renderMilestonesSettings(profile) {
+  fillMilestonePresetSelects();
+  const el = document.getElementById("patient-milestones-list");
+  if (!el) return;
+  const rows = profile?.milestones || [];
+  if (!rows.length) {
+    el.innerHTML = `<p class="muted small">No lifestyle milestones yet. Add exercise, diet changes, and similar dated events here or from Labs overlays.</p>`;
+    return;
+  }
+  el.innerHTML = rows
+    .map((m) => {
+      const when = formatDiagDate(m.date) || m.date || "";
+      const notes = m.notes ? ` · ${escapeHtml(m.notes)}` : "";
+      const color = milestoneColorFor(`life:${m.id || m.label}`);
+      return `<div class="medication-row" data-id="${escapeHtml(m.id || "")}">
+        <div class="medication-row-main">
+          <strong><span class="diag-milestone-swatch" style="--ms-color:${escapeHtml(color)};margin-right:0.35rem"></span>${escapeHtml(m.label || "")}</strong>
+          <p class="medication-row-meta">${escapeHtml(when)}${notes}</p>
+        </div>
+        <div class="medication-row-actions">
+          <button type="button" class="btn ghost btn-sm btn-delete-milestone" data-id="${escapeHtml(m.id || "")}">Remove</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function resolveMilestoneLabelAndKind(presetSelId, customId) {
+  const sel = document.getElementById(presetSelId);
+  const custom = document.getElementById(customId);
+  const presetLabel = sel?.value || "";
+  const kind = sel?.selectedOptions?.[0]?.dataset?.kind || "lifestyle";
+  if (String(presetLabel).toLowerCase() === "other") {
+    const label = custom?.value?.trim() || "";
+    return { label, kind: "other" };
+  }
+  return { label: presetLabel, kind };
+}
+
+async function addMilestoneFromForm({ presetSelId, customId, dateId, notesId }) {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const { label, kind } = resolveMilestoneLabelAndKind(presetSelId, customId);
+  if (!label) return toast("Enter a milestone label", "error");
+  const date = document.getElementById(dateId)?.value || "";
+  if (!date) return toast("Pick a date", "error");
+  const notes = notesId ? document.getElementById(notesId)?.value.trim() || null : null;
+  const res = await fetch(`/api/patients/${state.activePatientId}/milestones`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, date, kind, notes }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not add milestone");
+  }
+  const data = await res.json();
+  applyProfileResponse(data);
+  toast("Milestone added");
+  return data;
 }
 
 function renderMedicationsSettings(profile) {
@@ -8532,6 +8740,7 @@ function applyProfileResponse(data) {
     diagnostic_presets: data.diagnostic_presets,
     journal_series: data.journal_series,
     journal_presets: data.journal_presets,
+    milestone_presets: data.milestone_presets,
   });
   const subEl = document.getElementById("header-patient-sub");
   if (subEl) subEl.textContent = formatPatientSubline(data.profile || {});
@@ -8842,31 +9051,32 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
         markers[i].x = Math.min(w - padX, markers[i - 1].x + minGap);
       }
     }
-    const accent = "#0f766e";
     milestoneLayer = markers
       .map((ev) => {
         let x = ev.x;
         if (!Number.isFinite(x)) return "";
         x = Math.min(w - padX, Math.max(padX, x));
+        const color = ev.color || "#0f766e";
         const top = padTop - 2;
         const bot = h - padBottom;
         return `<g class="diag-milestone-mark">
-          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${accent}" stroke-width="2" stroke-dasharray="5 4" opacity="0.95">
+          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${color}" stroke-width="2" stroke-dasharray="5 4" opacity="0.95">
             <title>${escapeHtml(ev.label)}</title>
           </line>
-          <polygon points="${(x - 5).toFixed(1)},${top} ${(x + 5).toFixed(1)},${top} ${x.toFixed(1)},${(top + 8).toFixed(1)}" fill="${accent}" />
-          <circle cx="${x.toFixed(1)}" cy="${bot}" r="3.2" fill="${accent}" />
+          <polygon points="${(x - 5).toFixed(1)},${top} ${(x + 5).toFixed(1)},${top} ${x.toFixed(1)},${(top + 8).toFixed(1)}" fill="${color}" />
+          <circle cx="${x.toFixed(1)}" cy="${bot}" r="3.2" fill="${color}" />
         </g>`;
       })
       .join("");
-    milestoneLegend = `<div class="diag-milestone-legend" aria-label="Medication milestones on this chart">
+    milestoneLegend = `<div class="diag-milestone-legend" aria-label="Timeline milestones on this chart">
       ${markers
         .map((ev) => {
           const short =
             String(ev.label || "").length > 42
               ? `${String(ev.label).slice(0, 41)}…`
               : ev.label;
-          return `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}"><span class="diag-milestone-badge-dot" aria-hidden="true"></span>${escapeHtml(short)}</span>`;
+          const color = ev.color || "#0f766e";
+          return `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}" style="--ms-color:${escapeHtml(color)}"><span class="diag-milestone-badge-dot" aria-hidden="true"></span>${escapeHtml(short)}</span>`;
         })
         .join("")}
     </div>`;
@@ -8959,7 +9169,7 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   }
 
   const cards = [...bloodFirst, ...extras];
-  const allEvents = medicationChartEvents(profile?.medications);
+  const allEvents = allChartMilestones(profile);
   if (!opts.skipControls) {
     renderDiagnosticsMilestoneControls(profile, allEvents, cards);
   }
@@ -9919,7 +10129,7 @@ document.getElementById("diag-milestones-enabled")?.addEventListener("change", (
 
 document.getElementById("diag-milestones-all")?.addEventListener("click", () => {
   const profile = state.patientProfile || null;
-  const allEvents = medicationChartEvents(profile?.medications);
+  const allEvents = allChartMilestones(profile);
   state.diagMilestonePrefs = {
     enabled: true,
     selected: allEvents.map((e) => e.id),
@@ -9932,7 +10142,7 @@ document.getElementById("diag-milestones-all")?.addEventListener("click", () => 
 
 document.getElementById("diag-milestones-none")?.addEventListener("click", () => {
   const profile = state.patientProfile || null;
-  const allEvents = medicationChartEvents(profile?.medications);
+  const allEvents = allChartMilestones(profile);
   state.diagMilestonePrefs = {
     ...(state.diagMilestonePrefs || {}),
     enabled: true,
@@ -9956,6 +10166,59 @@ document.getElementById("diag-milestones-list")?.addEventListener("change", (e) 
   const enabledEl = document.getElementById("diag-milestones-enabled");
   if (enabledEl) enabledEl.checked = true;
   applyDiagMilestonePrefsAndRedraw();
+});
+
+document.getElementById("diag-milestone-preset")?.addEventListener("change", () => syncMilestoneCustomVisibility());
+document.getElementById("ms-preset")?.addEventListener("change", () => syncMilestoneCustomVisibility());
+
+document.getElementById("btn-diag-milestone-add")?.addEventListener("click", async () => {
+  const btn = document.getElementById("btn-diag-milestone-add");
+  if (btn) btn.disabled = true;
+  try {
+    await addMilestoneFromForm({
+      presetSelId: "diag-milestone-preset",
+      customId: "diag-milestone-custom",
+      dateId: "diag-milestone-date",
+    });
+    const custom = document.getElementById("diag-milestone-custom");
+    if (custom) custom.value = "";
+  } catch (err) {
+    toast(err.message || "Could not add milestone", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-save-milestone")?.addEventListener("click", async () => {
+  const btn = document.getElementById("btn-save-milestone");
+  if (btn) btn.disabled = true;
+  try {
+    await addMilestoneFromForm({
+      presetSelId: "ms-preset",
+      customId: "ms-custom",
+      dateId: "ms-date",
+      notesId: "ms-notes",
+    });
+    const custom = document.getElementById("ms-custom");
+    if (custom) custom.value = "";
+    const notes = document.getElementById("ms-notes");
+    if (notes) notes.value = "";
+  } catch (err) {
+    toast(err.message || "Could not add milestone", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("patient-milestones-list")?.addEventListener("click", async (event) => {
+  const del = event.target.closest(".btn-delete-milestone");
+  if (!del || !state.activePatientId) return;
+  const id = del.dataset.id;
+  if (!id || !confirm("Remove this milestone?")) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/milestones/${id}`, { method: "DELETE" });
+  if (!res.ok) return toast("Could not remove milestone", "error");
+  applyProfileResponse(await res.json());
+  toast("Milestone removed");
 });
 
 // Cross-case browsing folded into the unified patient-wide Library list

@@ -391,7 +391,7 @@
           </div>
           <details id="diagnostics-milestone-controls" class="diag-milestone-controls hidden">
             <summary class="diag-milestone-summary">
-              <span class="diag-milestone-summary-label">Medication overlays</span>
+              <span class="diag-milestone-summary-label">Timeline overlays</span>
               <span class="diag-milestone-summary-meta muted small" id="diag-milestones-summary-meta"></span>
             </summary>
             <div class="diag-milestone-controls-body">
@@ -405,7 +405,19 @@
                   <button type="button" class="btn ghost btn-sm" id="diag-milestones-none">None</button>
                 </div>
               </div>
-              <div id="diag-milestones-list" class="diag-milestones-list" role="group" aria-label="Medication overlay selection"></div>
+              <div id="diag-milestones-list" class="diag-milestones-list" role="group" aria-label="Timeline overlay selection"></div>
+              <div class="diag-milestone-add" id="diag-milestone-add">
+                <p class="muted small">Add a lifestyle milestone (shown with medications on charts)</p>
+                <div class="diag-milestone-add-row">
+                  <label class="sr-only" for="diag-milestone-preset">Milestone</label>
+                  <select id="diag-milestone-preset" aria-label="Milestone type"></select>
+                  <label class="sr-only" for="diag-milestone-custom">Custom label</label>
+                  <input type="text" id="diag-milestone-custom" maxlength="120" placeholder="Custom label (if Other)" class="hidden" autocomplete="off">
+                  <label class="sr-only" for="diag-milestone-date">Date</label>
+                  <input type="date" id="diag-milestone-date" aria-label="Milestone date">
+                  <button type="button" class="btn secondary btn-sm" id="btn-diag-milestone-add">Add</button>
+                </div>
+              </div>
             </div>
           </details>
           <div id="diagnostics-charts" class="diagnostics-charts">
@@ -1255,6 +1267,27 @@
         <h4 class="patient-measurements-title">Self-reports</h4>
         <p class="muted small">Feelings (including when you’re better), symptoms, one-off meds taken, and notes. Usually logged from Home; manage the full list here.</p>
         <div id="patient-journal-list" class="patient-measurements-list"></div>
+
+        <h4 class="patient-measurements-title" id="milestones-settings-heading">Timeline milestones</h4>
+        <p class="muted small">Lifestyle and other dated milestones (exercise, diet changes, etc.) shown on Labs charts alongside medication starts and dose changes.</p>
+        <div class="patient-measurement-form patient-milestone-form" id="milestone-form">
+          <label for="ms-label">Label
+            <select id="ms-preset"></select>
+          </label>
+          <label for="ms-custom" class="hidden" id="ms-custom-wrap">Custom label
+            <input type="text" id="ms-custom" maxlength="120" placeholder="e.g. Started Mediterranean diet" autocomplete="off">
+          </label>
+          <label for="ms-date">Date
+            <input type="date" id="ms-date">
+          </label>
+          <label for="ms-notes" class="med-span-2">Notes
+            <input type="text" id="ms-notes" maxlength="200" placeholder="Optional" autocomplete="off">
+          </label>
+          <div class="med-form-actions med-span-2">
+            <button type="button" class="btn secondary" id="btn-save-milestone">Add milestone</button>
+          </div>
+        </div>
+        <div id="patient-milestones-list" class="patient-measurements-list"></div>
 
         <h4 class="patient-measurements-title" id="medications-settings-heading">Medications</h4>
         <p class="muted small">Ongoing prescriptions for this patient. Changing dosage or frequency keeps the previous values as history. Conditions / illnesses are optional free-text tags.</p>

@@ -760,11 +760,23 @@ def _sparkline_png_bytes(
         if day < t_min or day > t_max:
             continue
         x = x_for_day(day)
+        hex_color = str((day_events[0] or {}).get("color") or "")
+        try:
+            if hex_color.startswith("#") and len(hex_color) >= 7:
+                fill = (
+                    int(hex_color[1:3], 16),
+                    int(hex_color[3:5], 16),
+                    int(hex_color[5:7], 16),
+                )
+            else:
+                fill = marker_fill
+        except ValueError:
+            fill = marker_fill
         y0, y1 = pad_t + 2, pad_t + chart_h - 2
         dash = 10
         yy = y0
         while yy < y1:
-            draw.line((x, yy, x, min(yy + dash, y1)), fill=marker_fill, width=2)
+            draw.line((x, yy, x, min(yy + dash, y1)), fill=fill, width=2)
             yy += dash * 2
         # Short date under the marker only — full med text is in the PDF legend
         # and repeating it on every chart crowded the axis.
@@ -774,7 +786,7 @@ def _sparkline_png_bytes(
             draw.text(
                 (tx, pad_t + chart_h + 8),
                 date_label,
-                fill=marker_fill,
+                fill=fill,
                 font=font_small,
                 anchor="mt",
             )

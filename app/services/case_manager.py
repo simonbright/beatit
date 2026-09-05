@@ -156,6 +156,7 @@ def _empty_profile() -> dict[str, Any]:
         "diagnostics": [],
         "journal": [],
         "medications": [],
+        "milestones": [],
         "medication_safety": None,
     }
 
@@ -197,6 +198,13 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
         from app.services.medication_identity import annotate_medications
 
         profile["medications"] = annotate_medications(_sort_medications(medications))
+    milestones = data.get("milestones") or []
+    if isinstance(milestones, list):
+        profile["milestones"] = sorted(
+            [m for m in milestones if isinstance(m, dict)],
+            key=lambda m: str(m.get("date") or ""),
+            reverse=True,
+        )
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
@@ -223,6 +231,9 @@ def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, 
         "diagnostics": profile.get("diagnostics") or [],
         "journal": profile.get("journal") or [],
         "medications": meds_out,
+        "milestones": [
+            m for m in (profile.get("milestones") or []) if isinstance(m, dict)
+        ],
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
@@ -515,6 +526,100 @@ def delete_patient_journal_entry(patient_id: str, entry_id: str) -> bool:
     ]
     if len(profile["journal"]) == before:
         return False
+    save_patient_profile(patient_id, profile)
+    return True
+
+
+def add_patient_milestone(
+    patient_id: str,
+    *,
+    label: str,
+    date: str | None,
+    kind: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    from app.services.patient_milestones import _date_only
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = " ".join((label or "").strip().split())
+    if not cleaned:
+        raise ValueError("Milestone label is required")
+    when = _date_only(date)
+    if not when:
+        raise ValueError("Milestone date is required (YYYY-MM-DD)")
+    kind_clean = " ".join((kind or "lifestyle").strip().lower().split())[:40] or "lifestyle"
+    entry = {
+        "id": str(uuid4()),
+        "label": cleaned[:120],
+        "date": when,
+        "kind": kind_clean,
+        "notes": (" ".join((notes or "").strip().split())[:200] or None),
+        "created_at": _now_iso(),
+    }
+    profile = get_patient_profile(patient_id)
+    rows = list(profile.get("milestones") or [])
+    rows.append(entry)
+    profile["milestones"] = rows
+    save_patient_profile(patient_id, profile)
+    return entry
+
+
+def update_patient_milestone(
+    patient_id: str,
+    milestone_id: str,
+    *,
+    label: str | None = None,
+    date: str | None = None,
+    kind: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any] | None:
+    from app.services.patient_milestones import _date_only
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    rows = list(profile.get("milestones") or [])
+    target = None
+    for row in rows:
+        if str(row.get("id")) == str(milestone_id):
+            target = row
+            break
+    if not target:
+        return None
+    if label is not None:
+        cleaned = " ".join(label.strip().split())
+        if not cleaned:
+            raise ValueError("Milestone label is required")
+        target["label"] = cleaned[:120]
+    if date is not None:
+        when = _date_only(date)
+        if not when:
+            raise ValueError("Milestone date must be YYYY-MM-DD")
+        target["date"] = when
+    if kind is not None:
+        target["kind"] = " ".join(kind.strip().lower().split())[:40] or "lifestyle"
+    if notes is not None:
+        target["notes"] = (" ".join(notes.strip().split())[:200] or None)
+    profile["milestones"] = rows
+    save_patient_profile(patient_id, profile)
+    return target
+
+
+def delete_patient_milestone(patient_id: str, milestone_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    before = list(profile.get("milestones") or [])
+    rows = [r for r in before if str(r.get("id")) != str(milestone_id)]
+    if len(rows) == len(before):
+        return False
+    profile["milestones"] = rows
     save_patient_profile(patient_id, profile)
     return True
 

@@ -139,11 +139,14 @@ from app.services.case_manager import (
     update_patient_medication,
     stop_patient_medication,
     delete_patient_medication,
+    add_patient_milestone,
+    update_patient_milestone,
+    delete_patient_milestone,
     age_years_from_dob,
     DIAGNOSTIC_PRESETS,
     JOURNAL_PRESETS,
 )
-from app.services.medication_events import medication_chart_events
+from app.services.patient_milestones import MILESTONE_PRESETS, all_chart_milestones
 from app.services.patient_documents import (
     list_active_patient_document_index,
     list_active_patient_documents_page,
@@ -1956,7 +1959,7 @@ async def _export_analysis_pdf_response(
     if profile is None and ctx.get("patient_id"):
         profile = get_patient_profile(ctx["patient_id"])
     diagnostic_series = group_diagnostics_for_charts(profile) if profile else []
-    milestones = medication_chart_events(profile.get("medications")) if profile else []
+    milestones = all_chart_milestones(profile) if profile else []
     patient_label = ctx.get("patient_label")
     sub_bits: list[str] = []
     if profile:
@@ -2366,6 +2369,7 @@ async def api_get_patient_profile(patient_id: str):
         "diagnostic_presets": DIAGNOSTIC_PRESETS,
         "journal_series": group_journal_for_charts(profile),
         "journal_presets": JOURNAL_PRESETS,
+        "milestone_presets": MILESTONE_PRESETS,
     }
 
 
@@ -2389,7 +2393,7 @@ async def export_patient_diagnostics_pdf(patient_id: str, request: Request):
     patient_subline = " · ".join(sub_bits) if sub_bits else None
 
     exported_at = datetime.now(timezone.utc)
-    milestones = medication_chart_events(profile.get("medications"))
+    milestones = all_chart_milestones(profile)
     pdf_bytes = build_diagnostics_pdf(
         series,
         patient_label=patient.get("label"),
@@ -2982,6 +2986,88 @@ async def api_delete_patient_medication(patient_id: str, medication_id: str):
     ok = delete_patient_medication(patient_id, medication_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Medication not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientMilestoneCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    date: str = Field(min_length=8, max_length=20)
+    kind: str | None = Field(default="lifestyle", max_length=40)
+    notes: str | None = Field(default=None, max_length=200)
+
+
+class PatientMilestoneUpdateRequest(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    date: str | None = Field(default=None, max_length=20)
+    kind: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/patients/{patient_id}/milestones")
+async def api_add_patient_milestone(patient_id: str, body: PatientMilestoneCreateRequest):
+    try:
+        entry = add_patient_milestone(
+            patient_id,
+            label=body.label,
+            date=body.date,
+            kind=body.kind,
+            notes=body.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "milestone": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.patch("/patients/{patient_id}/milestones/{milestone_id}")
+async def api_update_patient_milestone(
+    patient_id: str,
+    milestone_id: str,
+    body: PatientMilestoneUpdateRequest,
+):
+    fields = body.model_fields_set
+    kwargs: dict[str, Any] = {}
+    if "label" in fields:
+        kwargs["label"] = body.label
+    if "date" in fields:
+        kwargs["date"] = body.date
+    if "kind" in fields:
+        kwargs["kind"] = body.kind
+    if "notes" in fields:
+        kwargs["notes"] = body.notes
+    try:
+        entry = update_patient_milestone(patient_id, milestone_id, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "milestone": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/milestones/{milestone_id}")
+async def api_delete_patient_milestone(patient_id: str, milestone_id: str):
+    ok = delete_patient_milestone(patient_id, milestone_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Milestone not found")
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,

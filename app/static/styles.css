@@ -1206,12 +1206,21 @@ body {
   gap: 0.28rem;
   padding: 0.15rem 0.4rem;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--ms-color, var(--border)) 40%, var(--border));
+  background: color-mix(in srgb, var(--ms-color, var(--surface)) 12%, var(--surface));
   font-size: 0.72rem;
   line-height: 1.25;
   cursor: pointer;
   max-width: 100%;
+}
+
+.diag-milestone-swatch {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--ms-color, #0f766e);
+  flex: 0 0 auto;
 }
 
 .diag-milestone-chip input {
@@ -1227,6 +1236,43 @@ body {
 .diag-milestone-controls.is-disabled .diag-milestone-bulk {
   opacity: 0.45;
   pointer-events: none;
+}
+
+.diag-milestone-add {
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+.diag-milestone-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin-top: 0.35rem;
+}
+
+.diag-milestone-add-row select,
+.diag-milestone-add-row input[type="date"],
+.diag-milestone-add-row input[type="text"] {
+  min-height: 2rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  padding: 0.25rem 0.45rem;
+  font: inherit;
+}
+
+.diag-milestone-add-row select {
+  flex: 1 1 10rem;
+}
+
+.patient-milestone-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.55rem 0.65rem;
+  margin-bottom: 0.75rem;
 }
 
 .diag-chart-card {
@@ -1304,9 +1350,9 @@ body {
   max-width: 100%;
   padding: 0.28rem 0.55rem;
   border-radius: 8px;
-  border: 1px solid color-mix(in srgb, #0f766e 35%, var(--border));
-  background: color-mix(in srgb, #0f766e 12%, var(--surface));
-  color: #115e59;
+  border: 1px solid color-mix(in srgb, var(--ms-color, #0f766e) 35%, var(--border));
+  background: color-mix(in srgb, var(--ms-color, #0f766e) 12%, var(--surface));
+  color: color-mix(in srgb, var(--ms-color, #0f766e) 70%, #0f172a);
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.25;
@@ -1318,7 +1364,7 @@ body {
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 999px;
-  background: #0f766e;
+  background: var(--ms-color, #0f766e);
 }
 
 .diag-chart-dates {
