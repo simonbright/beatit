@@ -332,7 +332,16 @@
             </div>
           </details>
         </div>
-        <div id="home-assessment-empty" class="card home-pane-empty">
+        <div id="home-assessment-loading" class="card home-pane-empty home-assessment-loading" role="status" aria-live="polite">
+          <div class="home-assessment-loading-inner">
+            <span class="home-assessment-spinner" aria-hidden="true"></span>
+            <div>
+              <h3>Loading assessment…</h3>
+              <p class="muted">Fetching the latest summary for this case.</p>
+            </div>
+          </div>
+        </div>
+        <div id="home-assessment-empty" class="card home-pane-empty hidden">
           <h3>No assessment yet</h3>
           <p class="muted">Run analysis from the Run tab to generate an executive summary, full assessment, and open items.</p>
           <button type="button" class="btn primary" data-home-section="run">Go to Run</button>

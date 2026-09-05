@@ -13,6 +13,7 @@ const state = {
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
+  assessmentLoading: true,
   models: [],
   settings: {},
   selectedOpenItemId: null,
@@ -1269,21 +1270,19 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
 }
 
 function renderHomeState(hasAssessment) {
-  $("#analyze-results-section")?.classList.toggle("hidden", !hasAssessment);
-  $("#home-assessment-empty")?.classList.toggle("hidden", Boolean(hasAssessment));
-  $("#analyze-actions-card")?.classList.toggle("analyze-actions-secondary", hasAssessment);
-  if (hasAssessment && !state.analysisRunning) {
+  const loading = Boolean(state.assessmentLoading) && !state.latestAnalysis;
+  const showAssessment = hasAssessment == null ? Boolean(state.latestAnalysis) : Boolean(hasAssessment);
+  $("#home-assessment-loading")?.classList.toggle("hidden", !loading);
+  $("#analyze-results-section")?.classList.toggle("hidden", loading || !showAssessment);
+  $("#home-assessment-empty")?.classList.toggle("hidden", loading || showAssessment);
+  $("#analyze-actions-card")?.classList.toggle("analyze-actions-secondary", showAssessment);
+  if (showAssessment && !state.analysisRunning) {
     setAnalyzeActionsExpanded(false);
-  } else if (!hasAssessment) {
+  } else if (!showAssessment && !loading) {
     setAnalyzeActionsExpanded(true);
   }
   renderAnalysisRunChrome();
   updateHomeToolbar();
-  if (!hasAssessment && state.homeSection === "assessment") {
-    // keep assessment pane visible with empty state
-  } else if (hasAssessment && state.homeSection === "run" && !state.analysisRunning) {
-    // leave user on Run if they navigated there
-  }
 }
 
 function renderAnalysisScopeSummary() {
@@ -5632,18 +5631,28 @@ function renderLatestAssessment(analysis) {
 }
 
 async function loadLatestAssessment() {
+  const showSpinner = !state.latestAnalysis;
+  if (showSpinner) {
+    state.assessmentLoading = true;
+    renderHomeState(false);
+  }
   try {
     const data = await api("/api/analyses/latest");
+    state.assessmentLoading = false;
     renderLatestAssessment(data.analysis);
     if (data.analysis) {
       state.analyses = [data.analysis, ...state.analyses.filter((a) => a.id !== data.analysis.id)];
     }
   } catch (err) {
     console.error("loadLatestAssessment failed", err);
+    state.assessmentLoading = false;
     if (!state.latestAnalysis) {
       renderLatestAssessment(null);
+    } else {
+      renderHomeState(true);
     }
   } finally {
+    state.assessmentLoading = false;
     updateHomeToolbar();
   }
 }
@@ -6098,6 +6107,8 @@ function bootstrapUi() {
   initHeaderCollapse();
   syncStickyHeaderOffset();
   window.addEventListener("resize", syncStickyHeaderOffset);
+  // Avoid flashing "No assessment yet" before /api/analyses/latest returns
+  renderHomeState(false);
 }
 
 function initSectionSubnav() {
