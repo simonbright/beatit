@@ -8,7 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 APP_NAME = "BeatIt"
-APP_VERSION = "1.5.25"
+APP_VERSION = "1.5.26"
 # Optional ISO override (date or datetime). Leave empty to use git/file timestamp.
 APP_UPDATED = ""
 

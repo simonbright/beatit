@@ -9098,11 +9098,12 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       const label = formatDiagValue(c.value);
       const fill = statusColor(c.status);
       const valueY = c.y - 12;
+      // White stroke halo keeps values readable when a milestone dash crosses them
       return `<g>
-        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4.2" fill="${fill}">
+        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4.2" fill="${fill}" stroke="#fff" stroke-width="1.5">
           <title>${escapeHtml(formatDiagDate(c.date))}: ${escapeHtml(label)}${c.status ? ` (${statusLabel(c.status)})` : ""}</title>
         </circle>
-        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="13" font-weight="700">${escapeHtml(label)}</text>
+        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="13" font-weight="700" stroke="#fff" stroke-width="4" paint-order="stroke fill">${escapeHtml(label)}</text>
       </g>`;
     })
     .join("");
@@ -9111,16 +9112,17 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   const dateLabels = coords
     .map((c, i) => {
       const anchor = i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle";
-      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="10" opacity="0.75">${escapeHtml(formatDiagDateAxis(c.date))}</text>`;
+      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="10" opacity="0.85" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(formatDiagDateAxis(c.date))}</text>`;
     })
     .join("");
 
+  // Draw order: ref band → milestones (behind) → series → value/date labels (on top)
   return `<div class="diag-chart-plot">
     <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
       ${refLayer}
+      ${milestoneLayer}
       <polyline fill="none" stroke="${lineStroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
       ${dots}
-      ${milestoneLayer}
       ${dateLabels}
     </svg>
     ${milestoneLegend}
