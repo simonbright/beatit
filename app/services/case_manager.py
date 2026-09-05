@@ -197,7 +197,14 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     if isinstance(medications, list):
         from app.services.medication_identity import annotate_medications
 
-        profile["medications"] = annotate_medications(_sort_medications(medications))
+        normalized_meds = []
+        for raw in medications:
+            if not isinstance(raw, dict):
+                continue
+            med = dict(raw)
+            med["category"] = _normalize_medication_category(med.get("category"))
+            normalized_meds.append(med)
+        profile["medications"] = annotate_medications(_sort_medications(normalized_meds))
     milestones = data.get("milestones") or []
     if isinstance(milestones, list):
         profile["milestones"] = sorted(
@@ -420,6 +427,31 @@ def delete_patient_diagnostic(patient_id: str, diagnostic_id: str) -> bool:
 
 
 JOURNAL_KINDS = frozenset({"symptom", "feeling", "medication", "note"})
+
+MEDICATION_CATEGORIES = frozenset({"prescription", "otc", "remedy"})
+
+# Common non-Rx remedies offered as one-tap adds under Medications & remedies.
+COMMON_REMEDIES = [
+    {"name": "CBD Drops", "category": "remedy", "dosage": None, "frequency": None},
+    {"name": "CBD 1 drop", "category": "remedy", "dosage": "1 drop", "frequency": "as needed"},
+    {"name": "CBD 2 drops", "category": "remedy", "dosage": "2 drops", "frequency": "as needed"},
+    {"name": "Magnesium", "category": "remedy", "dosage": None, "frequency": None},
+    {"name": "Melatonin", "category": "remedy", "dosage": None, "frequency": None},
+    {"name": "Ibuprofen", "category": "otc", "dosage": None, "frequency": "as needed"},
+    {"name": "Acetaminophen", "category": "otc", "dosage": None, "frequency": "as needed"},
+    {"name": "Vitamin D", "category": "remedy", "dosage": None, "frequency": None},
+]
+
+
+def _normalize_medication_category(raw: str | None) -> str:
+    value = (raw or "").strip().lower()
+    if value in {"rx", "prescription", "prescribed"}:
+        return "prescription"
+    if value in {"otc", "over-the-counter", "over the counter"}:
+        return "otc"
+    if value in {"remedy", "supplement", "natural", "herbal", "wellness"}:
+        return "remedy"
+    return "prescription"
 
 JOURNAL_PRESETS = [
     # Positive first — so a day can read headache → med → better
@@ -676,6 +708,7 @@ def add_patient_medication(
     notes: str | None = None,
     started_at: str | None = None,
     ended_at: str | None = None,
+    category: str | None = None,
 ) -> dict[str, Any] | None:
     from uuid import uuid4
 
@@ -697,6 +730,7 @@ def add_patient_medication(
         "frequency": (frequency or "").strip() or None,
         "conditions": _normalize_conditions(conditions),
         "notes": (notes or "").strip() or None,
+        "category": _normalize_medication_category(category),
         "status": "stopped" if end else "active",
         "started_at": start,
         "stopped_at": end,
@@ -724,6 +758,7 @@ def update_patient_medication(
     notes: str | None = ...,  # type: ignore[assignment]
     started_at: str | None = ...,  # type: ignore[assignment]
     ended_at: str | None = ...,  # type: ignore[assignment]
+    category: str | None = ...,  # type: ignore[assignment]
     history_note: str | None = None,
     effective_at: str | None = None,
 ) -> dict[str, Any] | None:
@@ -759,6 +794,8 @@ def update_patient_medication(
         med["conditions"] = _normalize_conditions(conditions)
     if notes is not ...:
         med["notes"] = (notes or "").strip() or None
+    if category is not ...:
+        med["category"] = _normalize_medication_category(category)
     if started_at is not ...:
         med["started_at"] = _normalize_med_date(started_at)
     if ended_at is not ...:

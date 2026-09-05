@@ -148,6 +148,7 @@ from app.services.case_manager import (
     age_years_from_dob,
     DIAGNOSTIC_PRESETS,
     JOURNAL_PRESETS,
+    COMMON_REMEDIES,
 )
 from app.services.patient_milestones import MILESTONE_PRESETS, all_chart_milestones
 from app.services.patient_documents import (
@@ -2508,6 +2509,7 @@ async def api_get_patient_profile(patient_id: str):
         "journal_series": group_journal_for_charts(profile),
         "journal_presets": JOURNAL_PRESETS,
         "milestone_presets": MILESTONE_PRESETS,
+        "common_remedies": COMMON_REMEDIES,
     }
 
 
@@ -2963,6 +2965,7 @@ class PatientMedicationCreateRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     started_at: str | None = Field(default=None, max_length=20)
     ended_at: str | None = Field(default=None, max_length=20)
+    category: str | None = Field(default="prescription", max_length=32)
 
 
 class PatientMedicationUpdateRequest(BaseModel):
@@ -2973,6 +2976,7 @@ class PatientMedicationUpdateRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     started_at: str | None = Field(default=None, max_length=20)
     ended_at: str | None = Field(default=None, max_length=20)
+    category: str | None = Field(default=None, max_length=32)
     history_note: str | None = Field(default=None, max_length=200)
     effective_at: str | None = Field(default=None, max_length=20)
 
@@ -3106,6 +3110,7 @@ async def api_add_patient_medication(patient_id: str, body: PatientMedicationCre
             notes=body.notes,
             started_at=body.started_at,
             ended_at=body.ended_at,
+            category=body.category,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3142,6 +3147,8 @@ async def api_update_patient_medication(
         kwargs["started_at"] = body.started_at
     if "ended_at" in fields_set:
         kwargs["ended_at"] = body.ended_at
+    if "category" in fields_set:
+        kwargs["category"] = body.category
     if "effective_at" in fields_set:
         kwargs["effective_at"] = body.effective_at
     try:

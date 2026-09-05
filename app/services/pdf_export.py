@@ -1373,7 +1373,7 @@ def build_document_coverage_pdf(
     patient_label: str | None = None,
     patient_subline: str | None = None,
 ) -> bytes:
-    """Documentation coverage / inventory PDF."""
+    """Documentation coverage / inventory PDF — large type, generous spacing."""
     now = datetime.now(timezone.utc)
     exported_at = _format_timestamp(now.isoformat())
     report_date, report_time = _format_timestamp_parts(now.isoformat())
@@ -1387,19 +1387,20 @@ def build_document_coverage_pdf(
         patient_subline=patient_subline,
     )
     pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=26)
-    pdf.set_margins(14, 36, 14)
+    pdf.set_auto_page_break(auto=True, margin=28)
+    pdf.set_margins(16, 38, 16)
     pdf.add_page()
 
-    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_font("Helvetica", "B", 18)
     pdf.set_text_color(14, 116, 144)
     title = "Documentation coverage"
     if patient_label:
         title = f"Documentation coverage - {_safe_text(patient_label)}"
-    pdf.cell(0, 7, title, new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.cell(0, 10, _safe_text(title), new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.ln(2)
 
-    pdf.set_font("Helvetica", "I", 7.5)
-    pdf.set_text_color(80, 80, 80)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(70, 70, 70)
     total = int(coverage.get("total") or 0)
     present = int(coverage.get("present_count") or 0)
     missing = int(coverage.get("missing_count") or 0)
@@ -1409,49 +1410,55 @@ def build_document_coverage_pdf(
         f"{present} coverage areas present",
         f"{missing} missing",
     ]
-    pdf.cell(0, 4, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 8)
+    _pdf_multiline(pdf, _safe_text(" · ".join(meta)), h=5.5)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 11)
     _pdf_multiline(
         pdf,
         "Inventory of stored documentation by clinical type and upload date. "
-        "Use this to align on what is present, what is missing, and what needs attention.",
-        h=3.6,
+        "Use this to see what is present, what is missing, and what needs attention.",
+        h=5.5,
     )
+    pdf.ln(2)
     pdf.set_draw_color(14, 165, 233)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(3.5)
+    pdf.ln(6)
 
     # Checklist
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(30, 30, 30)
-    pdf.cell(0, 6, "Coverage checklist", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(1)
+    pdf.cell(0, 8, "Coverage checklist", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
     usable_w = pdf.w - pdf.l_margin - pdf.r_margin
     for item in coverage.get("checklist") or []:
         status = "Present" if item.get("present") else "MISSING"
         count = int(item.get("count") or 0)
         label = str(item.get("label") or item.get("id") or "")
-        line = f"[{status}] {label}"
-        if count:
-            line += f" ({count})"
-        pdf.set_font("Helvetica", "B" if not item.get("present") else "", 9)
+        pdf.set_font("Helvetica", "B", 12)
         if item.get("present"):
             pdf.set_text_color(21, 128, 61)
         else:
             pdf.set_text_color(185, 28, 28)
-        pdf.cell(usable_w * 0.22, 4.5, _safe_text(status), new_x="END", new_y="TOP")
+        pdf.cell(usable_w * 0.26, 7, _safe_text(status), new_x="END", new_y="TOP")
         pdf.set_text_color(30, 30, 30)
-        pdf.set_font("Helvetica", "", 9)
-        pdf.cell(0, 4.5, _safe_text(f"{label} ({count})" if count else label), new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(3)
+        pdf.set_font("Helvetica", "", 12)
+        pdf.cell(
+            0,
+            7,
+            _safe_text(f"{label} ({count})" if count else label),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        pdf.ln(1.5)
+    pdf.ln(5)
 
     # Attention
     attn = coverage.get("attention") or {}
     counts = attn.get("counts") or {}
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(30, 30, 30)
-    pdf.cell(0, 6, "Needs attention", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(1)
+    pdf.cell(0, 8, "Needs attention", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
     sections = [
         ("needs_ocr", "Needs OCR"),
         ("flagged", "Flagged"),
@@ -1465,10 +1472,11 @@ def build_document_coverage_pdf(
         if not n:
             continue
         any_attention = True
-        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(146, 64, 14)
-        pdf.cell(0, 5, _safe_text(f"{heading} ({n})"), new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
+        pdf.cell(0, 7, _safe_text(f"{heading} ({n})"), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(40, 40, 40)
         for row in items[:40]:
             name = str(row.get("display_name") or row.get("title") or "Untitled")
@@ -1476,33 +1484,41 @@ def build_document_coverage_pdf(
             when = _format_coverage_doc_date(row.get("created_at"))
             bit = f"- {name}"
             if case:
-                bit += f" · {case}"
-            bit += f" · {when}"
-            _pdf_multiline(pdf, _safe_text(bit), h=3.4)
+                bit += f"  ·  {case}"
+            bit += f"  ·  {when}"
+            _pdf_multiline(pdf, _safe_text(bit), h=5.5)
+            pdf.ln(0.8)
         if len(items) > 40:
-            pdf.set_font("Helvetica", "I", 8)
-            pdf.cell(0, 4, _safe_text(f"… and {len(items) - 40} more"), new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(1.5)
+            pdf.set_font("Helvetica", "I", 11)
+            pdf.cell(
+                0,
+                6,
+                _safe_text(f"... and {len(items) - 40} more"),
+                new_x="LMARGIN",
+                new_y="NEXT",
+            )
+        pdf.ln(3)
     if not any_attention:
-        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_font("Helvetica", "I", 12)
         pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 5, "Nothing flagged for attention.", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
+        pdf.cell(0, 7, "Nothing flagged for attention.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
 
     # Inventory by type
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(30, 30, 30)
-    pdf.cell(0, 6, "Inventory by type", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(1)
+    pdf.cell(0, 8, "Inventory by type", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
     for group in coverage.get("by_type") or []:
-        if pdf.get_y() > pdf.h - 40:
+        if pdf.get_y() > pdf.h - 48:
             pdf.add_page()
         label = str(group.get("label") or group.get("id") or "")
         count = int(group.get("count") or 0)
-        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(14, 116, 144)
-        pdf.cell(0, 5, _safe_text(f"{label} ({count})"), new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 8)
+        pdf.cell(0, 7, _safe_text(f"{label} ({count})"), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1.5)
+        pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(40, 40, 40)
         for row in group.get("documents") or []:
             name = str(row.get("display_name") or "Untitled")
@@ -1515,30 +1531,31 @@ def build_document_coverage_pdf(
                 chips.append("Flagged")
             if row.get("file_missing"):
                 chips.append("File missing")
-            bit = f"- {name} · {when}"
+            bit = f"- {name}  ·  {when}"
             if case:
-                bit += f" · {case}"
+                bit += f"  ·  {case}"
             if chips:
-                bit += f" · [{', '.join(chips)}]"
-            _pdf_multiline(pdf, _safe_text(bit), h=3.4)
+                bit += f"  ·  [{', '.join(chips)}]"
+            _pdf_multiline(pdf, _safe_text(bit), h=5.5)
+            pdf.ln(0.8)
         imaging_n = int(
             (group.get("imaging_collapsed") or {}).get("count")
             or group.get("imaging_count")
             or 0
         )
         if imaging_n:
-            pdf.set_font("Helvetica", "I", 8)
+            pdf.set_font("Helvetica", "I", 11)
             pdf.set_text_color(100, 100, 100)
             _pdf_multiline(
                 pdf,
                 _safe_text(
                     f"- {imaging_n} DICOM / imaging slices (counted; not listed individually)"
                 ),
-                h=3.4,
+                h=5.5,
             )
-            pdf.set_font("Helvetica", "", 8)
+            pdf.set_font("Helvetica", "", 11)
             pdf.set_text_color(40, 40, 40)
-        pdf.ln(1.5)
+        pdf.ln(4)
 
     buffer = BytesIO()
     pdf.output(buffer)

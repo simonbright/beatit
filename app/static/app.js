@@ -31,6 +31,7 @@ const state = {
   activeCaseId: null,
   diagnosticPresets: [],
   journalPresets: [],
+  commonRemedies: [],
   milestonePresets: [],
   journalDraft: {
     feelings: [],
@@ -7608,6 +7609,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   if (presets.length) state.diagnosticPresets = presets;
   if (extras.journal_presets?.length) state.journalPresets = extras.journal_presets;
   if (extras.milestone_presets?.length) state.milestonePresets = extras.milestone_presets;
+  if (extras.common_remedies?.length) state.commonRemedies = extras.common_remedies;
 
   const nameList = document.getElementById("diag-name-presets");
   const unitList = document.getElementById("diag-unit-presets");
@@ -7725,6 +7727,51 @@ function formatMedicationConditions(m) {
     .join("")}</div>`;
 }
 
+function medicationCategoryLabel(category) {
+  const c = String(category || "prescription").toLowerCase();
+  if (c === "otc") return "OTC";
+  if (c === "remedy") return "Remedy";
+  return "Rx";
+}
+
+function formatMedicationCategoryBadge(m) {
+  const cat = String(m?.category || "prescription").toLowerCase();
+  if (cat === "prescription") return "";
+  const label = medicationCategoryLabel(cat);
+  return `<span class="medication-category-pill medication-category-${escapeHtml(cat)}">${escapeHtml(label)}</span>`;
+}
+
+function defaultCommonRemedies() {
+  return [
+    { name: "CBD Drops", category: "remedy" },
+    { name: "CBD 1 drop", category: "remedy", dosage: "1 drop", frequency: "as needed" },
+    { name: "CBD 2 drops", category: "remedy", dosage: "2 drops", frequency: "as needed" },
+    { name: "Magnesium", category: "remedy" },
+    { name: "Melatonin", category: "remedy" },
+    { name: "Ibuprofen", category: "otc", frequency: "as needed" },
+    { name: "Acetaminophen", category: "otc", frequency: "as needed" },
+    { name: "Vitamin D", category: "remedy" },
+  ];
+}
+
+function renderRemedyQuickChips() {
+  const el = document.getElementById("remedy-quick-chips");
+  if (!el) return;
+  const remedies = state.commonRemedies?.length ? state.commonRemedies : defaultCommonRemedies();
+  const existing = new Set(
+    (state.patientProfile?.medications || [])
+      .filter((m) => (m.status || "active") === "active")
+      .map((m) => String(m.name || "").trim().toLowerCase())
+  );
+  el.innerHTML = remedies
+    .map((r) => {
+      const name = r.name || "";
+      const onList = existing.has(name.toLowerCase());
+      return `<button type="button" class="journal-chip remedy-quick-chip${onList ? " is-on-list" : ""}" data-name="${escapeHtml(name)}" data-category="${escapeHtml(r.category || "remedy")}" data-dosage="${escapeHtml(r.dosage || "")}" data-frequency="${escapeHtml(r.frequency || "")}" ${onList ? "disabled" : ""}>${escapeHtml(name)}${onList ? " ✓" : ""}</button>`;
+    })
+    .join("");
+}
+
 function formatMedicationHistory(m) {
   const hist = m.dosage_history || [];
   if (!hist.length) return "";
@@ -7759,7 +7806,7 @@ function renderMedicationsHome(profile) {
   }
   const meds = profile.medications || [];
   if (!meds.length) {
-    el.innerHTML = `<p class="muted small">No medications yet. Add them in Settings.</p>`;
+    el.innerHTML = `<p class="muted small">No medications or remedies yet. Add them in Settings.</p>`;
     return;
   }
   const active = meds.filter((m) => (m.status || "active") === "active");
@@ -7770,7 +7817,7 @@ function renderMedicationsHome(profile) {
     const meta = [formatMedicationDoseLine(m), started, ended].filter(Boolean).join(" · ");
     return `<div class="medication-home-row${isStopped ? " is-stopped" : ""}" data-id="${escapeHtml(m.id || "")}">
       <div class="medication-row-main">
-        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationIdentityBadge(m)}${
+        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}${
           isStopped ? `<span class="medication-stopped-pill">Stopped</span>` : ""
         }
         <p class="medication-row-meta">${escapeHtml(meta)}</p>
@@ -8494,7 +8541,7 @@ function renderMedicationsSettings(profile) {
          <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
     return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
       <div class="medication-row-main">
-        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationIdentityBadge(m)}
+        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}
         <p class="medication-row-meta">${escapeHtml(meta)}</p>
         ${formatMedicationConditions(m)}
         ${formatMedicationHistory(m)}
@@ -8507,7 +8554,8 @@ function renderMedicationsSettings(profile) {
     html += `<h5 class="medication-stopped-heading">Stopped</h5>`;
     html += stopped.map((m) => rowHtml(m, { stopped: true })).join("");
   }
-  el.innerHTML = html || `<p class="muted small">No medications yet.</p>`;
+  el.innerHTML = html || `<p class="muted small">No medications or remedies yet.</p>`;
+  renderRemedyQuickChips();
 }
 
 function clearMedicationForm() {
@@ -8525,11 +8573,13 @@ function clearMedicationForm() {
   if (started) started.value = "";
   const ended = document.getElementById("med-ended");
   if (ended) ended.value = "";
+  const category = document.getElementById("med-category");
+  if (category) category.value = "prescription";
   const effective = document.getElementById("med-effective-at");
   if (effective) effective.value = "";
   document.querySelectorAll(".med-history-note-wrap").forEach((el) => el.classList.add("hidden"));
   const saveBtn = document.getElementById("btn-save-medication");
-  if (saveBtn) saveBtn.textContent = "Add medication";
+  if (saveBtn) saveBtn.textContent = "Add medication / remedy";
   document.getElementById("btn-cancel-med-edit")?.classList.add("hidden");
 }
 
@@ -8538,6 +8588,8 @@ function fillMedicationForm(m) {
   document.getElementById("med-name").value = m.name || "";
   setMedicationDosageFields(m.dosage || "");
   document.getElementById("med-frequency").value = m.frequency || "";
+  const catEl = document.getElementById("med-category");
+  if (catEl) catEl.value = m.category || "prescription";
   document.getElementById("med-conditions").value = (m.conditions || []).join(", ");
   document.getElementById("med-notes").value = m.notes || "";
   document.getElementById("med-started").value = m.started_at ? String(m.started_at).slice(0, 10) : "";
@@ -8948,6 +9000,11 @@ function renderJournalMedChips() {
   if (!show) return;
   const personMeds = activePatientMedications().map((m) => String(m.name).trim());
   const options = [...personMeds];
+  const remedies = state.commonRemedies?.length ? state.commonRemedies : defaultCommonRemedies();
+  for (const r of remedies) {
+    const name = r.name || "";
+    if (name && !options.some((o) => o.toLowerCase() === name.toLowerCase())) options.push(name);
+  }
   for (const cbd of JOURNAL_CBD_OPTIONS) {
     if (!options.some((o) => o.toLowerCase() === cbd.toLowerCase())) options.push(cbd);
   }
@@ -9182,6 +9239,7 @@ function applyProfileResponse(data) {
     journal_series: data.journal_series,
     journal_presets: data.journal_presets,
     milestone_presets: data.milestone_presets,
+    common_remedies: data.common_remedies,
   });
 }
 
@@ -10448,6 +10506,36 @@ document.getElementById("btn-med-safety-review")?.addEventListener("click", () =
 
 document.getElementById("btn-cancel-med-edit")?.addEventListener("click", () => clearMedicationForm());
 
+document.getElementById("remedy-quick-chips")?.addEventListener("click", async (event) => {
+  const chip = event.target.closest(".remedy-quick-chip");
+  if (!chip || chip.disabled) return;
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const name = chip.dataset.name?.trim();
+  if (!name) return;
+  chip.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/medications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        category: chip.dataset.category || "remedy",
+        dosage: chip.dataset.dosage || null,
+        frequency: chip.dataset.frequency || null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not add remedy");
+    }
+    applyProfileResponse(await res.json());
+    toast(`Added ${name}`);
+  } catch (err) {
+    chip.disabled = false;
+    toast(err.message || "Could not add remedy", "error");
+  }
+});
+
 document.getElementById("btn-save-medication")?.addEventListener("click", async () => {
   if (!state.activePatientId) return toast("Select a patient first", "error");
   const editId = document.getElementById("med-edit-id")?.value || "";
@@ -10457,6 +10545,7 @@ document.getElementById("btn-save-medication")?.addEventListener("click", async 
     name,
     dosage: composeDosageFromForm(),
     frequency: document.getElementById("med-frequency")?.value.trim() || null,
+    category: document.getElementById("med-category")?.value || "prescription",
     conditions: parseConditionsInput(document.getElementById("med-conditions")?.value),
     notes: document.getElementById("med-notes")?.value.trim() || null,
     started_at: document.getElementById("med-started")?.value || null,

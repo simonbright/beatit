@@ -261,7 +261,7 @@
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 11c0 5.5-7 10-7 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
           <span class="section-subtab-label">Journal</span>
         </button>
-        <button type="button" class="section-subtab" data-home-section="medications" role="tab" aria-selected="false" title="Medications">
+        <button type="button" class="section-subtab" data-home-section="medications" role="tab" aria-selected="false" title="Medications &amp; remedies">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Meds</span>
         </button>
@@ -374,8 +374,8 @@
         <div class="card medications-card" id="medications-card">
           <div class="row-between wrap">
             <div>
-              <h3>Medications</h3>
-              <p class="muted small">Active and past medications, including dosage changes.</p>
+              <h3>Medications &amp; remedies</h3>
+              <p class="muted small">Prescriptions, OTC, and remedies you use — including non‑Rx like CBD.</p>
               <p class="muted small hidden" id="med-safety-home-status" role="status"></p>
             </div>
             <div class="medications-home-actions">
@@ -384,7 +384,7 @@
             </div>
           </div>
           <div id="medications-home-list" class="medications-home-list">
-            <p class="muted small">No active medications yet.</p>
+            <p class="muted small">No active medications or remedies yet.</p>
           </div>
         </div>
       </div>
@@ -1340,8 +1340,8 @@
         </div>
         <div id="patient-milestones-list" class="patient-measurements-list"></div>
 
-        <h4 class="patient-measurements-title" id="medications-settings-heading">Medications</h4>
-        <p class="muted small">Ongoing prescriptions for this patient. Changing dosage or frequency keeps the previous values as history. Conditions / illnesses are optional free-text tags.</p>
+        <h4 class="patient-measurements-title" id="medications-settings-heading">Medications &amp; remedies</h4>
+        <p class="muted small">Anything this person uses — prescriptions, over‑the‑counter, and remedies (CBD, supplements, etc.). Changing dosage or frequency keeps prior values as history.</p>
         <div class="medication-import-block" id="medication-import-block">
           <p class="muted small">Have a printed or photo list? Import a PDF or image, review the parsed rows, then add what looks right.</p>
           <div class="medication-import-controls row-between wrap">
@@ -1364,11 +1364,22 @@
             <div id="med-import-review-list" class="med-import-review-list"></div>
           </div>
         </div>
+        <div class="remedy-quick-add" id="remedy-quick-add">
+          <p class="muted small">Quick-add common remedies / OTC (tap to add to this person’s list):</p>
+          <div class="journal-chips" id="remedy-quick-chips" role="group" aria-label="Common remedies"></div>
+        </div>
         <div class="patient-measurement-form patient-medication-form" id="medication-form">
           <input type="hidden" id="med-edit-id" value="">
           <p class="muted small med-identity-hint hidden" id="med-identity-hint" role="status"></p>
           <label for="med-name">Name
-            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin" autocomplete="off">
+            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin or CBD Drops" autocomplete="off">
+          </label>
+          <label for="med-category">Type
+            <select id="med-category">
+              <option value="prescription">Prescription</option>
+              <option value="otc">Over-the-counter</option>
+              <option value="remedy">Remedy / supplement</option>
+            </select>
           </label>
           <div class="med-dosage-fields med-span-2">
             <label for="med-dose-amount">Dose
@@ -1382,6 +1393,7 @@
                 <option value="µg">µg</option>
                 <option value="g">g</option>
                 <option value="mL">mL</option>
+                <option value="drops">drops</option>
                 <option value="IU">IU</option>
                 <option value="units">units</option>
                 <option value="%">%</option>
@@ -1391,7 +1403,7 @@
               </select>
             </label>
             <label for="med-dose-unit-other" id="med-dose-unit-other-wrap" class="hidden">Custom unit
-              <input type="text" id="med-dose-unit-other" maxlength="24" placeholder="e.g. drops" autocomplete="off">
+              <input type="text" id="med-dose-unit-other" maxlength="24" placeholder="e.g. softgels" autocomplete="off">
             </label>
           </div>
           <label for="med-frequency">Frequency
@@ -1416,7 +1428,7 @@
             <input type="date" id="med-effective-at" title="Clinical date when a dosage or frequency change took effect. Used on diagnostic charts.">
           </label>
           <div class="med-form-actions med-span-2">
-            <button type="button" class="btn secondary" id="btn-save-medication">Add medication</button>
+            <button type="button" class="btn secondary" id="btn-save-medication">Add medication / remedy</button>
             <button type="button" class="btn ghost hidden" id="btn-cancel-med-edit">Cancel edit</button>
           </div>
         </div>

@@ -775,6 +775,39 @@ body {
   background: var(--surface);
 }
 
+.medication-category-pill {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+}
+
+.medication-category-otc {
+  color: #047857;
+  background: rgba(5, 150, 105, 0.1);
+  border-color: rgba(5, 150, 105, 0.3);
+}
+
+.medication-category-remedy {
+  color: #b45309;
+  background: rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+.remedy-quick-add {
+  margin: 0.75rem 0 1rem;
+}
+
+.remedy-quick-chip.is-on-list {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .patient-medication-form {
   grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
 }
