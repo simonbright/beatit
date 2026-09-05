@@ -141,7 +141,17 @@ def evaluate_document_handling(
 
     if empty and (kind in DIAGNOSTIC_CITATION_KINDS or _looks_like_clinical_filename(doc, meta)):
         reasons.append(REASON_NEEDS_OCR)
-        messages.append("Little or no text extracted — re-extract / OCR before relying on this report")
+        from app.services.document_paths import resolve_document_file_path
+
+        if not resolve_document_file_path(doc):
+            messages.append(
+                "Original PDF missing on disk — use Replace file in Library, then Import to Labs"
+            )
+        else:
+            messages.append(
+                "Little or no text extracted — re-extract / OCR before relying on this report"
+            )
+
 
     if kind == "unknown" and _looks_like_clinical_filename(doc, meta) and not empty:
         # Only flag unclear type when it looks like a lab and charts are empty,

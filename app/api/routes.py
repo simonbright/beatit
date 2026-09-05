@@ -46,6 +46,7 @@ from app.services.chat_observations import (
     save_observation_to_library,
 )
 from app.services.document_view import build_document_view, file_is_available, guess_media_type
+from app.services.document_paths import heal_document_paths, resolve_document_file_path
 from app.services.dicom_preview import is_dicom_document, render_dicom_preview_png
 from app.services.investigation import InvestigationService
 from app.services.imaging_catalog import (
@@ -951,6 +952,7 @@ async def get_document(doc_id: str):
         doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    doc = await heal_document_paths(store, doc)
     catalog = await _source_catalog(db, [doc])
     doc["source_info"] = catalog.describe_document(doc)
     text = await store.read_extracted_text(doc)
@@ -960,16 +962,17 @@ async def get_document(doc_id: str):
 
 @router.get("/documents/{doc_id}/file")
 async def get_document_file(doc_id: str):
-    db, _, _, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     doc = await resolve_active_patient_document(doc_id)
     if not doc:
         doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    if not file_is_available(doc):
+    doc = await heal_document_paths(store, doc)
+    path = resolve_document_file_path(doc)
+    if not path:
         raise HTTPException(status_code=404, detail="Original file not available")
 
-    path = Path(doc["file_path"])
     filename = path.name.split("_", 1)[-1] if "_" in path.name else path.name
     meta = doc.get("metadata") or {}
     if meta.get("original_filename"):
@@ -985,18 +988,19 @@ async def get_document_file(doc_id: str):
 
 @router.get("/documents/{doc_id}/preview")
 async def get_document_preview(doc_id: str):
-    db, _, _, _, _ = await _get_services()
+    db, store, _, _, _ = await _get_services()
     doc = await resolve_active_patient_document(doc_id)
     if not doc:
         doc = await db.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    if not file_is_available(doc):
+    doc = await heal_document_paths(store, doc)
+    path = resolve_document_file_path(doc)
+    if not path:
         raise HTTPException(status_code=404, detail="Original file not available")
     if not is_dicom_document(doc):
         raise HTTPException(status_code=400, detail="Preview is only available for DICOM files")
 
-    path = Path(doc["file_path"])
     try:
         png_bytes = render_dicom_preview_png(file_path=path)
     except Exception as exc:
@@ -1124,6 +1128,84 @@ async def reextract_document(doc_id: str, request: Request):
         "document": updated,
         "extracted_preview": (text or "")[:500],
         "handling": updated.get("handling"),
+    }
+    if lab_import is not None:
+        payload["lab_import"] = lab_import
+    return payload
+
+
+@router.post("/documents/{doc_id}/replace-file")
+async def replace_document_file(
+    doc_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """Re-upload the original PDF when the stored file is missing or corrupt."""
+    db, store, _, _, _ = await _get_services()
+    patient_doc = await resolve_active_patient_document(doc_id)
+    if patient_doc and not patient_doc.get("is_active_case"):
+        raise HTTPException(
+            status_code=403,
+            detail="Switch to that focus case to replace this document’s file",
+        )
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    filename = file.filename or "upload.pdf"
+    lower = filename.lower()
+    source_type = (doc.get("source_type") or "").lower()
+    if source_type == "pdf" and not lower.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Upload a PDF to replace this document")
+
+    # Remove stale file at the old path if present
+    old = resolve_document_file_path(doc)
+    if old and old.is_file():
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+    saved = await store.save_raw_file(doc_id, filename, content)
+    meta = dict(doc.get("metadata") or {})
+    meta["original_filename"] = filename
+    meta["file_size"] = len(content)
+    meta["replaced_file_at"] = datetime.now(timezone.utc).isoformat()
+    await store.db.update_document_paths(doc_id, file_path=str(saved))
+    updated = await store.db.update_document_metadata(doc_id, metadata=meta)
+    updated = updated or {**doc, "file_path": str(saved), "metadata": meta}
+
+    lab_import = None
+    if source_type == "pdf" or lower.endswith(".pdf"):
+        try:
+            updated = await reextract_pdf_document(store, updated)
+            updated, lab_import = await _finalize_clinical_report_document(store, updated)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc_id,
+        metadata={
+            "action": "replace_file",
+            "title": updated.get("title"),
+            "original_filename": filename,
+            "extraction_method": (updated.get("metadata") or {}).get("extraction_method"),
+        },
+    )
+    catalog = await _source_catalog(db)
+    updated["source_info"] = catalog.describe_document(updated)
+    text = await store.read_extracted_text(updated)
+    payload: dict[str, Any] = {
+        "document": updated,
+        "extracted_preview": (text or "")[:500],
+        "handling": updated.get("handling"),
+        **build_document_view(updated),
     }
     if lab_import is not None:
         payload["lab_import"] = lab_import

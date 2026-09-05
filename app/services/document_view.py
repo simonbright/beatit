@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.dicom_preview import dicom_view_metadata, is_dicom_document
+from app.services.document_paths import resolve_document_file_path
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
@@ -20,8 +21,7 @@ def _file_extension(doc: dict[str, Any]) -> str:
 
 
 def file_is_available(doc: dict[str, Any]) -> bool:
-    file_path = doc.get("file_path")
-    return bool(file_path and Path(file_path).is_file())
+    return resolve_document_file_path(doc) is not None
 
 
 def guess_media_type(filename: str, source_type: str | None = None) -> str:
@@ -97,13 +97,15 @@ def build_document_view(doc: dict[str, Any]) -> dict[str, Any]:
         view_kind = "download"
 
     preview_url = f"/api/documents/{doc_id}/preview" if view_kind == "dicom" else None
+    resolved = resolve_document_file_path(doc)
+    path_name = (resolved or Path(doc.get("file_path") or "file")).name
 
     return {
         "has_file": True,
         "file_url": file_url,
         "view_kind": view_kind,
         "source_url": source_url,
-        "media_type": guess_media_type(Path(doc["file_path"]).name, source_type),
+        "media_type": guess_media_type(path_name, source_type),
         "preview_url": preview_url,
         "dicom_metadata": dicom_view_metadata(doc) if view_kind == "dicom" else [],
     }

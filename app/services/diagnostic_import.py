@@ -355,13 +355,16 @@ async def propose_diagnostics_from_document(
         meta["extracted_chars"] = doc_meta.get("extracted_chars")
 
     if is_empty_med_extract(text):
-        file_path = doc.get("file_path")
-        if not file_path or not Path(file_path).is_file():
+        from app.services.document_paths import resolve_document_file_path
+
+        path = resolve_document_file_path(doc)
+        if not path:
             raise ValueError(
-                "This document has no extractable text. Re-extract / OCR it in Library first."
+                "This document’s PDF is missing on disk. Open Library → Replace file, "
+                "upload the PDF again, then Import to Labs."
             )
-        content = await asyncio.to_thread(Path(file_path).read_bytes)
-        filename = Path(file_path).name
+        content = await asyncio.to_thread(path.read_bytes)
+        filename = path.name
         ctype = "application/pdf" if filename.lower().endswith(".pdf") else None
         text, file_meta = await asyncio.to_thread(
             extract_med_list_text,

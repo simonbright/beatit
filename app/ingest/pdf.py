@@ -342,13 +342,14 @@ async def ingest_pdf_file(
 async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> dict[str, Any]:
     """Re-run text/OCR extraction for an existing PDF document."""
     from app.services.clinical_report_classify import classify_and_update_document
+    from app.services.document_paths import heal_document_paths, resolve_document_file_path
 
-    file_path = doc.get("file_path")
-    if not file_path:
-        raise ValueError("Document has no stored PDF file")
-    path = Path(file_path)
-    if not path.exists():
-        raise ValueError("Stored PDF file is missing")
+    doc = await heal_document_paths(store, doc)
+    path = resolve_document_file_path(doc)
+    if not path:
+        raise ValueError(
+            "Stored PDF file is missing on disk. Re-upload the PDF with Replace file, then try Re-extract again."
+        )
     content = path.read_bytes()
     extracted, extraction_meta = extract_pdf_text(content)
     saved = await store.save_extracted_text(doc["id"], extracted)

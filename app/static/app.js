@@ -3754,6 +3754,10 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
     editable && String(doc.source_type || "").toLowerCase() === "pdf"
       ? `<button type="button" class="btn ghost btn-reextract" data-id="${doc.id}" title="Re-run text extraction / OCR">Re-extract</button>`
       : "";
+  const replaceBtn =
+    editable && String(doc.source_type || "").toLowerCase() === "pdf"
+      ? `<button type="button" class="btn ghost btn-replace-file" data-id="${doc.id}" title="Re-upload the PDF if the stored file is missing">Replace file</button><input type="file" class="hidden doc-replace-file-input" data-id="${doc.id}" accept=".pdf,application/pdf">`
+      : "";
   const deleteBtn = editable
     ? `<button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>`
     : `<span class="muted small">Switch focus to edit</span>`;
@@ -3780,6 +3784,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
       <div class="doc-actions">
         <button class="btn ghost btn-view" data-id="${doc.id}">View</button>
         ${reextractBtn}
+        ${replaceBtn}
         <button class="btn secondary btn-select" data-id="${doc.id}">
           ${selected ? "Deselect" : "Select for analysis"}
         </button>
@@ -5556,6 +5561,7 @@ async function viewDocument(id) {
 
   if (actionsEl) {
     const links = [];
+    const hasFile = Boolean(data.has_file);
     if (data.file_url) {
       links.push(
         `<a class="btn secondary" href="${escapeHtml(data.file_url)}" target="_blank" rel="noopener">Open original file</a>`
@@ -5569,13 +5575,20 @@ async function viewDocument(id) {
         `<a class="btn ghost" href="${escapeHtml(data.source_url)}" target="_blank" rel="noopener">Open source URL</a>`
       );
     }
-    if (String(doc.source_type || "").toLowerCase() === "pdf") {
+    const isPdf = String(doc.source_type || "").toLowerCase() === "pdf";
+    if (isPdf) {
       links.push(
         `<button type="button" class="btn secondary btn-reextract" data-id="${escapeHtml(doc.id)}">Re-extract / OCR</button>`
       );
+      links.push(
+        `<button type="button" class="btn secondary btn-replace-file" data-id="${escapeHtml(doc.id)}">Replace file</button>`
+      );
+      links.push(
+        `<input type="file" class="hidden doc-replace-file-input" data-id="${escapeHtml(doc.id)}" accept=".pdf,application/pdf">`
+      );
     }
     const canImportLabs =
-      String(doc.source_type || "").toLowerCase() === "pdf" ||
+      isPdf ||
       String(data.view_kind || "").toLowerCase() === "pdf" ||
       String(data.view_kind || "").toLowerCase() === "image";
     if (canImportLabs && state.activePatientId) {
@@ -5584,7 +5597,11 @@ async function viewDocument(id) {
       );
     }
     const meta = doc.metadata || {};
-    if (meta.needs_ocr || meta.extraction_method === "empty") {
+    if (!hasFile && isPdf) {
+      links.push(
+        `<span class="muted small doc-file-missing-hint">Original PDF is missing on disk — use <strong>Replace file</strong> to upload it again, then Import to Labs.</span>`
+      );
+    } else if (meta.needs_ocr || meta.extraction_method === "empty") {
       links.push(
         `<span class="muted small">This looks like a scanned/image PDF. Re-extract runs OCR so analysis and chat can read it.</span>`
       );
@@ -5713,6 +5730,49 @@ async function reextractDocument(id) {
       }
     },
   });
+}
+
+async function replaceDocumentFile(id, file) {
+  if (!id || !file) return;
+  await withBackgroundTask({
+    id: `replace-file-${id}-${Date.now()}`,
+    label: "Replacing PDF and extracting…",
+    run: async ({ setDetail }) => {
+      setDetail(`Uploading ${file.name}…`);
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await api(`/api/documents/${encodeURIComponent(id)}/replace-file`, {
+        method: "POST",
+        body: fd,
+        timeoutMs: 600000,
+      });
+      const method = data.document?.metadata?.extraction_method || "unknown";
+      const handling = data.handling || data.document?.handling;
+      if (data.lab_import || handling?.status === "flagged") {
+        notifyLabImportResult(data.lab_import, {
+          fallbackToast: `File replaced · extracted (${method})`,
+          handling,
+        });
+      } else {
+        toast(`File replaced · extracted (${method})`);
+        await refreshHandlingFlags();
+      }
+      await loadDocuments();
+      await loadDocumentIndex();
+      if (state.activeDocumentId === id) {
+        await viewDocument(id);
+      }
+    },
+  });
+}
+
+function pickReplaceDocumentFile(id) {
+  const input =
+    document.querySelector(`.doc-replace-file-input[data-id="${CSS.escape(id)}"]`) ||
+    document.querySelector(`#doc-detail-actions .doc-replace-file-input[data-id="${CSS.escape(id)}"]`);
+  if (!input) return toast("Replace file control missing", "error");
+  input.value = "";
+  input.click();
 }
 
 async function applyChatReplyToHome(messageId) {
@@ -5895,12 +5955,22 @@ safeOn("#doc-detail-actions", "click", (event) => {
     reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
     return;
   }
+  const replaceBtn = event.target.closest(".btn-replace-file");
+  if (replaceBtn?.dataset.id) {
+    pickReplaceDocumentFile(replaceBtn.dataset.id);
+    return;
+  }
   const importLabsBtn = event.target.closest(".btn-import-labs");
   if (importLabsBtn?.dataset.id) {
     importDiagnosticsFromLibraryDocument(importLabsBtn.dataset.id).catch((e) =>
       toast(e.message, "error")
     );
   }
+});
+safeOn("#doc-detail-actions", "change", (event) => {
+  const input = event.target.closest(".doc-replace-file-input");
+  if (!input?.dataset.id || !input.files?.[0]) return;
+  replaceDocumentFile(input.dataset.id, input.files[0]).catch((e) => toast(e.message, "error"));
 });
 safeOn("#btn-refresh-docs", "click", () =>
   refreshLibrary({ page: state.libraryPage, sourceType: state.libraryFilter }).catch((e) =>
@@ -5954,6 +6024,11 @@ safeOn("#documents-list", "click", (event) => {
     reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
     return;
   }
+  const replaceBtn = event.target.closest(".btn-replace-file");
+  if (replaceBtn?.dataset.id) {
+    pickReplaceDocumentFile(replaceBtn.dataset.id);
+    return;
+  }
   const selectBtn = event.target.closest(".btn-select");
   if (selectBtn?.dataset.id) {
     toggleSelect(selectBtn.dataset.id);
@@ -5963,6 +6038,11 @@ safeOn("#documents-list", "click", (event) => {
   if (deleteBtn?.dataset.id) {
     deleteDocument(deleteBtn.dataset.id).catch((e) => toast(e.message, "error"));
   }
+});
+safeOn("#documents-list", "change", (event) => {
+  const input = event.target.closest(".doc-replace-file-input");
+  if (!input?.dataset.id || !input.files?.[0]) return;
+  replaceDocumentFile(input.dataset.id, input.files[0]).catch((e) => toast(e.message, "error"));
 });
 safeOn("#btn-refresh-history", "click", () => loadHistory().catch((e) => toast(e.message, "error")));
 

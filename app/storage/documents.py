@@ -21,11 +21,10 @@ class DocumentStore:
         return path
 
     async def read_extracted_text(self, doc: dict[str, Any]) -> str | None:
-        extracted_path = doc.get("extracted_path")
-        if not extracted_path:
-            return None
-        path = Path(extracted_path)
-        if not path.exists():
+        from app.services.document_paths import resolve_extracted_path
+
+        path = resolve_extracted_path(doc)
+        if not path:
             return None
         return path.read_text(encoding="utf-8")
 
