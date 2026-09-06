@@ -526,6 +526,7 @@ COMMON_REMEDIES = [
     {"name": "CBD 2 drops", "category": "remedy", "dosage": "2 drops", "frequency": "as needed"},
     {"name": "Magnesium", "category": "remedy", "dosage": None, "frequency": None},
     {"name": "Melatonin", "category": "remedy", "dosage": None, "frequency": None},
+    {"name": "MoM (Milk of Magnesia)", "category": "otc", "dosage": None, "frequency": "as needed"},
     {"name": "Ibuprofen", "category": "otc", "dosage": None, "frequency": "as needed"},
     {"name": "Acetaminophen", "category": "otc", "dosage": None, "frequency": "as needed"},
     {"name": "Vitamin D", "category": "remedy", "dosage": None, "frequency": None},
@@ -678,6 +679,8 @@ JOURNAL_PRESETS = [
     {"label": "Anxiety", "kind": "feeling"},
     {"label": "Took medication", "kind": "medication"},
     {"label": "Ate/Drank", "kind": "note"},
+    {"label": "Bathroom #1", "kind": "note"},
+    {"label": "Bathroom #2", "kind": "note"},
     {"label": "Slept", "kind": "note"},
     {"label": "Note", "kind": "note"},
 ]

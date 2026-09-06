@@ -8,7 +8,7 @@ const state = {
   libraryView: "documents",
   diagImportSourceDocumentId: null,
   handlingFlags: { items: [], count: 0, critical_count: 0 },
-  homeSection: "assessment",
+  homeSection: "log",
   settingsSection: "patients",
   selectedIds: new Set(),
   analyses: [],
@@ -1499,7 +1499,7 @@ function switchTab(name, options = {}) {
     loadLatestAssessment();
     loadChatObservations().catch(() => {});
     refreshHandlingFlags().catch(() => {});
-    setHomeSection(state.homeSection || "assessment");
+    setHomeSection(options.homeSection || state.homeSection || preferredHomeSection());
   }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
@@ -1541,6 +1541,7 @@ function setLibraryView(view) {
 }
 
 const HOME_SECTIONS = new Set([
+  "log",
   "assessment",
   "journal",
   "medications",
@@ -1552,8 +1553,16 @@ const HOME_SECTIONS = new Set([
 ]);
 const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", "llm", "access", "audit"]);
 
+function isMobileLogLayout() {
+  return window.matchMedia("(max-width: 600px)").matches;
+}
+
+function preferredHomeSection() {
+  return isMobileLogLayout() ? "log" : state.homeSection || "log";
+}
+
 function setHomeSection(section, { scroll = false } = {}) {
-  const next = HOME_SECTIONS.has(section) ? section : "assessment";
+  const next = HOME_SECTIONS.has(section) ? section : preferredHomeSection();
   const changed = state.homeSection !== next;
   state.homeSection = next;
   document.querySelectorAll("#home-subnav [data-home-section]").forEach((btn) => {
@@ -1565,7 +1574,8 @@ function setHomeSection(section, { scroll = false } = {}) {
     pane.classList.toggle("hidden", pane.dataset.homePane !== next);
   });
   syncStickyHeaderOffset();
-  if (changed && (next === "diagnostics" || next === "journal" || next === "medications")) {
+  if (next === "log") renderMobileLogRecent();
+  if (changed && (next === "diagnostics" || next === "journal" || next === "medications" || next === "log")) {
     refreshActivePatientProfile().catch(() => {});
   }
   if (changed && next === "flagged") {
@@ -7833,6 +7843,7 @@ function defaultCommonRemedies() {
     { name: "CBD 2 drops", category: "remedy", dosage: "2 drops", frequency: "as needed" },
     { name: "Magnesium", category: "remedy" },
     { name: "Melatonin", category: "remedy" },
+    { name: "MoM (Milk of Magnesia)", category: "otc", frequency: "as needed" },
     { name: "Ibuprofen", category: "otc", frequency: "as needed" },
     { name: "Acetaminophen", category: "otc", frequency: "as needed" },
     { name: "Vitamin D", category: "remedy" },
@@ -9035,6 +9046,8 @@ function defaultJournalPresets() {
     { label: "Anxiety", kind: "feeling" },
     { label: "Took medication", kind: "medication" },
     { label: "Ate/Drank", kind: "note" },
+    { label: "Bathroom #1", kind: "note" },
+    { label: "Bathroom #2", kind: "note" },
     { label: "Slept", kind: "note" },
     { label: "Note", kind: "note" },
   ];
@@ -9395,10 +9408,15 @@ function renderJournalHome(profile, series) {
   if (!profile) {
     recentEl.innerHTML = `<p class="muted small">Select a patient to log how you feel.</p>`;
     chartsEl.innerHTML = "";
+    renderMobileLogRecent();
     return;
   }
 
-  const entries = profile.journal || [];
+  const entries = [...(profile.journal || [])].sort((a, b) =>
+    String(b.recorded_at || b.created_at || "").localeCompare(
+      String(a.recorded_at || a.created_at || "")
+    )
+  );
   if (!entries.length) {
     recentEl.innerHTML = `<p class="muted small">Nothing logged yet — use the heart to log.</p>`;
   } else {
@@ -9425,16 +9443,15 @@ function renderJournalHome(profile, series) {
   const cards = (series || []).slice(0, 3);
   if (!cards.length) {
     chartsEl.innerHTML = "";
-    return;
-  }
-  chartsEl.innerHTML = cards
-    .map((s) => {
-      const unitLabel = s.unit === "sev" ? "avg severity" : "reports/day";
-      const latest = s.latest;
-      const latestLabel = latest
-        ? `${formatDiagValue(latest.value)} ${unitLabel} · ${formatDiagDate(latest.recorded_at)}`
-        : "—";
-      return `<article class="journal-chart-card">
+  } else {
+    chartsEl.innerHTML = cards
+      .map((s) => {
+        const unitLabel = s.unit === "sev" ? "avg severity" : "reports/day";
+        const latest = s.latest;
+        const latestLabel = latest
+          ? `${formatDiagValue(latest.value)} ${unitLabel} · ${formatDiagDate(latest.recorded_at)}`
+          : "—";
+        return `<article class="journal-chart-card">
         <div class="journal-chart-head">
           <h4 class="journal-chart-title">${escapeHtml(s.name || s.label)}</h4>
           <span class="muted small">${escapeHtml(latestLabel)}</span>
@@ -9442,8 +9459,146 @@ function renderJournalHome(profile, series) {
         ${buildSparklineSvg(s.readings || [], { stroke: "var(--accent-warm, var(--accent))" })}
         <p class="journal-chart-meta">${escapeHtml(s.kind || "note")} · ${s.entry_count || 0} log${(s.entry_count || 0) === 1 ? "" : "s"}</p>
       </article>`;
+      })
+      .join("");
+  }
+  renderMobileLogRecent();
+}
+
+function renderMobileLogRecent() {
+  const el = document.getElementById("mobile-log-recent");
+  if (!el) return;
+  const entries = [...(state.patientProfile?.journal || [])].sort((a, b) =>
+    String(b.recorded_at || b.created_at || "").localeCompare(
+      String(a.recorded_at || a.created_at || "")
+    )
+  );
+  if (!state.activePatientId) {
+    el.innerHTML = `<p class="muted small">Select a patient to start logging.</p>`;
+    return;
+  }
+  if (!entries.length) {
+    el.innerHTML = `<p class="muted small">Nothing yet — tap a tile above.</p>`;
+    return;
+  }
+  el.innerHTML = `<p class="mobile-log-recent-title muted small">Just logged</p>${entries
+    .slice(0, 5)
+    .map((j) => {
+      const sev = j.severity != null ? ` · ${j.severity}/5` : "";
+      return `<div class="mobile-log-recent-row">
+        <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}
+        <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
+      </div>`;
     })
-    .join("");
+    .join("")}`;
+}
+
+const MOM_MED_NAME = "MoM (Milk of Magnesia)";
+
+async function postJournalEntry({ kind, label, text = null, severity = null }) {
+  if (!state.activePatientId) {
+    toast("Select a patient first", "error");
+    return null;
+  }
+  const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind,
+      label,
+      text,
+      severity,
+      recorded_at: null,
+      case_id: null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not save log");
+  }
+  return res.json();
+}
+
+async function ensureMomOnLogList() {
+  if (!state.activePatientId) return;
+  const existing = activePatientMedications().find(
+    (m) => String(m.name || "").trim().toLowerCase() === MOM_MED_NAME.toLowerCase()
+  );
+  if (existing) {
+    if (!existing.show_on_log && existing.id) {
+      const patchRes = await fetch(
+        `/api/patients/${state.activePatientId}/medications/${existing.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ show_on_log: true }),
+        }
+      );
+      if (patchRes.ok) applyProfileResponse(await patchRes.json());
+    }
+    return;
+  }
+  const medRes = await fetch(`/api/patients/${state.activePatientId}/medications`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: MOM_MED_NAME,
+      category: "otc",
+      frequency: "as needed",
+      show_on_log: true,
+    }),
+  });
+  if (medRes.ok) applyProfileResponse(await medRes.json());
+}
+
+async function quickLogInstant(key) {
+  const map = {
+    bathroom1: { kind: "note", label: "Bathroom #1" },
+    bathroom2: { kind: "note", label: "Bathroom #2" },
+    water: { kind: "note", label: "Water", text: "Ate/Drank" },
+    slept: { kind: "note", label: "Slept" },
+    mom: { kind: "medication", label: MOM_MED_NAME },
+  };
+  const entry = map[key];
+  if (!entry) return;
+  const tile = document.querySelector(`[data-quick-log="${key}"]`);
+  if (tile) tile.disabled = true;
+  try {
+    if (key === "mom") await ensureMomOnLogList();
+    const data = await postJournalEntry(entry);
+    if (data) applyProfileResponse(data);
+    toast(`Logged ${entry.label}`);
+  } catch (err) {
+    toast(err.message || "Log failed", "error");
+  } finally {
+    if (tile) tile.disabled = false;
+  }
+}
+
+function openJournalForQuick(mode) {
+  state.journalDraft = emptyJournalDraft();
+  ensureJournalChips();
+  const draft = state.journalDraft;
+  if (mode === "feel") {
+    // leave empty for multi-select feelings
+  } else if (mode === "meds") {
+    draft.actions = [{ kind: "medication", label: "Took medication" }];
+  } else if (mode === "food") {
+    draft.actions = [{ kind: "note", label: "Ate/Drank" }];
+  }
+  state.journalDraft = draft;
+  updateJournalDraftUi();
+  const addEl = document.getElementById("journal-add-to-list");
+  if (addEl) addEl.checked = false;
+  showModal("modal-journal");
+  if (mode === "feel") {
+    document.getElementById("journal-feeling-chips")?.scrollIntoView({ block: "nearest" });
+  } else if (mode === "meds") {
+    document.getElementById("journal-med-options")?.scrollIntoView({ block: "nearest" });
+  } else if (mode === "food") {
+    document.getElementById("journal-food-options")?.scrollIntoView({ block: "nearest" });
+    document.getElementById("journal-text")?.focus();
+  }
 }
 
 function applyProfileResponse(data) {
@@ -10469,6 +10624,26 @@ document.getElementById("btn-journal")?.addEventListener("click", () => {
 
 document.getElementById("btn-journal-open-home")?.addEventListener("click", () => {
   document.getElementById("btn-journal")?.click();
+});
+
+document.getElementById("mobile-log-grid")?.addEventListener("click", (event) => {
+  const instant = event.target.closest("[data-quick-log]");
+  if (instant) {
+    quickLogInstant(instant.getAttribute("data-quick-log")).catch((e) =>
+      toast(e.message || "Log failed", "error")
+    );
+    return;
+  }
+  const open = event.target.closest("[data-quick-open]");
+  if (open) openJournalForQuick(open.getAttribute("data-quick-open"));
+});
+
+document.getElementById("btn-mobile-log-more")?.addEventListener("click", () => {
+  document.getElementById("btn-journal")?.click();
+});
+
+document.getElementById("btn-mobile-log-history")?.addEventListener("click", () => {
+  setHomeSection("journal", { scroll: true });
 });
 
 document.getElementById("btn-close-journal")?.addEventListener("click", () => {

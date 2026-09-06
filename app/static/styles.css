@@ -562,6 +562,163 @@ body {
   font-size: 0.75rem;
 }
 
+.mobile-log-card {
+  margin-bottom: 1rem;
+}
+
+.mobile-log-head h3 {
+  margin: 0 0 0.25rem;
+}
+
+.mobile-log-head .muted {
+  margin: 0 0 0.85rem;
+}
+
+.mobile-log-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.mobile-log-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-height: 6.5rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface, #fff) 92%, var(--accent, #0e7490) 8%);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.mobile-log-tile:hover,
+.mobile-log-tile:focus-visible {
+  border-color: color-mix(in srgb, var(--accent, #0e7490) 55%, var(--border));
+  outline: none;
+}
+
+.mobile-log-tile:active {
+  transform: scale(0.98);
+}
+
+.mobile-log-tile:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.mobile-log-icon {
+  display: inline-flex;
+  width: 2.4rem;
+  height: 2.4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent, #0e7490) 14%, transparent);
+  color: var(--accent, #0e7490);
+}
+
+.mobile-log-icon svg {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.mobile-log-label {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.mobile-log-hint {
+  font-size: 0.75rem;
+  color: var(--muted, #666);
+}
+
+.mobile-log-instant {
+  background: color-mix(in srgb, var(--accent, #0e7490) 12%, var(--surface, #fff));
+}
+
+.mobile-log-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.mobile-log-footer .btn {
+  flex: 1 1 auto;
+  min-height: 2.75rem;
+  justify-content: center;
+}
+
+.mobile-log-recent {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mobile-log-recent-title {
+  margin: 0;
+}
+
+.mobile-log-recent-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface, #fff) 88%, #000 4%);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+@media (max-width: 600px) {
+  .mobile-log-grid {
+    gap: 0.75rem;
+  }
+
+  .mobile-log-tile {
+    min-height: 7.25rem;
+    padding: 1rem 0.95rem;
+  }
+
+  .mobile-log-icon {
+    width: 2.85rem;
+    height: 2.85rem;
+  }
+
+  .mobile-log-icon svg {
+    width: 1.65rem;
+    height: 1.65rem;
+  }
+
+  .mobile-log-label {
+    font-size: 1.15rem;
+  }
+
+  .journal-chip {
+    min-height: 2.75rem;
+    padding: 0.65rem 0.95rem;
+    font-size: 1rem;
+  }
+
+  .journal-sev-btn {
+    width: 2.75rem;
+    height: 2.75rem;
+    font-size: 1.05rem;
+  }
+
+  .journal-actions .btn.primary {
+    min-height: 3rem;
+    font-size: 1.05rem;
+  }
+}
+
 .medications-card {
   margin-bottom: 1rem;
 }
