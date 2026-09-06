@@ -678,6 +678,39 @@ body {
 }
 
 @media (max-width: 600px) {
+  /* Logging-first: tiles sit under sticky header; Home subnav moves below. */
+  body.home-log-focus #panel-analyze {
+    display: flex;
+    flex-direction: column;
+  }
+
+  body.home-log-focus #panel-analyze #home-subnav,
+  body.header-compact.home-log-focus #panel-analyze #home-subnav {
+    order: 20;
+    position: relative;
+    top: auto;
+    margin-top: 0.85rem;
+    margin-bottom: 0.35rem;
+  }
+
+  body.home-log-focus #panel-analyze #handling-alerts {
+    order: 21;
+  }
+
+  body.home-log-focus #panel-analyze [data-home-pane] {
+    order: 1;
+  }
+
+  body.home-log-focus .mobile-log-head {
+    display: none;
+  }
+
+  body.home-log-focus .mobile-log-card {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+    padding-top: 0.35rem;
+  }
+
   .mobile-log-grid {
     gap: 0.75rem;
   }

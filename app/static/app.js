@@ -1500,6 +1500,11 @@ function switchTab(name, options = {}) {
     loadChatObservations().catch(() => {});
     refreshHandlingFlags().catch(() => {});
     setHomeSection(options.homeSection || state.homeSection || preferredHomeSection());
+    if (isMobileLogLayout() && state.homeSection === "log") {
+      focusMobileLogViewport({ behavior: "auto" });
+    }
+  } else {
+    syncHomeLogFocusClass();
   }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
@@ -1561,6 +1566,26 @@ function preferredHomeSection() {
   return isMobileLogLayout() ? "log" : state.homeSection || "log";
 }
 
+function syncHomeLogFocusClass() {
+  const on =
+    isMobileLogLayout() &&
+    state.homeSection === "log" &&
+    Boolean(document.getElementById("panel-analyze")?.classList.contains("active"));
+  document.body.classList.toggle("home-log-focus", on);
+  return on;
+}
+
+/** Mobile Home/Log: put log tiles under the sticky header for one-tap logging. */
+function focusMobileLogViewport({ behavior = "auto" } = {}) {
+  if (!syncHomeLogFocusClass()) return;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const scrollBehavior = reduceMotion ? "auto" : behavior;
+  requestAnimationFrame(() => {
+    syncStickyHeaderOffset();
+    window.scrollTo({ top: 0, behavior: scrollBehavior });
+  });
+}
+
 function setHomeSection(section, { scroll = false } = {}) {
   const next = HOME_SECTIONS.has(section) ? section : preferredHomeSection();
   const changed = state.homeSection !== next;
@@ -1584,6 +1609,11 @@ function setHomeSection(section, { scroll = false } = {}) {
   if (changed && next === "coverage") {
     loadCoverageReport().catch((e) => toast(e.message || "Could not load coverage", "error"));
   }
+  if (next === "log" && isMobileLogLayout()) {
+    focusMobileLogViewport({ behavior: scroll ? "smooth" : "auto" });
+    return;
+  }
+  syncHomeLogFocusClass();
   if (scroll) {
     requestAnimationFrame(() => {
       const pane = $(`[data-home-pane="${next}"]`);
@@ -6224,8 +6254,14 @@ function initSectionSubnav() {
     if (!btn) return;
     setSettingsSection(btn.dataset.settingsSection, { scroll: true });
   });
-  setHomeSection(state.homeSection || "assessment");
+  setHomeSection(state.homeSection || preferredHomeSection());
   setSettingsSection(state.settingsSection || "patients");
+  window.addEventListener("resize", () => {
+    syncHomeLogFocusClass();
+    if (document.body.classList.contains("home-log-focus")) {
+      focusMobileLogViewport({ behavior: "auto" });
+    }
+  });
 }
 
 async function loadInitialData() {
@@ -6245,6 +6281,9 @@ async function loadInitialData() {
   }
   restoreActiveTab();
   resumeActiveAnalysisJobInBackground();
+  if (isMobileLogLayout() && state.homeSection === "log") {
+    focusMobileLogViewport({ behavior: "auto" });
+  }
 }
 
 bootstrapUi();
