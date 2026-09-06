@@ -663,7 +663,7 @@ def _sparkline_png_bytes(
     img = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    pad_l, pad_r, pad_t, pad_b = 48, 72, 20, 58
+    pad_l, pad_r, pad_t, pad_b = 48, 72, 20, 64
     if title:
         draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42), font=font_title, anchor="lt")
         pad_t = 44
@@ -691,14 +691,17 @@ def _sparkline_png_bytes(
         vmin = min(vmin, ref_low)
     if ref_high is not None:
         vmax = max(vmax, ref_high)
-    # Extra headroom so value labels above peaks are not clipped
-    pad = (vmax - vmin) * 0.22 or abs(vmax) * 0.12 or 0.2
-    vmin -= pad * 0.45
-    vmax += pad
-    span = vmax - vmin or 1.0
+    # Fit the chart to the data (+ reference bounds) with modest padding so the
+    # trend fills the plot — never force a 0 baseline that collapses the line.
+    y_pad = (vmax - vmin) * 0.18 or max(abs(vmax) * 0.08, 0.15)
+    vmin -= y_pad * 0.55
+    vmax += y_pad * 0.55
+    if abs(vmax - vmin) < 1e-9:
+        vmax = vmin + 1.0
+    y_span = vmax - vmin
 
     def y_for(val: float) -> float:
-        return pad_t + chart_h - ((val - vmin) / span) * chart_h
+        return pad_t + chart_h - ((val - vmin) / y_span) * chart_h
 
     def _day(d: str) -> float:
         try:
@@ -729,13 +732,12 @@ def _sparkline_png_bytes(
             pre_days.append(day)
         if day > read_max:
             post_days.append(day)
+    read_span = read_max - read_min or 1.0
     if pre_days:
-        span = read_max - read_min or 1.0
-        t_min = min(min(pre_days), read_min - max(span * 0.18, 40.0))
+        t_min = min(min(pre_days), read_min - max(read_span * 0.18, 40.0))
     if post_days:
-        span = read_max - read_min or 1.0
         # Visual headroom so a start a few days after the last lab isn't glued to it
-        t_max = max(max(post_days), read_max + max(span * 0.22, 50.0))
+        t_max = max(max(post_days), read_max + max(read_span * 0.22, 50.0))
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)
@@ -745,6 +747,15 @@ def _sparkline_png_bytes(
 
     draw.rectangle((pad_l, pad_t, pad_l + chart_w, pad_t + chart_h), outline=(148, 163, 184), width=2)
 
+    # Thin vertical separators at each result (behind the trend line)
+    for date, _value, _status in points:
+        x = x_for_day(_day(date))
+        draw.line(
+            (x, pad_t + 2, x, pad_t + chart_h - 2),
+            fill=(226, 232, 240),
+            width=1,
+        )
+
     # Medication milestones — one dashed line per date, stacked labels
     marker_fill = (100, 116, 139)
     by_day: dict[str, list[dict[str, Any]]] = {}
@@ -753,6 +764,7 @@ def _sparkline_png_bytes(
         if not d:
             continue
         by_day.setdefault(d, []).append(ev)
+    milestone_x_labels: list[tuple[float, str, tuple[int, int, int]]] = []
     for mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
@@ -783,14 +795,7 @@ def _sparkline_png_bytes(
         # and repeating it on every chart crowded the axis.
         date_label = _safe_text(_format_diag_date_label(d, compact=False) or d)[:18]
         if date_label:
-            tx = min(max(x, pad_l + 4), pad_l + chart_w - 4)
-            draw.text(
-                (tx, pad_t + chart_h + 8),
-                date_label,
-                fill=fill,
-                font=font_small,
-                anchor="mt",
-            )
+            milestone_x_labels.append((x, date_label, fill))
 
     if ref_low is not None or ref_high is not None:
         if ref_low is not None and ref_high is not None:
@@ -843,14 +848,17 @@ def _sparkline_png_bytes(
                 anchor = "mb"
             x_off = 0
             if i == n - 1 and (
-                (ref_high is not None and abs(value - ref_high) < span * 0.03)
-                or (ref_low is not None and abs(value - ref_low) < span * 0.03)
+                (ref_high is not None and abs(value - ref_high) < y_span * 0.03)
+                or (ref_low is not None and abs(value - ref_low) < y_span * 0.03)
             ):
                 x_off = -14
                 anchor = "mb"
                 y_off = -12
             draw.text((x + x_off, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor=anchor)
 
+    # Two fixed baselines under the plot: reading dates, then milestone dates
+    axis_y_readings = height - 12
+    axis_y_milestones = height - 28
     prev_date = None
     for i, ((x, _y), (date, _value, _status)) in enumerate(zip(coords, points)):
         if date == prev_date:
@@ -858,13 +866,22 @@ def _sparkline_png_bytes(
         prev_date = date
         date_label = _safe_text(_format_diag_date_label(date, compact=True))
         if i == 0:
-            anchor = "lb"
+            anchor = "lt"
         elif i == n - 1 or date == points[-1][0]:
-            anchor = "rb" if i >= n - 2 else "mb"
+            anchor = "rt" if i >= n - 2 else "mt"
         else:
-            anchor = "mb"
-        # X-axis dates at the very bottom; milestone captions sit in the pad above
-        draw.text((x, height - 10), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
+            anchor = "mt"
+        draw.text((x, axis_y_readings), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
+
+    for x, date_label, fill in milestone_x_labels:
+        tx = min(max(x, pad_l + 4), pad_l + chart_w - 4)
+        draw.text(
+            (tx, axis_y_milestones),
+            date_label,
+            fill=fill,
+            font=font_small,
+            anchor="mt",
+        )
 
     buf = BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -882,12 +899,19 @@ def _write_single_reading_rows(
         return
     col_gap = 3.5
     col_w = (usable_w - col_gap) / 2
-    row_h = 7.4
+    row_h = 7.8
     left_x = pdf.l_margin
     right_x = pdf.l_margin + col_w + col_gap
+    # Fixed columns so dates stay vertically aligned regardless of value length.
+    tick_w = 2.8
+    date_w = 14.0
+    value_w = 26.0
 
     for i in range(0, len(items), 2):
-        if pdf.get_y() + row_h + 2.5 > pdf.h - pdf.b_margin:
+        pair = items[i : i + 2]
+        has_ref = any((p.get("reference") or {}).get("label") for p in pair)
+        pair_h = row_h + (1.8 if has_ref else 0)
+        if pdf.get_y() + pair_h + 2.5 > pdf.h - pdf.b_margin:
             pdf.add_page()
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(14, 116, 144)
@@ -895,7 +919,7 @@ def _write_single_reading_rows(
             pdf.ln(1)
 
         y = pdf.get_y()
-        for col, item in enumerate(items[i : i + 2]):
+        for col, item in enumerate(pair):
             x = left_x if col == 0 else right_x
             name = _safe_text(item.get("name") or "Diagnostic")
             unit = _safe_text(item.get("unit") or "")
@@ -909,36 +933,46 @@ def _write_single_reading_rows(
             # Status tick
             if status in _STATUS_RGB:
                 pdf.set_fill_color(*_status_rgb(str(status)))
-                pdf.rect(x, y + 1.2, 2.0, 2.0, style="F")
-                text_x = x + 2.8
-                text_w = col_w - 2.8
+                pdf.rect(x, y + 1.4, 2.0, 2.0, style="F")
+                text_x = x + tick_w
+                text_w = col_w - tick_w
             else:
                 text_x = x
                 text_w = col_w
 
+            name_w = max(text_w - value_w - date_w, 12.0)
+            value_x = text_x + name_w
+            date_x = value_x + value_w
+
             pdf.set_xy(text_x, y)
             pdf.set_font("Helvetica", "B", 7.5)
             pdf.set_text_color(15, 23, 42)
-            pdf.cell(text_w * 0.48, 3.4, name[:28], new_x="END", new_y="TOP")
+            pdf.cell(name_w, 3.4, name[:28], new_x="LMARGIN", new_y="TOP")
+
+            pdf.set_xy(value_x, y)
             pdf.set_font("Helvetica", "", 7.5)
             pdf.set_text_color(*_status_rgb(status if isinstance(status, str) else None, (51, 65, 85)))
-            pdf.cell(text_w * 0.28, 3.4, _safe_text(value_text)[:16], align="R", new_x="END", new_y="TOP")
+            pdf.cell(value_w - 1.0, 3.4, _safe_text(value_text)[:18], align="R", new_x="LMARGIN", new_y="TOP")
+
+            pdf.set_xy(date_x, y)
+            pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(100, 100, 100)
-            pdf.cell(text_w * 0.24, 3.4, _safe_text(date), align="R", new_x="LMARGIN", new_y="TOP")
+            pdf.cell(date_w, 3.4, _safe_text(date)[:10], align="R", new_x="LMARGIN", new_y="TOP")
 
             ref = item.get("reference") or {}
             if ref.get("label"):
-                pdf.set_xy(text_x, y + 3.2)
+                pdf.set_xy(text_x, y + 3.4)
                 pdf.set_font("Helvetica", "", 6)
                 pdf.set_text_color(120, 120, 120)
-                pdf.cell(text_w, 2.6, _safe_text(f"Ref {ref['label']}")[:42], new_x="LMARGIN", new_y="TOP")
+                pdf.cell(text_w, 2.6, _safe_text(f"Ref {ref['label']}")[:48], new_x="LMARGIN", new_y="TOP")
 
-        pair = items[i : i + 2]
-        pair_h = row_h + (1.6 if any((p.get("reference") or {}).get("label") for p in pair) else 0)
         pdf.set_y(y + pair_h)
+        # Thin separator under every result row
         pdf.set_draw_color(226, 232, 240)
+        pdf.set_line_width(0.2)
         pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-        pdf.ln(1.2)
+        pdf.ln(1.1)
+        pdf.set_line_width(0.2)
 
 
 def _write_diagnostics_charts(
