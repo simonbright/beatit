@@ -24,6 +24,8 @@ OPEN_ITEM_INVESTIGATION_DISCARDED = "open_item.investigation_discarded"
 OPEN_ITEM_INVESTIGATION_DRAFT_COMMENTED = "open_item.investigation_draft_commented"
 AUTH_LOGIN = "auth.login"
 AUTH_LOGOUT = "auth.logout"
+AUTH_USER_UPSERTED = "auth.user_upserted"
+AUTH_USER_DELETED = "auth.user_deleted"
 PDF_EXPORTED = "pdf.exported"
 ANALYSIS_ANNOTATIONS_UPDATED = "analysis.annotations_updated"
 ANALYSIS_SHARED_EMAIL = "analysis.shared_email"
@@ -51,6 +53,8 @@ EVENT_LABELS: dict[str, str] = {
     OPEN_ITEM_INVESTIGATION_DRAFT_COMMENTED: "Investigation saved as comment",
     AUTH_LOGIN: "Signed in",
     AUTH_LOGOUT: "Signed out",
+    AUTH_USER_UPSERTED: "Sign-in user added or updated",
+    AUTH_USER_DELETED: "Sign-in user removed",
     PDF_EXPORTED: "Assessment PDF exported",
     ANALYSIS_ANNOTATIONS_UPDATED: "Custom task annotations updated",
     ANALYSIS_SHARED_EMAIL: "Custom task shared by email",
@@ -84,7 +88,7 @@ CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
         SETTINGS_REVIEWER_CONTEXT_UPDATED,
         SETTINGS_SOURCE_LABELS_UPDATED,
     ),
-    "auth": (AUTH_LOGIN, AUTH_LOGOUT),
+    "auth": (AUTH_LOGIN, AUTH_LOGOUT, AUTH_USER_UPSERTED, AUTH_USER_DELETED),
 }
 
 

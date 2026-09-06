@@ -1550,7 +1550,7 @@ const HOME_SECTIONS = new Set([
   "gaps",
   "run",
 ]);
-const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", "llm", "audit"]);
+const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", "llm", "access", "audit"]);
 
 function setHomeSection(section, { scroll = false } = {}) {
   const next = HOME_SECTIONS.has(section) ? section : "assessment";
@@ -1593,6 +1593,12 @@ function setSettingsSection(section, { scroll = false, focusSelector = null } = 
   document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
     pane.classList.toggle("hidden", pane.dataset.settingsPane !== next);
   });
+  if (next === "access") {
+    loadAuthUsers().catch((e) => toast(e.message || "Could not load users", "error"));
+  }
+  if (next === "audit") {
+    loadAuditTrail(true).catch(() => {});
+  }
   syncStickyHeaderOffset();
   if (scroll || focusSelector) {
     requestAnimationFrame(() => {
@@ -1601,6 +1607,46 @@ function setSettingsSection(section, { scroll = false, focusSelector = null } = 
       if (focusSelector) $(focusSelector)?.focus?.();
     });
   }
+}
+
+async function loadAuthUsers() {
+  const el = document.getElementById("auth-users-list");
+  if (!el) return;
+  const data = await api("/api/auth/users");
+  const users = data.users || [];
+  if (!users.length) {
+    el.innerHTML = `<p class="muted small">No sign-in users configured.</p>`;
+    return;
+  }
+  el.innerHTML = users
+    .map((u) => {
+      const source = u.source === "disk" ? "app user" : "env";
+      const del = u.can_delete
+        ? `<button type="button" class="btn ghost btn-sm btn-delete-auth-user" data-username="${escapeHtml(u.username)}">Remove</button>`
+        : `<span class="muted small">env</span>`;
+      return `<div class="food-drink-row" data-username="${escapeHtml(u.username)}">
+        <strong>${escapeHtml(u.username)}</strong>
+        <span class="muted small">${escapeHtml(source)}</span>
+        ${del}
+      </div>`;
+    })
+    .join("");
+}
+
+async function saveAuthUser() {
+  const emailEl = document.getElementById("auth-user-email");
+  const passEl = document.getElementById("auth-user-password");
+  const username = (emailEl?.value || "").trim();
+  const password = passEl?.value || "";
+  if (!username) return toast("Email is required", "error");
+  if (password.length < 8) return toast("Password must be at least 8 characters", "error");
+  await api("/api/auth/users", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  if (passEl) passEl.value = "";
+  toast(`Saved sign-in for ${username}`);
+  await loadAuthUsers();
 }
 
 function openLibraryAddPanel({ focusText = false } = {}) {
@@ -6800,6 +6846,22 @@ $("#btn-reset-reviewer")?.addEventListener("click", () => resetReviewerContextTo
 $("#btn-save-patient")?.addEventListener("click", () =>
   savePatientContext().catch((e) => toast(e.message, "error"))
 );
+$("#btn-save-auth-user")?.addEventListener("click", () =>
+  saveAuthUser().catch((e) => toast(e.message, "error"))
+);
+document.getElementById("auth-users-list")?.addEventListener("click", (e) => {
+  const btn = e.target.closest(".btn-delete-auth-user");
+  if (!btn) return;
+  const username = btn.getAttribute("data-username");
+  if (!username) return;
+  if (!confirm(`Remove sign-in for ${username}?`)) return;
+  api(`/api/auth/users/${encodeURIComponent(username)}`, { method: "DELETE" })
+    .then(() => {
+      toast(`Removed ${username}`);
+      return loadAuthUsers();
+    })
+    .catch((err) => toast(err.message || "Remove failed", "error"));
+});
 $("#btn-save-source-labels")?.addEventListener("click", () =>
   saveSourceLabels().catch((e) => toast(e.message, "error"))
 );

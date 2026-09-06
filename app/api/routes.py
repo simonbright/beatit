@@ -87,6 +87,8 @@ from app.services.audit import (
     ANALYSIS_REQUESTED,
     AUTH_LOGIN,
     AUTH_LOGOUT,
+    AUTH_USER_DELETED,
+    AUTH_USER_UPSERTED,
     CATEGORY_PREFIXES,
     DOCUMENT_CREATED,
     DOCUMENT_DELETED,
@@ -115,6 +117,12 @@ from app.services.auth_session import (
     create_session_token,
     verify_credentials,
     verify_session_token,
+)
+from app.services.auth_users import (
+    all_allowed_usernames,
+    delete_auth_user,
+    list_auth_usernames,
+    upsert_auth_user,
 )
 from app.config import settings
 from app.storage.database import Database
@@ -250,6 +258,11 @@ class DocumentCitationUpdateRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=1, max_length=200)
+
+
+class AuthUserUpsertRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=8, max_length=200)
 
 
 def _cookie_secure() -> bool:
@@ -435,6 +448,77 @@ async def logout(response: Response, request: Request):
         metadata={"username": username} if username else None,
     )
     response.delete_cookie(key=COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@router.get("/auth/users")
+async def api_list_auth_users(request: Request):
+    if not settings.auth_enabled:
+        return {"users": [], "auth": "disabled"}
+    env_set = {u.lower() for u in settings.auth_usernames}
+    disk_set = {u.lower() for u in list_auth_usernames()}
+    users = []
+    for name in sorted(all_allowed_usernames(), key=str.lower):
+        users.append(
+            {
+                "username": name,
+                "source": "disk" if name.lower() in disk_set else "env",
+                "can_delete": name.lower() in disk_set and name.lower() not in env_set,
+            }
+        )
+    return {"users": users, "actor": _actor(request)}
+
+
+@router.post("/auth/users")
+async def api_upsert_auth_user(body: AuthUserUpsertRequest, request: Request):
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=400, detail="Auth is disabled")
+    actor = _actor(request)
+    if not actor:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        saved = upsert_auth_user(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        AUTH_USER_UPSERTED,
+        actor=actor,
+        resource_type="auth_user",
+        resource_id=saved["username"],
+        metadata={"action": "upsert_auth_user", "username": saved["username"]},
+    )
+    return {"ok": True, "user": saved}
+
+
+@router.delete("/auth/users/{username}")
+async def api_delete_auth_user(username: str, request: Request):
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=400, detail="Auth is disabled")
+    actor = _actor(request)
+    if not actor:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # Never remove bootstrap env users from the allowlist via API
+    if username.strip().lower() in {u.lower() for u in settings.auth_usernames}:
+        raise HTTPException(
+            status_code=400,
+            detail="Env allowlist users cannot be deleted here — remove from AUTH_USERNAME on Render",
+        )
+    ok = delete_auth_user(username)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found")
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        AUTH_USER_DELETED,
+        actor=actor,
+        resource_type="auth_user",
+        resource_id=username.strip(),
+        metadata={"action": "delete_auth_user", "username": username.strip()},
+    )
     return {"ok": True}
 
 

@@ -1205,6 +1205,10 @@
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 21h8M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">LLM</span>
         </button>
+        <button type="button" class="section-subtab" data-settings-section="access" role="tab" aria-selected="false" title="Sign-in users">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.5 12l1.7 1.7L14.8 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="section-subtab-label">Access</span>
+        </button>
         <button type="button" class="section-subtab" data-settings-section="audit" role="tab" aria-selected="false" title="Audit trail">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 2v6h6M9 13h6M9 17h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Audit</span>
@@ -1540,6 +1544,27 @@
         <div class="row-between wrap settings-actions">
           <span class="muted small" id="settings-current">Loading…</span>
           <button class="btn primary" id="btn-save-settings">Save model</button>
+        </div>
+      </div>
+      </div>
+
+      <div id="settings-pane-access" class="section-pane hidden" data-settings-pane="access">
+      <div class="card settings-card">
+        <h3>Sign-in users</h3>
+        <p class="muted">Add people who can sign in to BeatIt. Disk users work on Render without editing environment secrets.</p>
+        <div class="patient-measurement-form" id="auth-user-form">
+          <label for="auth-user-email">Email
+            <input type="email" id="auth-user-email" maxlength="200" placeholder="name@example.com" autocomplete="off">
+          </label>
+          <label for="auth-user-password">Password
+            <input type="password" id="auth-user-password" maxlength="200" placeholder="At least 8 characters" autocomplete="new-password">
+          </label>
+          <div class="med-form-actions med-span-2">
+            <button type="button" class="btn primary" id="btn-save-auth-user">Add / update user</button>
+          </div>
+        </div>
+        <div id="auth-users-list" class="patient-measurements-list">
+          <p class="muted small">Loading users…</p>
         </div>
       </div>
       </div>

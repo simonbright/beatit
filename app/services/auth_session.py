@@ -7,6 +7,11 @@ import time
 from typing import Any
 
 from app.config import settings
+from app.services.auth_users import (
+    all_allowed_usernames,
+    resolve_username,
+    verify_disk_password,
+)
 
 COOKIE_NAME = "beatit_session"
 SESSION_DAYS = 7
@@ -22,23 +27,29 @@ def _signing_key() -> bytes:
 
 
 def verify_credentials(username: str, password: str) -> bool:
-    username = username.strip()
+    username = (username or "").strip()
     if not username or not password:
         return False
-    user_ok = any(
-        secrets.compare_digest(username, allowed)
-        for allowed in settings.auth_usernames
-    )
-    expected = settings.password_for(username)
+    matched = resolve_username(username)
+    if not matched:
+        return False
+    # Disk users override env passwords so new accounts work without Render secrets.
+    if verify_disk_password(matched, password):
+        return True
+    # Only env-listed users may use AUTH_PASSWORD / AUTH_USER_PASSWORDS.
+    env_names = {u.lower() for u in settings.auth_usernames}
+    if matched.lower() not in env_names:
+        return False
+    expected = settings.password_for(matched)
     if not expected:
         return False
-    pass_ok = secrets.compare_digest(password, expected)
-    return user_ok and pass_ok
+    return secrets.compare_digest(password, expected)
 
 
 def create_session_token(username: str) -> str:
+    canonical = resolve_username(username) or username.strip()
     payload = {
-        "u": username.strip(),
+        "u": canonical,
         "exp": int(time.time()) + SESSION_DAYS * 86400,
     }
     raw = json.dumps(payload, separators=(",", ":")).encode()
@@ -61,8 +72,9 @@ def verify_session_token(token: str | None) -> str | None:
         username = payload.get("u")
         if not isinstance(username, str) or not username:
             return None
-        if username not in settings.auth_usernames:
+        allowed = {u.lower() for u in all_allowed_usernames()}
+        if username.lower() not in allowed:
             return None
-        return username
+        return resolve_username(username) or username
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
         return None

@@ -45,12 +45,12 @@ class Settings(BaseSettings):
     def auth_password_by_user(self) -> dict[str, str]:
         mapping: dict[str, str] = {}
         for part in self.auth_user_passwords.split(","):
-            entry = part.strip()
+            entry = part.strip().strip('"').strip("'")
             if not entry or ":" not in entry:
                 continue
             user, password = entry.split(":", 1)
-            user = user.strip()
-            password = password.strip()
+            user = user.strip().strip('"').strip("'")
+            password = password.strip().strip('"').strip("'")
             if user and password:
                 mapping[user] = password
         return mapping
