@@ -413,9 +413,27 @@
           </div>
           <div class="mobile-log-footer">
             <button type="button" class="btn secondary" id="btn-mobile-log-more">More options…</button>
-            <button type="button" class="btn ghost" id="btn-mobile-log-history" data-home-section="journal">Recent</button>
+            <button type="button" class="btn ghost" id="btn-mobile-log-history" data-home-section="journal">Trends</button>
           </div>
-          <div id="mobile-log-recent" class="mobile-log-recent" aria-live="polite"></div>
+          <div class="mobile-log-history">
+            <div class="mobile-log-recent-head">
+              <p class="mobile-log-recent-title muted small" id="mobile-log-recent-title">Logged today</p>
+              <label class="mobile-log-range-wrap">
+                <span class="sr-only">Show</span>
+                <select id="mobile-log-range" aria-label="Log history range">
+                  <option value="1" selected>Today</option>
+                  <option value="2">2 days</option>
+                  <option value="3">3 days</option>
+                  <option value="4">4 days</option>
+                  <option value="7">7 days</option>
+                  <option value="10">10 days</option>
+                  <option value="20">20 days</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+            </div>
+            <div id="mobile-log-recent" class="mobile-log-recent" aria-live="polite"></div>
+          </div>
         </div>
       </div>
 

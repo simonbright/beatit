@@ -32,6 +32,8 @@ const state = {
   chatSelectionContext: { excerpt: "", messageId: null },
   activePatientId: null,
   activeCaseId: null,
+  patientProfileId: null,
+  mobileLogDays: 1,
   diagnosticPresets: [],
   journalPresets: [],
   commonRemedies: [],
@@ -7693,12 +7695,19 @@ async function loadCaseContext() {
     fillSelect(caseSelect, cases.length ? cases : [{ id: "", label: "No cases yet" }], ctx.case_id);
     if (caseSelect) caseSelect.disabled = !cases.length;
 
+    const prevPatientId = state.activePatientId;
     state.activePatientId = ctx.patient_id || null;
     state.activeCaseId = ctx.case_id || null;
-    state.patientProfile = null;
+    if (prevPatientId !== state.activePatientId) {
+      clearPatientScopedLogState({ keepPatientId: true });
+    } else {
+      state.patientProfile = null;
+      state.patientProfileId = null;
+    }
     state.diagStatusFilter = "all";
     state.coverageReport = null;
     if (ctx.patient_id) {
+      syncMobileLogRangeControl();
       await refreshActivePatientProfile();
     } else {
       renderPatientProfile({}, null);
@@ -7757,6 +7766,8 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   }
 
   if (!patientId) {
+    state.patientProfile = null;
+    state.patientProfileId = null;
     if (dobEl) dobEl.value = "";
     if (genderEl) genderEl.value = "";
     if (hintEl) hintEl.textContent = "Select or create a patient first";
@@ -7832,7 +7843,12 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderFoodDrinksSettings(profile);
   renderMilestonesSettings(profile);
   const series = resolveDiagnosticSeries(profile, extras);
+  // Never attach another patient's profile to the active log view.
+  if (patientId && state.activePatientId && patientId !== state.activePatientId) {
+    return;
+  }
   state.patientProfile = profile || null;
+  state.patientProfileId = patientId || null;
   state.diagnosticSeriesCache = extras.diagnostic_series || series;
   renderDiagnosticsCharts(profile, series);
   const journalSeries = extras.journal_series || groupJournalClient(profile);
@@ -9509,24 +9525,122 @@ function renderJournalHome(profile, series) {
   renderMobileLogRecent();
 }
 
-function renderMobileLogRecent() {
-  const el = document.getElementById("mobile-log-recent");
-  if (!el) return;
-  const entries = [...(state.patientProfile?.journal || [])].sort((a, b) =>
+const MOBILE_LOG_DAY_OPTIONS = new Set([1, 2, 3, 4, 7, 10, 20, "all"]);
+
+function mobileLogRangeStorageKey(patientId) {
+  return patientId ? `beatit-mobile-log-days:${patientId}` : "beatit-mobile-log-days";
+}
+
+function normalizeMobileLogDays(raw) {
+  if (raw === "all" || raw === "All") return "all";
+  const n = Number(raw);
+  if (MOBILE_LOG_DAY_OPTIONS.has(n)) return n;
+  return 1;
+}
+
+function loadMobileLogDays(patientId) {
+  try {
+    const raw = localStorage.getItem(mobileLogRangeStorageKey(patientId));
+    return normalizeMobileLogDays(raw == null || raw === "" ? 1 : raw);
+  } catch {
+    return 1;
+  }
+}
+
+function saveMobileLogDays(patientId, days) {
+  try {
+    localStorage.setItem(mobileLogRangeStorageKey(patientId), String(days));
+  } catch {
+    /* ignore */
+  }
+}
+
+function syncMobileLogRangeControl() {
+  const days = loadMobileLogDays(state.activePatientId);
+  state.mobileLogDays = days;
+  const sel = document.getElementById("mobile-log-range");
+  if (sel) sel.value = String(days);
+  const title = document.getElementById("mobile-log-recent-title");
+  if (title) {
+    if (days === "all") title.textContent = "All logs";
+    else if (days === 1) title.textContent = "Logged today";
+    else title.textContent = `Last ${days} days`;
+  }
+}
+
+function clearPatientScopedLogState({ keepPatientId = false } = {}) {
+  state.patientProfile = null;
+  state.patientProfileId = null;
+  state.journalDraft = emptyJournalDraft();
+  state.quickScaleKey = null;
+  hideModal("modal-journal");
+  hideModal("modal-quick-scale");
+  if (!keepPatientId) {
+    // used when fully clearing selection
+  }
+  syncMobileLogRangeControl();
+  renderMobileLogRecent();
+  const recentEl = document.getElementById("journal-recent");
+  if (recentEl) {
+    recentEl.innerHTML = state.activePatientId
+      ? `<p class="muted small">Loading logs…</p>`
+      : `<p class="muted small">Select a patient to log how you feel.</p>`;
+  }
+}
+
+function journalEntriesForActivePatient() {
+  if (!state.activePatientId) return [];
+  if (state.patientProfileId && state.patientProfileId !== state.activePatientId) return [];
+  return [...(state.patientProfile?.journal || [])];
+}
+
+function filterJournalByDayRange(entries, days) {
+  const sorted = [...(entries || [])].sort((a, b) =>
     String(b.recorded_at || b.created_at || "").localeCompare(
       String(a.recorded_at || a.created_at || "")
     )
   );
+  if (days === "all") return sorted;
+  const n = Number(days) || 1;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (n - 1));
+  return sorted.filter((j) => {
+    const raw = j.recorded_at || j.created_at;
+    if (!raw) return false;
+    const t = new Date(raw);
+    return !Number.isNaN(t.getTime()) && t >= start;
+  });
+}
+
+function renderMobileLogRecent() {
+  const el = document.getElementById("mobile-log-recent");
+  if (!el) return;
+  syncMobileLogRangeControl();
   if (!state.activePatientId) {
     el.innerHTML = `<p class="muted small">Select a patient to start logging.</p>`;
     return;
   }
-  if (!entries.length) {
-    el.innerHTML = `<p class="muted small">Nothing yet — tap a tile above.</p>`;
+  if (state.patientProfileId && state.patientProfileId !== state.activePatientId) {
+    el.innerHTML = `<p class="muted small">Loading logs…</p>`;
     return;
   }
-  el.innerHTML = `<p class="mobile-log-recent-title muted small">Just logged</p>${entries
-    .slice(0, 5)
+  if (!state.patientProfile) {
+    el.innerHTML = `<p class="muted small">Loading logs…</p>`;
+    return;
+  }
+  const entries = filterJournalByDayRange(journalEntriesForActivePatient(), state.mobileLogDays);
+  if (!entries.length) {
+    const empty =
+      state.mobileLogDays === 1
+        ? "Nothing today — tap a tile above."
+        : state.mobileLogDays === "all"
+          ? "Nothing logged yet — tap a tile above."
+          : `Nothing in the last ${state.mobileLogDays} days.`;
+    el.innerHTML = `<p class="muted small">${empty}</p>`;
+    return;
+  }
+  el.innerHTML = entries
     .map((j) => {
       const sev = j.severity != null ? ` · ${j.severity}/5` : "";
       return `<div class="mobile-log-recent-row">
@@ -9534,7 +9648,7 @@ function renderMobileLogRecent() {
         <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
       </div>`;
     })
-    .join("")}`;
+    .join("");
 }
 
 const MOM_MED_NAME = "MoM (Milk of Magnesia)";
@@ -9544,7 +9658,8 @@ async function postJournalEntry({ kind, label, text = null, severity = null }) {
     toast("Select a patient first", "error");
     return null;
   }
-  const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
+  const patientId = state.activePatientId;
+  const res = await fetch(`/api/patients/${patientId}/journal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -9560,6 +9675,8 @@ async function postJournalEntry({ kind, label, text = null, severity = null }) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Could not save log");
   }
+  // Drop the response if the active patient changed while saving.
+  if (state.activePatientId !== patientId) return null;
   return res.json();
 }
 
@@ -9695,7 +9812,12 @@ async function submitQuickScale(severity) {
 }
 
 function applyProfileResponse(data) {
-  renderPatientProfile(data.profile || {}, state.activePatientId, {
+  const profilePatientId =
+    data?.patient?.id || data?.patient_id || state.activePatientId || null;
+  if (profilePatientId && state.activePatientId && profilePatientId !== state.activePatientId) {
+    return;
+  }
+  renderPatientProfile(data.profile || {}, profilePatientId || state.activePatientId, {
     diagnostic_series: data.diagnostic_series,
     diagnostic_presets: data.diagnostic_presets,
     journal_series: data.journal_series,
@@ -10273,6 +10395,7 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
 async function refreshActivePatientProfile() {
   if (!state.activePatientId) {
     state.patientProfile = null;
+    state.patientProfileId = null;
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
     renderMedicationsHome(null);
@@ -10285,6 +10408,7 @@ async function refreshActivePatientProfile() {
   if (state.activePatientId !== patientId) return;
   const data = await r.json();
   if (data.patient?.id && data.patient.id !== patientId) return;
+  if (state.activePatientId !== patientId) return;
   applyProfileResponse(data);
 }
 
@@ -10756,6 +10880,13 @@ document.getElementById("quick-scale-levels")?.addEventListener("click", (event)
 
 document.getElementById("btn-mobile-log-more")?.addEventListener("click", () => {
   document.getElementById("btn-journal")?.click();
+});
+
+document.getElementById("mobile-log-range")?.addEventListener("change", (event) => {
+  const days = normalizeMobileLogDays(event.target.value);
+  state.mobileLogDays = days;
+  saveMobileLogDays(state.activePatientId, days);
+  renderMobileLogRecent();
 });
 
 document.getElementById("btn-mobile-log-history")?.addEventListener("click", () => {
