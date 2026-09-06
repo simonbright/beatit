@@ -9593,7 +9593,7 @@ async function ensureMomOnLogList() {
 
 async function quickLogInstant(key) {
   const map = {
-    bathroom1: { kind: "note", label: "Bathroom #1" },
+    "feel-fine": { kind: "feeling", label: "Feel Fine" },
     bathroom2: { kind: "note", label: "Bathroom #2" },
     water: { kind: "note", label: "Water", text: "Ate/Drank" },
     slept: { kind: "note", label: "Slept" },
