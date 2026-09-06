@@ -687,6 +687,11 @@ body {
   align-items: center;
 }
 
+.mobile-log-range-wrap {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
 .mobile-log-range-wrap select {
   min-height: 2.25rem;
   padding: 0.3rem 0.55rem;
