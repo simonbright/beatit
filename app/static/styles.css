@@ -677,6 +677,58 @@ body {
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.modal-quick-scale-card {
+  max-width: 26rem;
+}
+
+.quick-scale-levels {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.quick-scale-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  min-height: 4.25rem;
+  padding: 0.55rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface, #fff) 90%, var(--accent, #0e7490) 10%);
+  color: inherit;
+  font: inherit;
+  font-size: 1.45rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.quick-scale-btn span {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--muted, #666);
+  min-height: 0.9rem;
+}
+
+.quick-scale-btn:active {
+  transform: scale(0.97);
+}
+
+.quick-scale-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+@media (max-width: 600px) {
+  .quick-scale-btn {
+    min-height: 4.75rem;
+    font-size: 1.55rem;
+  }
+}
+
 @media (max-width: 600px) {
   /* Logging-first: tiles sit under sticky header; Home subnav moves below. */
   body.home-log-focus #panel-analyze {

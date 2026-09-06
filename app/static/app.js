@@ -10,6 +10,7 @@ const state = {
   handlingFlags: { items: [], count: 0, critical_count: 0 },
   homeSection: "log",
   settingsSection: "patients",
+  quickScaleKey: null,
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
@@ -9077,7 +9078,9 @@ function defaultJournalPresets() {
     { label: "OK / normal", kind: "feeling" },
     { label: "Energetic", kind: "feeling" },
     { label: "Pain-free", kind: "feeling" },
+    { label: "Feel Weak", kind: "feeling" },
     { label: "Weak", kind: "feeling" },
+    { label: "Feel Nauseous", kind: "symptom" },
     { label: "Headache", kind: "symptom" },
     { label: "Nauseous", kind: "symptom" },
     { label: "Dizzy", kind: "symptom" },
@@ -9640,6 +9643,54 @@ function openJournalForQuick(mode) {
   } else if (mode === "food") {
     document.getElementById("journal-food-options")?.scrollIntoView({ block: "nearest" });
     document.getElementById("journal-text")?.focus();
+  }
+}
+
+const QUICK_SCALE_ENTRIES = {
+  nauseous: { kind: "symptom", label: "Feel Nauseous", title: "Feel Nauseous", hint: "How nauseous? Tap a level to log" },
+  weak: { kind: "feeling", label: "Feel Weak", title: "Feel Weak", hint: "How weak? Tap a level to log" },
+};
+
+function openQuickScale(key) {
+  const entry = QUICK_SCALE_ENTRIES[key];
+  if (!entry) return;
+  state.quickScaleKey = key;
+  const title = document.getElementById("quick-scale-title");
+  const hint = document.getElementById("quick-scale-hint");
+  if (title) title.textContent = entry.title;
+  if (hint) hint.textContent = entry.hint;
+  document.querySelectorAll("#quick-scale-levels .quick-scale-btn").forEach((btn) => {
+    btn.disabled = false;
+  });
+  showModal("modal-quick-scale");
+}
+
+async function submitQuickScale(severity) {
+  const key = state.quickScaleKey;
+  const entry = QUICK_SCALE_ENTRIES[key];
+  if (!entry) return;
+  const sev = Number(severity);
+  if (!Number.isFinite(sev) || sev < 1 || sev > 5) return;
+  const buttons = document.querySelectorAll("#quick-scale-levels .quick-scale-btn");
+  buttons.forEach((btn) => {
+    btn.disabled = true;
+  });
+  try {
+    const data = await postJournalEntry({
+      kind: entry.kind,
+      label: entry.label,
+      severity: sev,
+    });
+    if (data) applyProfileResponse(data);
+    hideModal("modal-quick-scale");
+    state.quickScaleKey = null;
+    toast(`Logged ${entry.label} · ${sev}/5`);
+  } catch (err) {
+    toast(err.message || "Log failed", "error");
+  } finally {
+    buttons.forEach((btn) => {
+      btn.disabled = false;
+    });
   }
 }
 
@@ -10676,8 +10727,31 @@ document.getElementById("mobile-log-grid")?.addEventListener("click", (event) =>
     );
     return;
   }
+  const scale = event.target.closest("[data-quick-scale]");
+  if (scale) {
+    openQuickScale(scale.getAttribute("data-quick-scale"));
+    return;
+  }
   const open = event.target.closest("[data-quick-open]");
   if (open) openJournalForQuick(open.getAttribute("data-quick-open"));
+});
+
+document.getElementById("btn-close-quick-scale")?.addEventListener("click", () => {
+  hideModal("modal-quick-scale");
+  state.quickScaleKey = null;
+});
+
+document.getElementById("modal-quick-scale")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-quick-scale") {
+    hideModal("modal-quick-scale");
+    state.quickScaleKey = null;
+  }
+});
+
+document.getElementById("quick-scale-levels")?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".quick-scale-btn");
+  if (!btn) return;
+  submitQuickScale(btn.dataset.sev).catch((e) => toast(e.message || "Log failed", "error"));
 });
 
 document.getElementById("btn-mobile-log-more")?.addEventListener("click", () => {

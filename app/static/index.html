@@ -183,6 +183,24 @@
     </div>
   </div>
 
+  <!-- Quick severity scale (Nauseous / Weak) -->
+  <div id="modal-quick-scale" class="modal-overlay hidden">
+    <div class="modal-card modal-quick-scale-card" role="dialog" aria-modal="true" aria-labelledby="quick-scale-title">
+      <div class="row-between wrap">
+        <h3 id="quick-scale-title">How bad?</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-quick-scale">Close</button>
+      </div>
+      <p class="muted small" id="quick-scale-hint">Tap a level to log now</p>
+      <div class="quick-scale-levels" id="quick-scale-levels" role="group" aria-label="Severity 1 to 5">
+        <button type="button" class="quick-scale-btn" data-sev="1" title="Mild">1<span>Mild</span></button>
+        <button type="button" class="quick-scale-btn" data-sev="2">2<span></span></button>
+        <button type="button" class="quick-scale-btn" data-sev="3" title="Moderate">3<span>Mod</span></button>
+        <button type="button" class="quick-scale-btn" data-sev="4">4<span></span></button>
+        <button type="button" class="quick-scale-btn" data-sev="5" title="Severe">5<span>Bad</span></button>
+      </div>
+    </div>
+  </div>
+
   <!-- New Patient modal -->
   <div id="modal-new-patient" class="modal-overlay hidden">
     <div class="modal-card">
@@ -321,6 +339,20 @@
               </span>
               <span class="mobile-log-label">Feel Fine</span>
               <span class="mobile-log-hint">1 tap</span>
+            </button>
+            <button type="button" class="mobile-log-tile" data-quick-scale="nauseous" title="Log Feel Nauseous">
+              <span class="mobile-log-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M8.5 15.5c1.2-1.4 2.6-2 3.5-2s2.3.6 3.5 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 6.5c1.2.4 2 .4 3 0M14 6.5c1.2.4 2 .4 3 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <span class="mobile-log-label">Feel Nauseous</span>
+              <span class="mobile-log-hint">scale</span>
+            </button>
+            <button type="button" class="mobile-log-tile" data-quick-scale="weak" title="Log Feel Weak">
+              <span class="mobile-log-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M9 15.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4.8 18.5c1.6-1.2 3.7-1.8 7.2-1.8s5.6.6 7.2 1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <span class="mobile-log-label">Feel Weak</span>
+              <span class="mobile-log-hint">scale</span>
             </button>
             <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="bathroom2" title="Log Bathroom #2">
               <span class="mobile-log-icon" aria-hidden="true">
