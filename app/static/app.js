@@ -9682,24 +9682,27 @@ async function postJournalEntry({ kind, label, text = null, severity = null }) {
 
 async function ensureMomOnLogList() {
   if (!state.activePatientId) return;
+  const patientId = state.activePatientId;
   const existing = activePatientMedications().find(
     (m) => String(m.name || "").trim().toLowerCase() === MOM_MED_NAME.toLowerCase()
   );
   if (existing) {
     if (!existing.show_on_log && existing.id) {
       const patchRes = await fetch(
-        `/api/patients/${state.activePatientId}/medications/${existing.id}`,
+        `/api/patients/${patientId}/medications/${existing.id}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ show_on_log: true }),
         }
       );
-      if (patchRes.ok) applyProfileResponse(await patchRes.json());
+      if (patchRes.ok && state.activePatientId === patientId) {
+        applyProfileResponse(await patchRes.json());
+      }
     }
     return;
   }
-  const medRes = await fetch(`/api/patients/${state.activePatientId}/medications`, {
+  const medRes = await fetch(`/api/patients/${patientId}/medications`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -9709,7 +9712,9 @@ async function ensureMomOnLogList() {
       show_on_log: true,
     }),
   });
-  if (medRes.ok) applyProfileResponse(await medRes.json());
+  if (medRes.ok && state.activePatientId === patientId) {
+    applyProfileResponse(await medRes.json());
+  }
 }
 
 async function quickLogInstant(key) {
