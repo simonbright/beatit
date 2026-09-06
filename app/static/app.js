@@ -9071,6 +9071,7 @@ function formatJournalListRow(j) {
 function defaultJournalPresets() {
   return [
     // Positive first — so a day can read headache → med → better
+    { label: "Feel Fine", kind: "feeling" },
     { label: "Feeling good", kind: "feeling" },
     { label: "Better", kind: "feeling" },
     { label: "OK / normal", kind: "feeling" },
@@ -9085,7 +9086,6 @@ function defaultJournalPresets() {
     { label: "Anxiety", kind: "feeling" },
     { label: "Took medication", kind: "medication" },
     { label: "Ate/Drank", kind: "note" },
-    { label: "Bathroom #1", kind: "note" },
     { label: "Bathroom #2", kind: "note" },
     { label: "Took shower", kind: "note" },
     { label: "Slept", kind: "note" },
@@ -9094,6 +9094,7 @@ function defaultJournalPresets() {
 }
 
 const POSITIVE_JOURNAL_LABELS = new Set([
+  "feel fine",
   "feeling good",
   "better",
   "ok / normal",
