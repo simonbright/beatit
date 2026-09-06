@@ -9048,6 +9048,7 @@ function defaultJournalPresets() {
     { label: "Ate/Drank", kind: "note" },
     { label: "Bathroom #1", kind: "note" },
     { label: "Bathroom #2", kind: "note" },
+    { label: "Took shower", kind: "note" },
     { label: "Slept", kind: "note" },
     { label: "Note", kind: "note" },
   ];
@@ -9557,6 +9558,7 @@ async function quickLogInstant(key) {
     bathroom2: { kind: "note", label: "Bathroom #2" },
     water: { kind: "note", label: "Water", text: "Ate/Drank" },
     slept: { kind: "note", label: "Slept" },
+    shower: { kind: "note", label: "Took shower" },
     mom: { kind: "medication", label: MOM_MED_NAME },
   };
   const entry = map[key];

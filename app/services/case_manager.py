@@ -681,6 +681,7 @@ JOURNAL_PRESETS = [
     {"label": "Ate/Drank", "kind": "note"},
     {"label": "Bathroom #1", "kind": "note"},
     {"label": "Bathroom #2", "kind": "note"},
+    {"label": "Took shower", "kind": "note"},
     {"label": "Slept", "kind": "note"},
     {"label": "Note", "kind": "note"},
 ]

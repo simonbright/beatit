@@ -3149,6 +3149,13 @@ textarea { resize: vertical; min-height: 100px; }
   line-height: 1.35;
 }
 
+@media (max-width: 600px) {
+  /* Flagged count stays on the Flagged subtab icon; hide the full-width banner on mobile. */
+  #handling-alerts {
+    display: none !important;
+  }
+}
+
 .section-subtab-count {
   min-width: 1.15rem;
   height: 1.15rem;
