@@ -752,7 +752,7 @@ def _sparkline_png_bytes(
         x = x_for_day(_day(date))
         draw.line(
             (x, pad_t + 2, x, pad_t + chart_h - 2),
-            fill=(226, 232, 240),
+            fill=(203, 213, 225),
             width=1,
         )
 
@@ -856,14 +856,15 @@ def _sparkline_png_bytes(
                 y_off = -12
             draw.text((x + x_off, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor=anchor)
 
-    # Two fixed baselines under the plot: reading dates, then milestone dates
-    axis_y_readings = height - 12
-    axis_y_milestones = height - 28
+    # One shared baseline so dates stay aligned (no vertical shift between labels)
+    axis_y = height - 14
     prev_date = None
+    reading_xs: list[float] = []
     for i, ((x, _y), (date, _value, _status)) in enumerate(zip(coords, points)):
         if date == prev_date:
             continue
         prev_date = date
+        reading_xs.append(x)
         date_label = _safe_text(_format_diag_date_label(date, compact=True))
         if i == 0:
             anchor = "lt"
@@ -871,12 +872,18 @@ def _sparkline_png_bytes(
             anchor = "rt" if i >= n - 2 else "mt"
         else:
             anchor = "mt"
-        draw.text((x, axis_y_readings), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
+        draw.text((x, axis_y), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
 
     for x, date_label, fill in milestone_x_labels:
         tx = min(max(x, pad_l + 4), pad_l + chart_w - 4)
+        # Nudge away from a nearby reading date so labels don't stack on the same spot
+        for rx in reading_xs:
+            if abs(tx - rx) < 36:
+                tx = rx - 40 if tx <= rx else rx + 40
+                tx = min(max(tx, pad_l + 4), pad_l + chart_w - 4)
+                break
         draw.text(
-            (tx, axis_y_milestones),
+            (tx, axis_y),
             date_label,
             fill=fill,
             font=font_small,
