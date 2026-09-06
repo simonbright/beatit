@@ -10894,6 +10894,59 @@ document.getElementById("mobile-log-range")?.addEventListener("change", (event) 
   renderMobileLogRecent();
 });
 
+async function exportJournalLogPdf(triggerBtn) {
+  const patientId = state.activePatientId;
+  if (!patientId) return toast("Select a patient first", "error");
+  const days = normalizeMobileLogDays(
+    document.getElementById("mobile-log-range")?.value || state.mobileLogDays || 1
+  );
+  const buttons = [
+    document.getElementById("btn-export-log-pdf"),
+    document.getElementById("btn-export-log-pdf-journal"),
+  ].filter(Boolean);
+  buttons.forEach((btn) => {
+    btn.disabled = true;
+  });
+  if (triggerBtn) triggerBtn.disabled = true;
+  try {
+    const res = await fetch(
+      `/api/patients/${patientId}/journal/export.pdf?days=${encodeURIComponent(String(days))}`,
+      { credentials: "include" }
+    );
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Export failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = filenameFromContentDisposition(res, `beatit-log-${stamp}.pdf`);
+    triggerPdfDownload(blob, filename);
+    toast("Log PDF downloaded");
+  } catch (err) {
+    toast(err.message || "Export failed", "error");
+  } finally {
+    buttons.forEach((btn) => {
+      btn.disabled = false;
+    });
+  }
+}
+
+document.getElementById("btn-export-log-pdf")?.addEventListener("click", () => {
+  exportJournalLogPdf(document.getElementById("btn-export-log-pdf")).catch((e) =>
+    toast(e.message || "Export failed", "error")
+  );
+});
+
+document.getElementById("btn-export-log-pdf-journal")?.addEventListener("click", () => {
+  exportJournalLogPdf(document.getElementById("btn-export-log-pdf-journal")).catch((e) =>
+    toast(e.message || "Export failed", "error")
+  );
+});
+
 document.getElementById("btn-mobile-log-history")?.addEventListener("click", () => {
   setHomeSection("journal", { scroll: true });
 });

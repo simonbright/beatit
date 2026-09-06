@@ -418,19 +418,22 @@
           <div class="mobile-log-history">
             <div class="mobile-log-recent-head">
               <p class="mobile-log-recent-title muted small" id="mobile-log-recent-title">Logged today</p>
-              <label class="mobile-log-range-wrap">
-                <span class="sr-only">Show</span>
-                <select id="mobile-log-range" aria-label="Log history range">
-                  <option value="1" selected>Today</option>
-                  <option value="2">2 days</option>
-                  <option value="3">3 days</option>
-                  <option value="4">4 days</option>
-                  <option value="7">7 days</option>
-                  <option value="10">10 days</option>
-                  <option value="20">20 days</option>
-                  <option value="all">All</option>
-                </select>
-              </label>
+              <div class="mobile-log-recent-actions">
+                <label class="mobile-log-range-wrap">
+                  <span class="sr-only">Show</span>
+                  <select id="mobile-log-range" aria-label="Log history range">
+                    <option value="1" selected>Today</option>
+                    <option value="2">2 days</option>
+                    <option value="3">3 days</option>
+                    <option value="4">4 days</option>
+                    <option value="7">7 days</option>
+                    <option value="10">10 days</option>
+                    <option value="20">20 days</option>
+                    <option value="all">All</option>
+                  </select>
+                </label>
+                <button type="button" class="btn secondary btn-sm" id="btn-export-log-pdf" title="Download log PDF for the selected range">Export PDF</button>
+              </div>
             </div>
             <div id="mobile-log-recent" class="mobile-log-recent" aria-live="polite"></div>
           </div>
@@ -504,7 +507,10 @@
               <h3>How you have been</h3>
               <p class="muted small">Recent logs and trends.</p>
             </div>
-            <button type="button" class="btn secondary btn-sm" id="btn-journal-open-home">Log now</button>
+            <div class="journal-home-actions">
+              <button type="button" class="btn secondary btn-sm" id="btn-export-log-pdf-journal" title="Download log PDF">Export PDF</button>
+              <button type="button" class="btn secondary btn-sm" id="btn-journal-open-home">Log now</button>
+            </div>
           </div>
           <div id="journal-recent" class="journal-recent"></div>
           <div id="journal-charts" class="journal-charts"></div>

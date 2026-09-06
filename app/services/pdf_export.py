@@ -1918,3 +1918,199 @@ def build_medications_pdf(
     buffer = BytesIO()
     pdf.output(buffer)
     return buffer.getvalue()
+
+
+JOURNAL_EXPORT_DAY_OPTIONS = frozenset({1, 2, 3, 4, 7, 10, 20})
+
+
+def normalize_journal_export_days(raw: str | int | None) -> int | str:
+    text = str(raw if raw is not None else "1").strip().lower()
+    if text in {"all", "everything"}:
+        return "all"
+    try:
+        days = int(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("days must be 1, 2, 3, 4, 7, 10, 20, or all") from exc
+    if days not in JOURNAL_EXPORT_DAY_OPTIONS:
+        raise ValueError("days must be 1, 2, 3, 4, 7, 10, 20, or all")
+    return days
+
+
+def journal_export_days_label(days: int | str) -> str:
+    if days == "all":
+        return "All entries"
+    n = int(days)
+    if n == 1:
+        return "Today"
+    return f"Last {n} days"
+
+
+def filter_journal_for_export(
+    entries: list[dict[str, Any]] | None,
+    days: int | str = 1,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Newest-first journal rows for the requested day window (Eastern calendar days)."""
+    from datetime import timedelta
+
+    rows = [e for e in (entries or []) if isinstance(e, dict)]
+    rows.sort(
+        key=lambda e: str(e.get("recorded_at") or e.get("created_at") or ""),
+        reverse=True,
+    )
+    if days == "all":
+        return rows
+    n = int(days)
+    anchor = _to_eastern(now or datetime.now(timezone.utc))
+    start = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Inclusive window: today = 1 day
+    start = start - timedelta(days=max(n - 1, 0))
+    filtered: list[dict[str, Any]] = []
+    for entry in rows:
+        raw = entry.get("recorded_at") or entry.get("created_at")
+        dt = _parse_iso_datetime(str(raw) if raw else None)
+        if not dt:
+            continue
+        if _to_eastern(dt) >= start:
+            filtered.append(entry)
+    return filtered
+
+
+def journal_pdf_filename(
+    *,
+    patient_label: str | None = None,
+    days: int | str = 1,
+    exported_at: datetime | None = None,
+) -> str:
+    stamp = _format_filename_stamp(
+        (exported_at or datetime.now(timezone.utc)).isoformat()
+    )
+    scope_key = "all" if days == "all" else f"{int(days)}d"
+    slug = ""
+    if patient_label:
+        slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
+    if slug:
+        return f"beatit-log-{scope_key}-{slug}-{stamp}.pdf"
+    return f"beatit-log-{scope_key}-{stamp}.pdf"
+
+
+def _format_journal_export_when(iso: str | None) -> str:
+    dt = _parse_iso_datetime(iso)
+    if not dt:
+        return "—"
+    eastern = _to_eastern(dt)
+    date = eastern.strftime("%b %d, %Y").replace(" 0", " ")
+    hour = eastern.strftime("%I").lstrip("0") or "12"
+    return f"{date} {hour}:{eastern.strftime('%M %p')}"
+
+
+def build_journal_pdf(
+    entries: list[dict[str, Any]],
+    *,
+    days: int | str = 1,
+    patient_label: str | None = None,
+    patient_subline: str | None = None,
+) -> bytes:
+    """Portrait daily-log PDF for patient self-reports."""
+    days_key = normalize_journal_export_days(days)
+    rows = filter_journal_for_export(entries, days_key)
+
+    now = datetime.now(timezone.utc)
+    exported_at = _format_timestamp(now.isoformat())
+    report_date, report_time = _format_timestamp_parts(now.isoformat())
+
+    pdf = AssessmentPDF(
+        report_date=report_date,
+        report_time=report_time,
+        report_type="Log export",
+        exported_at=exported_at,
+        patient_label=patient_label,
+        patient_subline=patient_subline,
+        orientation="P",
+    )
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=26)
+    pdf.set_margins(12, 36, 12)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(14, 116, 144)
+    title = "Daily log"
+    if patient_label:
+        title = f"Daily log - {_safe_text(patient_label)}"
+    pdf.cell(0, 7, title, new_x="LMARGIN", new_y="NEXT", align="L")
+
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(80, 80, 80)
+    meta = [
+        f"Range: {journal_export_days_label(days_key)}",
+        f"Exported: {exported_at}",
+        f"{len(rows)} entr{'y' if len(rows) == 1 else 'ies'}",
+    ]
+    if patient_subline:
+        meta.append(_safe_text(patient_subline))
+    pdf.cell(0, 4.5, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    usable = pdf.w - pdf.l_margin - pdf.r_margin
+    cols: list[tuple[str, float]] = [
+        ("When", usable * 0.26),
+        ("Kind", usable * 0.12),
+        ("Entry", usable * 0.28),
+        ("Sev", usable * 0.08),
+        ("Details", usable * 0.26),
+    ]
+    header_h = 7.0
+
+    if not rows:
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(80, 80, 80)
+        pdf.multi_cell(
+            0,
+            5,
+            _safe_text("No log entries in this range."),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+    else:
+        _write_med_table_header(pdf, cols, row_h=header_h)
+        for idx, entry in enumerate(rows):
+            sev = entry.get("severity")
+            sev_text = f"{sev}/5" if sev is not None else "—"
+            values = [
+                _format_journal_export_when(entry.get("recorded_at") or entry.get("created_at")),
+                str(entry.get("kind") or "note"),
+                str(entry.get("label") or "—").strip() or "—",
+                sev_text,
+                (entry.get("text") or "").strip() or "—",
+            ]
+            row_h = _estimate_med_row_height(pdf, list(zip([w for _, w in cols], values)))
+            if pdf.get_y() + row_h > pdf.h - pdf.b_margin - 4:
+                pdf.add_page()
+                _write_med_table_header(pdf, cols, row_h=header_h)
+            _write_med_table_row(
+                pdf,
+                cols,
+                values,
+                fill=(idx % 2 == 1),
+                row_h=row_h,
+            )
+
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(
+            0,
+            4,
+            _safe_text(
+                f"End of list · {len(rows)} entr{'y' if len(rows) == 1 else 'ies'} · {journal_export_days_label(days_key)}"
+            ),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()

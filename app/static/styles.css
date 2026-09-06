@@ -672,9 +672,19 @@ body {
   margin: 0;
 }
 
-.mobile-log-range-wrap {
-  margin: 0;
-  flex: 0 0 auto;
+.mobile-log-recent-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.journal-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
 }
 
 .mobile-log-range-wrap select {

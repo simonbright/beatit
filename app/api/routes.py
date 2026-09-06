@@ -66,12 +66,17 @@ from app.services.pdf_export import (
     build_assessment_pdf,
     build_diagnostics_pdf,
     build_document_coverage_pdf,
+    build_journal_pdf,
     build_medications_pdf,
     coverage_pdf_filename,
     diagnostics_pdf_filename,
+    filter_journal_for_export,
     filter_medications_for_export,
+    journal_export_days_label,
+    journal_pdf_filename,
     medication_export_scope_label,
     medications_pdf_filename,
+    normalize_journal_export_days,
     normalize_medication_export_scope,
 )
 from app.services.source_catalog import (
@@ -3054,6 +3059,71 @@ async def api_delete_patient_journal(patient_id: str, entry_id: str):
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
     }
+
+
+@router.get("/patients/{patient_id}/journal/export.pdf")
+async def export_patient_journal_pdf(
+    patient_id: str,
+    request: Request,
+    days: str = "1",
+):
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    try:
+        days_key = normalize_journal_export_days(days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    profile = get_patient_profile(patient_id)
+    entries = profile.get("journal") or []
+    filtered = filter_journal_for_export(entries, days_key)
+    if not filtered:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No log entries to export for “{journal_export_days_label(days_key)}”",
+        )
+
+    sub_bits: list[str] = []
+    age = age_years_from_dob(profile.get("date_of_birth"))
+    if age is not None:
+        sub_bits.append(f"Age {age}")
+    if profile.get("gender"):
+        sub_bits.append(str(profile["gender"]))
+    patient_subline = " · ".join(sub_bits) if sub_bits else None
+
+    exported_at = datetime.now(timezone.utc)
+    pdf_bytes = build_journal_pdf(
+        entries,
+        days=days_key,
+        patient_label=patient.get("label"),
+        patient_subline=patient_subline,
+    )
+    filename = journal_pdf_filename(
+        patient_label=patient.get("label"),
+        days=days_key,
+        exported_at=exported_at,
+    )
+    db, _, _, _, _ = await _get_services()
+    await _audit(
+        db,
+        request,
+        PDF_EXPORTED,
+        resource_type="patient",
+        resource_id=patient_id,
+        metadata={
+            "filename": filename,
+            "export_kind": "journal",
+            "days": days_key,
+            "row_count": len(filtered),
+        },
+    )
+    return FastAPIResponse(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 class PatientMedicationCreateRequest(BaseModel):
