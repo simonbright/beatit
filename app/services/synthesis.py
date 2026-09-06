@@ -18,6 +18,7 @@ from app.services.source_policy import (
     TRIAL_SEARCH_QUERY_INSTRUCTIONS,
     infer_assessment_specialty,
     response_structure_with_sources,
+    rewrite_specialty_headings,
 )
 from app.services.source_normalize import enrich_with_sources
 from app.storage.database import Database
@@ -509,6 +510,7 @@ Use clear ### headings for each section."""
         )
 
         response = filter_palliative_content(response)
+        response = rewrite_specialty_headings(response, specialty)
 
         response, _attribution_level = enrich_with_sources(
             response, doc_titles, annotate_staging=True
@@ -637,6 +639,12 @@ Use clear ### headings for each section."""
         )
 
         response = filter_palliative_content(response)
+        patient_setting = await self.db.get_setting("patient_context") or DEFAULT_PATIENT_CONTEXT
+        specialty = infer_assessment_specialty(
+            case_label=case_label or existing.get("case_label") or ctx.get("case_label"),
+            patient_context=patient_setting,
+        )
+        response = rewrite_specialty_headings(response, specialty)
         response, _attribution_level = enrich_with_sources(
             response, doc_titles, annotate_staging=True
         )

@@ -2935,7 +2935,7 @@ function stripExecutiveSummarySection(response) {
       .trim();
   const isExec = (h) => h.includes("executive summary") || h === "1 executive summary";
   const plainSection =
-    /^(?:what we know|what we do not know|uncertainties|critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|clinical status(?:\s*&\s*|\s+and\s+)?workup|treatment options|next steps|open items|questions for(?:\s+the)?\s+(?:oncology|cardiology|neurology|care)|questions for(?:\s+the)?\s+\w+\s+team|disclaimer|full assessment|latest assessment)\b/i;
+    /^(?:what we know|what we do not know|uncertainties|critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|clinical status(?:\s*&\s*|\s+and\s+)?workup|treatment options|next steps|open items|questions for(?:\s+the)?\s+(?:oncology|cardiology|neurology|care|medical)|questions for(?:\s+the)?\s+\w+\s+team|disclaimer|full assessment|latest assessment)\b/i;
 
   for (const line of lines) {
     const stripped = line.trim();

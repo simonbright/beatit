@@ -20,6 +20,7 @@ from app.services.source_catalog import SourceCatalog
 from app.services.source_references import build_reference_bundle
 from app.services.source_normalize import enrich_with_sources
 from app.services.content_policy import filter_palliative_content
+from app.services.source_policy import infer_assessment_specialty, rewrite_specialty_headings
 
 from app.config import settings
 
@@ -1454,15 +1455,27 @@ class Database:
             )
 
         titles = await self._document_titles_for_ids(analysis["document_ids"])
+        specialty = infer_assessment_specialty(
+            case_label=analysis.get("case_label"),
+            patient_context=await self.get_setting("patient_context") or "",
+        )
         summary_seed = ensure_executive_summary(
             {"executive_summary": analysis.get("executive_summary") or ""},
             analysis.get("response") or "",
         )
         response, level = enrich_with_sources(
-            filter_palliative_content(analysis["response"]), titles, annotate_staging=True
+            rewrite_specialty_headings(
+                filter_palliative_content(analysis["response"]),
+                specialty,
+            ),
+            titles,
+            annotate_staging=True,
         )
         summary, _ = enrich_with_sources(
-            filter_palliative_content(summary_seed),
+            rewrite_specialty_headings(
+                filter_palliative_content(summary_seed),
+                specialty,
+            ),
             titles,
             annotate_staging=False,
         )

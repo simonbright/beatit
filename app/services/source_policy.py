@@ -1,3 +1,5 @@
+import re
+
 SOURCE_ATTRIBUTION_RULES = """
 SOURCE ATTRIBUTION (mandatory — every clinical claim must be tagged):
 - [SOURCE: Document "<exact document title>"] — fact directly supported by stored document text (includes URL-ingested pages — the link is shown automatically)
@@ -29,6 +31,7 @@ STAGING RULES (critical):
 """
 
 # Specialty keywords — first matching domain wins.
+# Prefer case-label specialty cues; avoid over-matching generic chart words.
 _SPECIALTY_RULES: list[tuple[str, tuple[str, ...]]] = [
     (
         "oncology",
@@ -63,6 +66,8 @@ _SPECIALTY_RULES: list[tuple[str, tuple[str, ...]]] = [
             "angina",
             "cad",
             "atherosclero",
+            "calcium score",
+            "calcium scoring",
         ),
     ),
     (
@@ -115,7 +120,7 @@ _SPECIALTY_COPY = {
     },
     "clinical": {
         "domain": "clinical",
-        "care_team": "the care team",
+        "care_team": "the medical team",
         "workup_section": "Clinical status & workup",
         "baseline_query": (
             "Provide a comprehensive baseline clinical assessment synthesizing ALL documents in scope: "
@@ -142,7 +147,7 @@ def infer_assessment_specialty(
 
 def response_structure_with_sources(specialty: dict[str, str] | None = None) -> str:
     spec = specialty or _SPECIALTY_COPY["clinical"]
-    care_team = spec.get("care_team") or "the care team"
+    care_team = spec.get("care_team") or "the medical team"
     workup = spec.get("workup_section") or "Clinical status & workup"
     return f"""
 Structure your response with these sections:
@@ -157,6 +162,7 @@ Structure your response with these sections:
 9. Disclaimer
 
 Name section 8 exactly "Questions for {care_team}". Do NOT say "oncology team" unless this case is oncology.
+Never default to oncology headings (Staging & workup, Questions for the oncology team) for non-oncology cases.
 
 Do NOT include a separate "Source key" section — references are compiled automatically in the report appendix.
 """
@@ -164,6 +170,43 @@ Do NOT include a separate "Source key" section — references are compiled autom
 
 # Back-compat alias for imports that still expect a constant string
 RESPONSE_STRUCTURE_WITH_SOURCES = response_structure_with_sources(_SPECIALTY_COPY["clinical"])
+
+_TEAM_HEADING_RE = re.compile(
+    r"(?im)^(?P<prefix>#{1,6}\s*)?Questions for (?:the )?"
+    r"(?:oncology|cardiology|neurology|care|medical)(?: team)?\b(?P<suffix>.*)$"
+)
+_STAGING_HEADING_RE = re.compile(
+    r"(?im)^(?P<prefix>#{1,6}\s*)?Staging\s*(?:&|and)\s*workup\b(?P<suffix>.*)$"
+)
+
+
+def rewrite_specialty_headings(
+    text: str | None,
+    specialty: dict[str, str] | None = None,
+) -> str:
+    """Normalize section titles to the active specialty (fixes oncology defaults in older analyses)."""
+    if not text:
+        return ""
+    spec = specialty or _SPECIALTY_COPY["clinical"]
+    care_team = spec.get("care_team") or "the medical team"
+    workup = spec.get("workup_section") or "Clinical status & workup"
+    domain = (spec.get("domain") or "clinical").lower()
+
+    def _team_repl(match: re.Match[str]) -> str:
+        prefix = match.group("prefix") or ""
+        suffix = match.group("suffix") or ""
+        return f"{prefix}Questions for {care_team}{suffix}"
+
+    out = _TEAM_HEADING_RE.sub(_team_repl, text)
+    if domain != "oncology":
+
+        def _workup_repl(match: re.Match[str]) -> str:
+            prefix = match.group("prefix") or ""
+            suffix = match.group("suffix") or ""
+            return f"{prefix}{workup}{suffix}"
+
+        out = _STAGING_HEADING_RE.sub(_workup_repl, out)
+    return out
 
 COMPREHENSIVE_SYNTHESIS_RULES = """
 COMPREHENSIVE SYNTHESIS (mandatory for baseline assessment and executive summary):

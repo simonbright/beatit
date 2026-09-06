@@ -42,7 +42,7 @@ _SECTION_TITLE_PLAIN = re.compile(
     r"what we know|what we do not know|uncertainties|"
     r"critical gaps|staging(?:\s*&\s*|\s+and\s+)?workup|"
     r"clinical status(?:\s*&\s*|\s+and\s+)?workup|treatment options|"
-    r"next steps|open items|questions for(?:\s+the)?\s+(?:oncology|cardiology|neurology|care)|"
+    r"next steps|open items|questions for(?:\s+the)?\s+(?:oncology|cardiology|neurology|care|medical)|"
     r"questions for(?:\s+the)?\s+\w+\s+team|"
     r"disclaimer|full assessment|latest assessment"
     r")\b",
@@ -178,12 +178,14 @@ def parse_assessment(response: str) -> dict[str, Any]:
             extract_section(
                 response,
                 [
+                    "questions for the medical team",
                     "questions for the care team",
                     "questions for the cardiology team",
                     "questions for the neurology team",
                     "questions for the oncology team",
                     "questions for oncology",
                     "questions for care team",
+                    "questions for medical team",
                 ],
             ),
         ),
