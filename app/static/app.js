@@ -10117,8 +10117,8 @@ function renderMobileLogTimelineRows(entries) {
           const detail = j.text ? `<span class="muted small log-tl-detail">${escapeHtml(j.text)}</span>` : "";
           const kind = j.kind ? `<span class="journal-kind-tag">${escapeHtml(j.kind)}</span>` : "";
           return `<li class="log-tl-item" data-id="${escapeHtml(j.id)}">
-            <div class="log-tl-rail" aria-hidden="true"><span class="log-tl-dot"></span></div>
             <time class="log-tl-time" datetime="${escapeHtml(j.recorded_at || "")}">${escapeHtml(formatJournalTimeOnly(j.recorded_at || j.created_at))}</time>
+            <div class="log-tl-rail" aria-hidden="true"><span class="log-tl-dot"></span></div>
             <div class="log-tl-body">
               <button type="button" class="log-tl-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
                 <span class="log-tl-label-row">${kind}<strong>${escapeHtml(j.label || "")}</strong>${sev}</span>

@@ -830,8 +830,8 @@ body {
 
 .log-tl-item {
   display: grid;
-  grid-template-columns: 3.25rem 1.1rem minmax(0, 1fr);
-  column-gap: 0.45rem;
+  grid-template-columns: 3.6rem 1.15rem minmax(0, 1fr);
+  column-gap: 0.55rem;
   align-items: start;
   min-height: 3.1rem;
   padding: 0.15rem 0;
@@ -841,8 +841,11 @@ body {
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   color: var(--muted, #666);
-  padding-top: 0.35rem;
+  padding-top: 0.4rem;
   text-align: right;
+  white-space: nowrap;
+  overflow: visible;
+  line-height: 1.2;
 }
 
 .log-tl-rail {
@@ -851,6 +854,7 @@ body {
   justify-content: center;
   align-self: stretch;
   min-height: 100%;
+  width: 1.15rem;
 }
 
 .log-tl-rail::before {
@@ -892,7 +896,7 @@ body {
   justify-content: space-between;
   gap: 0.35rem 0.55rem;
   min-width: 0;
-  padding: 0.2rem 0.55rem 0.55rem;
+  padding: 0.35rem 0.65rem 0.55rem;
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface, #fff) 88%, #000 4%);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
