@@ -183,7 +183,7 @@
     </div>
   </div>
 
-  <!-- Quick severity scale (Nauseous / Weak) -->
+  <!-- Quick severity scale -->
   <div id="modal-quick-scale" class="modal-overlay hidden">
     <div class="modal-card modal-quick-scale-card" role="dialog" aria-modal="true" aria-labelledby="quick-scale-title">
       <div class="row-between wrap">
@@ -197,6 +197,29 @@
         <button type="button" class="quick-scale-btn" data-sev="3" title="Moderate">3<span>Mod</span></button>
         <button type="button" class="quick-scale-btn" data-sev="4">4<span></span></button>
         <button type="button" class="quick-scale-btn" data-sev="5" title="Severe">5<span>Bad</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add custom Home Log option -->
+  <div id="modal-add-log-option" class="modal-overlay hidden">
+    <div class="modal-card modal-add-log-option-card" role="dialog" aria-modal="true" aria-labelledby="add-log-option-title">
+      <div class="row-between wrap">
+        <h3 id="add-log-option-title">Add log option</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-add-log-option">Close</button>
+      </div>
+      <p class="muted small">Creates a new Home Log tile for this person only.</p>
+      <label for="add-log-option-label">Option name
+        <input type="text" id="add-log-option-label" class="input" maxlength="80" placeholder="e.g. Chest pain" autocomplete="off">
+      </label>
+      <fieldset class="add-log-option-scale">
+        <legend class="muted small">Ask for a severity scale?</legend>
+        <label class="journal-check"><input type="radio" name="add-log-option-scale" value="yes" checked> Yes — 1 to 5</label>
+        <label class="journal-check"><input type="radio" name="add-log-option-scale" value="no"> No — one tap</label>
+      </fieldset>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btn-cancel-add-log-option">Cancel</button>
+        <button type="button" class="btn primary" id="btn-save-add-log-option">Save</button>
       </div>
     </div>
   </div>
@@ -333,100 +356,11 @@
             <p class="muted small">Tap once to save. Open Feel / Meds / Food when you need choices.</p>
           </div>
           <div class="mobile-log-grid" id="mobile-log-grid" role="group" aria-label="Quick log">
-            <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="feel-fine" title="Log Feel Fine">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10.2c.5.8 1.2 1.3 2 1.3s1.5-.5 2-1.3M14 10.2c.5.8 1.2 1.3 2 1.3s1.5-.5 2-1.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8.2 14.2c1.2 1.8 2.8 2.7 3.8 2.7s2.6-.9 3.8-2.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Feel Fine</span>
-              <span class="mobile-log-hint">1 tap</span>
-            </button>
-            <button type="button" class="mobile-log-tile" data-quick-scale="nauseous" title="Log Feel Nauseous">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M8.5 15.5c1.2-1.4 2.6-2 3.5-2s2.3.6 3.5 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 6.5c1.2.4 2 .4 3 0M14 6.5c1.2.4 2 .4 3 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Feel Nauseous</span>
-              <span class="mobile-log-hint">scale</span>
-            </button>
-            <button type="button" class="mobile-log-tile" data-quick-scale="vomiting" title="Log Vomiting">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M9 14.5c.8 1.6 2 2.4 3 2.4s2.2-.8 3-2.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 17.2v2.3M10.2 20.2h3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Vomiting</span>
-              <span class="mobile-log-hint">scale</span>
-            </button>
-            <button type="button" class="mobile-log-tile" data-quick-scale="weak" title="Log Feel Weak">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M9 15.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4.8 18.5c1.6-1.2 3.7-1.8 7.2-1.8s5.6.6 7.2 1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Feel Weak</span>
-              <span class="mobile-log-hint">scale</span>
-            </button>
-            <button type="button" class="mobile-log-tile hidden" data-quick-scale="esophageal-spasm" data-for-patient="susan" title="Log Esophageal Spasm">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 3c-1.2 2.2-2 4.6-2 7 0 2.4.8 4.5 2 6.2 1.2-1.7 2-3.8 2-6.2 0-2.4-.8-4.8-2-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M10 10h4M9.5 13h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 20h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Esophageal Spasm</span>
-              <span class="mobile-log-hint">scale</span>
-            </button>
-            <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="bathroom2" title="Log Bathroom #2">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M7 4h10v3H7zM9 7v10M15 7v10M8 17h8M12 11v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Bathroom #2</span>
-              <span class="mobile-log-hint">1 tap</span>
-            </button>
-            <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="mom" title="Log MoM">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">MoM</span>
-              <span class="mobile-log-hint">as needed</span>
-            </button>
-            <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="water" title="Log Water">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 3s6 7 6 11a6 6 0 1 1-12 0c0-4 6-11 6-11z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Water</span>
-              <span class="mobile-log-hint">1 tap</span>
-            </button>
-            <button type="button" class="mobile-log-tile" data-quick-open="feel" title="Log how you feel">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 10h.01M15 10h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Feel</span>
-              <span class="mobile-log-hint">choose</span>
-            </button>
-            <button type="button" class="mobile-log-tile" data-quick-open="meds" title="Log medication">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M9 3h6v4H9zM10 7v12a2 2 0 0 0 4 0V7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Meds</span>
-              <span class="mobile-log-hint">choose</span>
-            </button>
-            <button type="button" class="mobile-log-tile" data-quick-open="food" title="Log ate or drank">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M8 3v8a3 3 0 0 0 6 0V3M11 11v10M16 3v18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Ate / Drank</span>
-              <span class="mobile-log-hint">choose</span>
-            </button>
-            <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="shower" title="Log Took shower">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 3v2M8 7h8M9 9v8a3 3 0 0 0 6 0V9M10 13h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Shower</span>
-              <span class="mobile-log-hint">1 tap</span>
-            </button>
-            <button type="button" class="mobile-log-tile mobile-log-instant" data-quick-log="slept" title="Log Slept">
-              <span class="mobile-log-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M4 14a6 6 0 0 1 6-6h8v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM14 8V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-              </span>
-              <span class="mobile-log-label">Slept</span>
-              <span class="mobile-log-hint">1 tap</span>
-            </button>
+            <p class="muted small" id="mobile-log-grid-placeholder">Loading log options…</p>
           </div>
           <div class="mobile-log-footer">
-            <button type="button" class="btn secondary" id="btn-mobile-log-more">More options…</button>
+            <button type="button" class="btn secondary" id="btn-mobile-log-add-option">Add option</button>
+            <button type="button" class="btn ghost" id="btn-mobile-log-more">More…</button>
             <button type="button" class="btn ghost" id="btn-mobile-log-history" data-home-section="journal">Trends</button>
           </div>
           <div class="mobile-log-history">
@@ -1504,6 +1438,13 @@
           </div>
         </div>
         <div id="patient-food-drinks-list" class="patient-measurements-list"></div>
+
+        <h4 class="patient-measurements-title" id="log-tiles-settings-heading">Home Log tiles</h4>
+        <p class="muted small">Order of quick-log tiles for this person. Add a custom option, then move it up or down. Scale options ask for 1–5 when tapped.</p>
+        <div class="med-form-actions" style="margin-bottom:0.65rem">
+          <button type="button" class="btn secondary btn-sm" id="btn-settings-add-log-option">Add option</button>
+        </div>
+        <div id="log-tiles-order-list" class="log-tiles-order-list"></div>
 
         <h4 class="patient-measurements-title" id="milestones-settings-heading">Timeline milestones</h4>
         <p class="muted small">Lifestyle and other dated milestones (exercise, diet changes, etc.) shown on Labs charts alongside medication starts and dose changes.</p>

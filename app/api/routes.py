@@ -163,6 +163,9 @@ from app.services.case_manager import (
     add_patient_food_drink,
     update_patient_food_drink,
     delete_patient_food_drink,
+    add_patient_log_tile,
+    delete_patient_log_tile,
+    set_patient_log_tile_order,
     add_patient_milestone,
     update_patient_milestone,
     delete_patient_milestone,
@@ -3495,6 +3498,66 @@ async def api_delete_patient_food_drink(patient_id: str, food_id: str):
     ok = delete_patient_food_drink(patient_id, food_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Item not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "ok": True,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientLogTileCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    scale: bool = False
+    kind: str | None = Field(default=None, max_length=40)
+
+
+class PatientLogTileOrderRequest(BaseModel):
+    order: list[str] = Field(default_factory=list, max_length=80)
+
+
+@router.post("/patients/{patient_id}/log-tiles")
+async def api_add_patient_log_tile(patient_id: str, body: PatientLogTileCreateRequest):
+    try:
+        entry = add_patient_log_tile(
+            patient_id,
+            label=body.label,
+            scale=body.scale,
+            kind=body.kind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "log_tile": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.put("/patients/{patient_id}/log-tiles/order")
+async def api_set_patient_log_tile_order(patient_id: str, body: PatientLogTileOrderRequest):
+    order = set_patient_log_tile_order(patient_id, body.order or [])
+    if order is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "order": order,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/log-tiles/{tile_id}")
+async def api_delete_patient_log_tile(patient_id: str, tile_id: str):
+    ok = delete_patient_log_tile(patient_id, tile_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Log option not found")
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,

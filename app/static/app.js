@@ -1577,12 +1577,334 @@ function isSusanPatient(patientId = state.activePatientId, patientLabel = null) 
   return id.includes("susan") || label.includes("susan") || label.includes("brajtman");
 }
 
+const LOG_TILE_ICON_GENERIC =
+  '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+const BUILTIN_LOG_TILES = {
+  "feel-fine": {
+    label: "Feel Fine",
+    mode: "instant",
+    hint: "1 tap",
+    kind: "feeling",
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10.2c.5.8 1.2 1.3 2 1.3s1.5-.5 2-1.3M14 10.2c.5.8 1.2 1.3 2 1.3s1.5-.5 2-1.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8.2 14.2c1.2 1.8 2.8 2.7 3.8 2.7s2.6-.9 3.8-2.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  nauseous: {
+    label: "Feel Nauseous",
+    mode: "scale",
+    hint: "scale",
+    kind: "symptom",
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M8.5 15.5c1.2-1.4 2.6-2 3.5-2s2.3.6 3.5 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 6.5c1.2.4 2 .4 3 0M14 6.5c1.2.4 2 .4 3 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  vomiting: {
+    label: "Vomiting",
+    mode: "scale",
+    hint: "scale",
+    kind: "symptom",
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M9 14.5c.8 1.6 2 2.4 3 2.4s2.2-.8 3-2.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 17.2v2.3M10.2 20.2h3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  weak: {
+    label: "Feel Weak",
+    mode: "scale",
+    hint: "scale",
+    kind: "feeling",
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 10h.01M15 10h.01M9 15.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4.8 18.5c1.6-1.2 3.7-1.8 7.2-1.8s5.6.6 7.2 1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  "back-pain": {
+    label: "Back Pain",
+    mode: "scale",
+    hint: "scale",
+    kind: "symptom",
+    icon: '<svg viewBox="0 0 24 24"><path d="M12 3v18M9 7c-2 1.5-3 3.5-3 5.5S7 16 9 17.5M15 7c2 1.5 3 3.5 3 5.5S17 16 15 17.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10 12h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  "leg-pain": {
+    label: "Leg Pain",
+    mode: "scale",
+    hint: "scale",
+    kind: "symptom",
+    icon: '<svg viewBox="0 0 24 24"><path d="M10 3v8l-2 10M14 3v8l2 10M8 11h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  },
+  "esophageal-spasm": {
+    label: "Esophageal Spasm",
+    mode: "scale",
+    hint: "scale",
+    kind: "symptom",
+    forPatient: "susan",
+    icon: '<svg viewBox="0 0 24 24"><path d="M12 3c-1.2 2.2-2 4.6-2 7 0 2.4.8 4.5 2 6.2 1.2-1.7 2-3.8 2-6.2 0-2.4-.8-4.8-2-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M10 10h4M9.5 13h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 20h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  bathroom2: {
+    label: "Bathroom #2",
+    mode: "instant",
+    hint: "1 tap",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><path d="M7 4h10v3H7zM9 7v10M15 7v10M8 17h8M12 11v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  mom: {
+    label: "MoM",
+    mode: "instant",
+    hint: "as needed",
+    kind: "medication",
+    icon: '<svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  water: {
+    label: "Water",
+    mode: "instant",
+    hint: "1 tap",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><path d="M12 3s6 7 6 11a6 6 0 1 1-12 0c0-4 6-11 6-11z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
+  },
+  feel: {
+    label: "Feel",
+    mode: "open",
+    open: "feel",
+    hint: "choose",
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 10h.01M15 10h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  meds: {
+    label: "Meds",
+    mode: "open",
+    open: "meds",
+    hint: "choose",
+    icon: '<svg viewBox="0 0 24 24"><path d="M9 3h6v4H9zM10 7v12a2 2 0 0 0 4 0V7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
+  },
+  food: {
+    label: "Ate / Drank",
+    mode: "open",
+    open: "food",
+    hint: "choose",
+    icon: '<svg viewBox="0 0 24 24"><path d="M8 3v8a3 3 0 0 0 6 0V3M11 11v10M16 3v18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  shower: {
+    label: "Shower",
+    mode: "instant",
+    hint: "1 tap",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><path d="M12 3v2M8 7h8M9 9v8a3 3 0 0 0 6 0V9M10 13h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
+  slept: {
+    label: "Slept",
+    mode: "instant",
+    hint: "1 tap",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><path d="M4 14a6 6 0 0 1 6-6h8v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM14 8V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
+  },
+};
+
+const DEFAULT_LOG_TILE_ORDER = [
+  "feel-fine",
+  "nauseous",
+  "vomiting",
+  "weak",
+  "back-pain",
+  "leg-pain",
+  "esophageal-spasm",
+  "bathroom2",
+  "mom",
+  "water",
+  "feel",
+  "meds",
+  "food",
+  "shower",
+  "slept",
+];
+
+function customLogTileKey(id) {
+  return `custom:${id}`;
+}
+
+function getCustomLogTiles(profile = state.patientProfile) {
+  return Array.isArray(profile?.log_custom_tiles) ? profile.log_custom_tiles : [];
+}
+
+function resolveLogTileDef(key, profile = state.patientProfile) {
+  const builtin = BUILTIN_LOG_TILES[key];
+  if (builtin) return { key, ...builtin, custom: false };
+  if (!String(key || "").startsWith("custom:")) return null;
+  const id = String(key).slice("custom:".length);
+  const tile = getCustomLogTiles(profile).find((t) => String(t.id) === id);
+  if (!tile) return null;
+  return {
+    key,
+    label: tile.label,
+    mode: tile.scale ? "scale" : "instant",
+    hint: tile.scale ? "scale" : "1 tap",
+    kind: tile.kind || (tile.scale ? "symptom" : "note"),
+    scale: Boolean(tile.scale),
+    custom: true,
+    customId: tile.id,
+    icon: LOG_TILE_ICON_GENERIC,
+  };
+}
+
+function isLogTileVisible(def) {
+  if (!def) return false;
+  if (def.forPatient === "susan") return isSusanPatient();
+  return true;
+}
+
+function resolveLogTileOrder(profile = state.patientProfile) {
+  const customKeys = getCustomLogTiles(profile).map((t) => customLogTileKey(t.id));
+  const known = new Set([...Object.keys(BUILTIN_LOG_TILES), ...customKeys]);
+  const ordered = [];
+  for (const raw of profile?.log_tile_order || []) {
+    const key = String(raw || "").trim();
+    if (!key || !known.has(key) || ordered.includes(key)) continue;
+    ordered.push(key);
+  }
+  for (const key of DEFAULT_LOG_TILE_ORDER) {
+    if (!ordered.includes(key)) ordered.push(key);
+  }
+  for (const key of customKeys) {
+    if (!ordered.includes(key)) ordered.push(key);
+  }
+  return ordered.filter((key) => isLogTileVisible(resolveLogTileDef(key, profile)));
+}
+
+function renderMobileLogTiles(profile = state.patientProfile) {
+  const grid = document.getElementById("mobile-log-grid");
+  if (!grid) return;
+  if (!state.activePatientId) {
+    grid.innerHTML = `<p class="muted small">Select a patient to see log options.</p>`;
+    return;
+  }
+  const order = resolveLogTileOrder(profile);
+  if (!order.length) {
+    grid.innerHTML = `<p class="muted small">No log options yet. Use Add option to create one.</p>`;
+    return;
+  }
+  grid.innerHTML = order
+    .map((key) => {
+      const def = resolveLogTileDef(key, profile);
+      if (!def) return "";
+      const instantClass = def.mode === "instant" ? " mobile-log-instant" : "";
+      let attr = "";
+      if (def.mode === "scale") attr = `data-quick-scale="${escapeHtml(key)}"`;
+      else if (def.mode === "open") attr = `data-quick-open="${escapeHtml(def.open || key)}"`;
+      else attr = `data-quick-log="${escapeHtml(key)}"`;
+      return `<button type="button" class="mobile-log-tile${instantClass}" ${attr} title="Log ${escapeHtml(def.label)}">
+        <span class="mobile-log-icon" aria-hidden="true">${def.icon || LOG_TILE_ICON_GENERIC}</span>
+        <span class="mobile-log-label">${escapeHtml(def.label)}</span>
+        <span class="mobile-log-hint">${escapeHtml(def.hint || "")}</span>
+      </button>`;
+    })
+    .join("");
+}
+
+function renderLogTilesOrderSettings(profile = state.patientProfile) {
+  const el = document.getElementById("log-tiles-order-list");
+  if (!el) return;
+  if (!state.activePatientId) {
+    el.innerHTML = `<p class="muted small">No patient selected.</p>`;
+    return;
+  }
+  const order = resolveLogTileOrder(profile);
+  if (!order.length) {
+    el.innerHTML = `<p class="muted small">No tiles yet.</p>`;
+    return;
+  }
+  el.innerHTML = order
+    .map((key, index) => {
+      const def = resolveLogTileDef(key, profile);
+      if (!def) return "";
+      const meta = def.mode === "scale" ? "scale" : def.mode === "open" ? "choose" : "1 tap";
+      const removeBtn = def.custom
+        ? `<button type="button" class="btn ghost btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">Remove</button>`
+        : "";
+      return `<div class="log-tile-order-row" data-key="${escapeHtml(key)}">
+        <div class="log-tile-order-main">
+          <strong>${escapeHtml(def.label)}</strong>
+          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}</span>
+        </div>
+        <div class="log-tile-order-actions">
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+          ${removeBtn}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
 function syncPatientSpecificLogTiles() {
-  document.querySelectorAll("[data-for-patient]").forEach((el) => {
-    const key = String(el.getAttribute("data-for-patient") || "").toLowerCase();
-    const show = key === "susan" ? isSusanPatient() : true;
-    el.classList.toggle("hidden", !show);
+  renderMobileLogTiles();
+  renderLogTilesOrderSettings();
+}
+
+function openAddLogOptionModal() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const input = document.getElementById("add-log-option-label");
+  if (input) input.value = "";
+  const yes = document.querySelector('input[name="add-log-option-scale"][value="yes"]');
+  if (yes) yes.checked = true;
+  showModal("modal-add-log-option");
+  requestAnimationFrame(() => input?.focus?.());
+}
+
+function closeAddLogOptionModal() {
+  hideModal("modal-add-log-option");
+}
+
+async function saveAddLogOption() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const label = document.getElementById("add-log-option-label")?.value.trim() || "";
+  if (!label) return toast("Enter an option name", "error");
+  const builtinMatch = Object.values(BUILTIN_LOG_TILES).some(
+    (t) => String(t.label || "").toLowerCase() === label.toLowerCase()
+  );
+  if (builtinMatch) return toast("That option already exists as a built-in tile", "error");
+  const scale =
+    document.querySelector('input[name="add-log-option-scale"]:checked')?.value === "yes";
+  const btn = document.getElementById("btn-save-add-log-option");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/log-tiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, scale }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save option");
+    }
+    applyProfileResponse(await res.json());
+    closeAddLogOptionModal();
+    toast(`Added “${label}” to Home Log`);
+  } catch (err) {
+    toast(err.message || "Could not save option", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function persistLogTileOrder(order) {
+  if (!state.activePatientId) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/log-tiles/order`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order }),
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not save order");
+  }
+  applyProfileResponse(await res.json());
+}
+
+async function moveLogTile(key, dir) {
+  const profile = state.patientProfile || {};
+  const order = resolveLogTileOrder(profile);
+  const idx = order.indexOf(key);
+  if (idx < 0) return;
+  const swap = dir === "up" ? idx - 1 : idx + 1;
+  if (swap < 0 || swap >= order.length) return;
+  const next = order.slice();
+  [next[idx], next[swap]] = [next[swap], next[idx]];
+  const customKeys = getCustomLogTiles(profile).map((t) => customLogTileKey(t.id));
+  const known = [...DEFAULT_LOG_TILE_ORDER, ...customKeys];
+  const saved = [...next];
+  for (const k of known) {
+    if (!saved.includes(k)) saved.push(k);
+  }
+  await persistLogTileOrder(saved);
 }
 
 function preferredHomeSection() {
@@ -7803,6 +8125,9 @@ function renderPatientProfile(profile, patientId, extras = {}) {
     if (medListEl) medListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
     const foodListEl = document.getElementById("patient-food-drinks-list");
     if (foodListEl) foodListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    const logOrderEl = document.getElementById("log-tiles-order-list");
+    if (logOrderEl) logOrderEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    renderMobileLogTiles(null);
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
     renderMedicationsHome(null);
@@ -7867,6 +8192,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
 
   renderMedicationsSettings(profile);
   renderFoodDrinksSettings(profile);
+  renderLogTilesOrderSettings(profile);
   renderMilestonesSettings(profile);
   const series = resolveDiagnosticSeries(profile, extras);
   // Never attach another patient's profile to the active log view.
@@ -9125,6 +9451,8 @@ function defaultJournalPresets() {
     { label: "Weak", kind: "feeling" },
     { label: "Feel Nauseous", kind: "symptom" },
     { label: "Vomiting", kind: "symptom" },
+    { label: "Back Pain", kind: "symptom" },
+    { label: "Leg Pain", kind: "symptom" },
     { label: "Esophageal Spasm", kind: "symptom" },
     { label: "Headache", kind: "symptom" },
     { label: "Nauseous", kind: "symptom" },
@@ -9755,9 +10083,13 @@ async function quickLogInstant(key) {
     shower: { kind: "note", label: "Took shower" },
     mom: { kind: "medication", label: MOM_MED_NAME },
   };
-  const entry = map[key];
-  if (!entry) return;
-  const tile = document.querySelector(`[data-quick-log="${key}"]`);
+  let entry = map[key];
+  if (!entry) {
+    const def = resolveLogTileDef(key);
+    if (!def || def.mode !== "instant") return;
+    entry = { kind: def.kind || "note", label: def.label };
+  }
+  const tile = document.querySelector(`[data-quick-log="${CSS.escape(key)}"]`);
   if (tile) tile.disabled = true;
   try {
     if (key === "mom") await ensureMomOnLogList();
@@ -9801,6 +10133,8 @@ const QUICK_SCALE_ENTRIES = {
   nauseous: { kind: "symptom", label: "Feel Nauseous", title: "Feel Nauseous", hint: "How nauseous? Tap a level to log" },
   vomiting: { kind: "symptom", label: "Vomiting", title: "Vomiting", hint: "How severe? Tap a level to log" },
   weak: { kind: "feeling", label: "Feel Weak", title: "Feel Weak", hint: "How weak? Tap a level to log" },
+  "back-pain": { kind: "symptom", label: "Back Pain", title: "Back Pain", hint: "How bad is the pain? Tap a level to log" },
+  "leg-pain": { kind: "symptom", label: "Leg Pain", title: "Leg Pain", hint: "How bad is the pain? Tap a level to log" },
   "esophageal-spasm": {
     kind: "symptom",
     label: "Esophageal Spasm",
@@ -9809,23 +10143,45 @@ const QUICK_SCALE_ENTRIES = {
   },
 };
 
+function getQuickScaleEntry(key) {
+  if (QUICK_SCALE_ENTRIES[key]) return QUICK_SCALE_ENTRIES[key];
+  const def = resolveLogTileDef(key);
+  if (def?.mode === "scale") {
+    return {
+      kind: def.kind || "symptom",
+      label: def.label,
+      title: def.label,
+      hint: "How intense? Tap a level to log",
+    };
+  }
+  return null;
+}
+
 function resolveQuickScaleKey(raw) {
-  const text = String(raw || "").trim().toLowerCase();
-  if (!text) return null;
+  const original = String(raw || "").trim();
+  if (!original) return null;
+  if (original.startsWith("custom:") && getQuickScaleEntry(original)) return original;
+  const text = original.toLowerCase();
   if (QUICK_SCALE_ENTRIES[text]) return text;
   for (const [key, entry] of Object.entries(QUICK_SCALE_ENTRIES)) {
     if (String(entry.label || "").toLowerCase() === text) return key;
+  }
+  for (const tile of getCustomLogTiles()) {
+    if (!tile.scale) continue;
+    if (String(tile.label || "").toLowerCase() === text) return customLogTileKey(tile.id);
   }
   if (text.includes("esophageal")) return "esophageal-spasm";
   if (text.includes("vomit")) return "vomiting";
   if (text.includes("nauseous") || text === "nauseous") return "nauseous";
   if (text === "weak" || text.includes("feel weak")) return "weak";
+  if (text.includes("back pain")) return "back-pain";
+  if (text.includes("leg pain")) return "leg-pain";
   return null;
 }
 
 function openQuickScale(keyOrLabel) {
   const key = resolveQuickScaleKey(keyOrLabel);
-  const entry = key ? QUICK_SCALE_ENTRIES[key] : null;
+  const entry = key ? getQuickScaleEntry(key) : null;
   if (!entry) {
     toast("Could not open severity scale", "error");
     return;
@@ -9857,7 +10213,7 @@ function openQuickScale(keyOrLabel) {
 
 async function submitQuickScale(severity) {
   const key = state.quickScaleKey;
-  const entry = QUICK_SCALE_ENTRIES[key];
+  const entry = getQuickScaleEntry(key);
   if (!entry) return;
   const sev = Number(severity);
   if (!Number.isFinite(sev) || sev < 1 || sev > 5) return;
@@ -10959,6 +11315,62 @@ document.getElementById("btn-mobile-log-more")?.addEventListener("click", () => 
   document.getElementById("btn-journal")?.click();
 });
 
+document.getElementById("btn-mobile-log-add-option")?.addEventListener("click", () => {
+  openAddLogOptionModal();
+});
+
+document.getElementById("btn-settings-add-log-option")?.addEventListener("click", () => {
+  openAddLogOptionModal();
+});
+
+document.getElementById("btn-close-add-log-option")?.addEventListener("click", () => {
+  closeAddLogOptionModal();
+});
+
+document.getElementById("btn-cancel-add-log-option")?.addEventListener("click", () => {
+  closeAddLogOptionModal();
+});
+
+document.getElementById("modal-add-log-option")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-add-log-option") closeAddLogOptionModal();
+});
+
+document.getElementById("btn-save-add-log-option")?.addEventListener("click", () => {
+  saveAddLogOption().catch((e) => toast(e.message || "Could not save option", "error"));
+});
+
+document.getElementById("add-log-option-label")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveAddLogOption().catch((e) => toast(e.message || "Could not save option", "error"));
+  }
+});
+
+document.getElementById("log-tiles-order-list")?.addEventListener("click", async (event) => {
+  const moveBtn = event.target.closest(".btn-move-log-tile");
+  if (moveBtn) {
+    const key = moveBtn.getAttribute("data-key");
+    const dir = moveBtn.getAttribute("data-dir");
+    if (!key || !dir) return;
+    try {
+      await moveLogTile(key, dir);
+    } catch (err) {
+      toast(err.message || "Could not reorder", "error");
+    }
+    return;
+  }
+  const delBtn = event.target.closest(".btn-delete-log-tile");
+  if (!delBtn || !state.activePatientId) return;
+  const id = delBtn.dataset.id;
+  if (!id || !confirm("Remove this custom log option?")) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/log-tiles/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) return toast("Could not remove option", "error");
+  applyProfileResponse(await res.json());
+  toast("Removed");
+});
+
 document.getElementById("mobile-log-range")?.addEventListener("change", (event) => {
   const days = normalizeMobileLogDays(event.target.value);
   state.mobileLogDays = days;
@@ -11037,7 +11449,7 @@ document.getElementById("journal-feeling-chips")?.addEventListener("click", (eve
   const label = chip.dataset.label || "";
   const scaleKey = resolveQuickScaleKey(label);
   // Scale-required items open the 1–5 severity bar immediately.
-  if (scaleKey === "esophageal-spasm" || scaleKey === "nauseous" || scaleKey === "weak" || scaleKey === "vomiting") {
+  if (scaleKey) {
     openQuickScale(scaleKey);
     return;
   }

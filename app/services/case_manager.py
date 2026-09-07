@@ -167,6 +167,8 @@ def _empty_profile() -> dict[str, Any]:
         "journal": [],
         "medications": [],
         "food_drinks": _default_food_drinks(),
+        "log_custom_tiles": [],
+        "log_tile_order": [],
         "milestones": [],
         "medication_safety": None,
     }
@@ -255,6 +257,14 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
                 seen.add(key)
                 cleaned_foods.append(item)
         profile["food_drinks"] = cleaned_foods
+    profile["log_custom_tiles"] = _normalize_log_custom_tiles(data.get("log_custom_tiles"))
+    order_raw = data.get("log_tile_order")
+    if isinstance(order_raw, list):
+        profile["log_tile_order"] = [
+            str(k).strip() for k in order_raw if isinstance(k, str) and str(k).strip()
+        ]
+    else:
+        profile["log_tile_order"] = []
     milestones = data.get("milestones") or []
     if isinstance(milestones, list):
         profile["milestones"] = sorted(
@@ -299,6 +309,12 @@ def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, 
             }
             for f in (profile.get("food_drinks") or [])
             if isinstance(f, dict) and _normalize_food_drink_label(str(f.get("label") or ""))
+        ],
+        "log_custom_tiles": _normalize_log_custom_tiles(profile.get("log_custom_tiles")),
+        "log_tile_order": [
+            str(k).strip()
+            for k in (profile.get("log_tile_order") or [])
+            if isinstance(k, str) and str(k).strip()
         ],
         "milestones": [
             m for m in (profile.get("milestones") or []) if isinstance(m, dict)
@@ -675,6 +691,8 @@ JOURNAL_PRESETS = [
     {"label": "Weak", "kind": "feeling"},
     {"label": "Feel Nauseous", "kind": "symptom"},
     {"label": "Vomiting", "kind": "symptom"},
+    {"label": "Back Pain", "kind": "symptom"},
+    {"label": "Leg Pain", "kind": "symptom"},
     {"label": "Esophageal Spasm", "kind": "symptom"},
     {"label": "Headache", "kind": "symptom"},
     {"label": "Nauseous", "kind": "symptom"},
@@ -1183,6 +1201,122 @@ def delete_patient_food_drink(patient_id: str, food_id: str) -> bool:
         return False
     save_patient_profile(patient_id, profile)
     return True
+
+
+def _normalize_log_tile_label(label: str) -> str:
+    cleaned = " ".join((label or "").strip().split())
+    return cleaned[:80]
+
+
+def _normalize_log_custom_tiles(raw: Any) -> list[dict[str, Any]]:
+    from uuid import uuid4
+
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = _normalize_log_tile_label(str(item.get("label") or ""))
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tile_id = str(item.get("id") or uuid4())
+        scale = bool(item.get("scale"))
+        kind = str(item.get("kind") or ("symptom" if scale else "note")).strip().lower()
+        if kind not in {"feeling", "symptom", "note", "medication"}:
+            kind = "symptom" if scale else "note"
+        out.append(
+            {
+                "id": tile_id,
+                "label": label,
+                "scale": scale,
+                "kind": kind,
+                "created_at": item.get("created_at"),
+            }
+        )
+    return out
+
+
+def add_patient_log_tile(
+    patient_id: str,
+    *,
+    label: str,
+    scale: bool = False,
+    kind: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = _normalize_log_tile_label(label)
+    if not cleaned:
+        raise ValueError("Option name is required")
+    profile = get_patient_profile(patient_id)
+    tiles = list(profile.get("log_custom_tiles") or [])
+    existing = next(
+        (t for t in tiles if str(t.get("label") or "").lower() == cleaned.lower()),
+        None,
+    )
+    if existing:
+        return existing
+    use_scale = bool(scale)
+    use_kind = (kind or ("symptom" if use_scale else "note")).strip().lower()
+    if use_kind not in {"feeling", "symptom", "note", "medication"}:
+        use_kind = "symptom" if use_scale else "note"
+    entry = {
+        "id": str(uuid4()),
+        "label": cleaned,
+        "scale": use_scale,
+        "kind": use_kind,
+        "created_at": _now_iso(),
+    }
+    tiles.append(entry)
+    profile["log_custom_tiles"] = tiles
+    order = list(profile.get("log_tile_order") or [])
+    custom_key = f"custom:{entry['id']}"
+    if custom_key not in order:
+        order.append(custom_key)
+    profile["log_tile_order"] = order
+    saved = save_patient_profile(patient_id, profile)
+    return next(
+        (t for t in saved.get("log_custom_tiles") or [] if t.get("id") == entry["id"]),
+        entry,
+    )
+
+
+def delete_patient_log_tile(patient_id: str, tile_id: str) -> bool:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return False
+    profile = get_patient_profile(patient_id)
+    tiles = list(profile.get("log_custom_tiles") or [])
+    before = len(tiles)
+    profile["log_custom_tiles"] = [t for t in tiles if t.get("id") != tile_id]
+    if len(profile["log_custom_tiles"]) == before:
+        return False
+    custom_key = f"custom:{tile_id}"
+    profile["log_tile_order"] = [
+        k for k in (profile.get("log_tile_order") or []) if k != custom_key
+    ]
+    save_patient_profile(patient_id, profile)
+    return True
+
+
+def set_patient_log_tile_order(patient_id: str, order: list[str]) -> list[str] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = [str(k).strip() for k in (order or []) if isinstance(k, str) and str(k).strip()]
+    profile = get_patient_profile(patient_id)
+    profile["log_tile_order"] = cleaned
+    saved = save_patient_profile(patient_id, profile)
+    return list(saved.get("log_tile_order") or [])
 
 
 def group_journal_for_charts(
