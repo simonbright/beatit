@@ -11077,6 +11077,14 @@ async function openSwitchPatientCaseModal() {
     const patients = data.patients || [];
     const activePid = data.active?.patient_id;
     const activeCid = data.active?.case_id;
+    const currentEl = document.getElementById("switch-case-current");
+    if (currentEl) {
+      const who = data.active?.patient_label || "No patient";
+      const which = data.active?.case_label || "No case";
+      currentEl.textContent = data.active?.patient_id
+        ? `Now: ${who} · ${which}. Tap another case to switch.`
+        : "Pick a person and case.";
+    }
     if (!patients.length) {
       list.innerHTML = `<p class="muted small">No patients yet. Create one in Settings.</p>`;
       return;
@@ -11089,7 +11097,9 @@ async function openSwitchPatientCaseModal() {
               .map((c) => {
                 const active =
                   p.id === activePid && c.id === activeCid ? " active-case" : "";
-                return `<button type="button" class="switch-case-btn${active}" data-patient-id="${escapeHtml(p.id)}" data-case-id="${escapeHtml(c.id)}"><span class="switch-case-btn-label">${escapeHtml(c.label || c.id)}</span></button>`;
+                const mark =
+                  p.id === activePid && c.id === activeCid ? " · selected" : "";
+                return `<button type="button" class="switch-case-btn${active}" data-patient-id="${escapeHtml(p.id)}" data-case-id="${escapeHtml(c.id)}"><span class="switch-case-btn-label">${escapeHtml(c.label || c.id)}${escapeHtml(mark)}</span></button>`;
               })
               .join("")
           : `<p class="muted small">No cases — create one after selecting this patient.</p>
@@ -11267,6 +11277,9 @@ document.getElementById("btn-cancel-switch-case")?.addEventListener("click", () 
 });
 
 document.getElementById("btn-header-switch-patient")?.addEventListener("click", () => {
+  openSwitchPatientCaseModal();
+});
+document.getElementById("btn-header-patient-name")?.addEventListener("click", () => {
   openSwitchPatientCaseModal();
 });
 

@@ -43,7 +43,9 @@
           <span id="header-patient-initials" class="patient-photo-initials">?</span>
         </button>
         <div class="header-patient-meta">
-          <h2 class="header-patient-name" id="header-patient-name">Loading…</h2>
+          <button type="button" class="header-patient-name-btn" id="btn-header-patient-name" title="Switch who / case" aria-label="Switch who or case">
+            <h2 class="header-patient-name" id="header-patient-name">Loading…</h2>
+          </button>
         </div>
       </div>
       <div class="header-actions">
@@ -84,10 +86,10 @@
         </button>
       </div>
     </div>
-    <div class="header-context-bar" id="header-context-bar" aria-label="Case">
+    <div class="header-context-bar hidden" id="header-context-bar" aria-hidden="true" hidden>
       <label class="header-select-wrap" id="header-case-select-wrap">
         <span>Case</span>
-        <select id="header-case-select" aria-label="Switch case"></select>
+        <select id="header-case-select" aria-label="Switch case" tabindex="-1"></select>
       </label>
     </div>
     <nav class="header-nav" aria-label="Main navigation">
@@ -313,7 +315,8 @@
   <!-- Switch Patient/Case modal -->
   <div id="modal-switch-case" class="modal-overlay hidden">
     <div class="modal-card modal-card-wide">
-      <h3>Switch Patient / Case</h3>
+      <h3>Who / Case</h3>
+      <p class="muted small" id="switch-case-current">Pick a person and case. The current selection is highlighted.</p>
       <div id="switch-case-list" class="switch-case-list"></div>
       <p id="switch-case-status" class="switch-case-status muted small hidden" role="status" aria-live="polite"></p>
       <div class="modal-actions">
