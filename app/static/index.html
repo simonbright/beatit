@@ -269,15 +269,6 @@
         <label for="exercise-walk-minutes">Minutes
           <input type="number" id="exercise-walk-minutes" class="input" min="1" max="600" step="1" inputmode="numeric" placeholder="e.g. 20">
         </label>
-        <div class="exercise-felt-block">
-          <p class="muted small">How I felt <span class="muted">(optional)</span></p>
-          <div class="exercise-felt-chips" id="exercise-felt-chips" role="group" aria-label="How I felt">
-            <button type="button" class="exercise-felt-btn" data-felt="Good">Good</button>
-            <button type="button" class="exercise-felt-btn" data-felt="OK">OK</button>
-            <button type="button" class="exercise-felt-btn" data-felt="Tired">Tired</button>
-            <button type="button" class="exercise-felt-btn" data-felt="Hard">Hard</button>
-          </div>
-        </div>
       </div>
 
       <div id="exercise-weights-fields" class="exercise-fields hidden">
@@ -290,6 +281,16 @@
         <label for="exercise-weights-minutes">Time (min)
           <input type="number" id="exercise-weights-minutes" class="input" min="1" max="600" step="1" inputmode="numeric" placeholder="e.g. 15">
         </label>
+      </div>
+
+      <div class="exercise-felt-block">
+        <p class="muted small">How I felt <span class="muted">(optional)</span></p>
+        <div class="exercise-felt-chips" id="exercise-felt-chips" role="group" aria-label="How I felt">
+          <button type="button" class="exercise-felt-btn" data-felt="Good">Good</button>
+          <button type="button" class="exercise-felt-btn" data-felt="OK">OK</button>
+          <button type="button" class="exercise-felt-btn" data-felt="Tired">Tired</button>
+          <button type="button" class="exercise-felt-btn" data-felt="Hard">Hard</button>
+        </div>
       </div>
 
       <div class="modal-actions">

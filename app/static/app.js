@@ -1787,6 +1787,22 @@ const BUILTIN_LOG_TILES = {
     kind: "note",
     icon: '<svg viewBox="0 0 24 24"><path d="M4 12h3l2-6 3 12 2-6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="18" r="1.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="18" r="1.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   },
+  walked: {
+    label: "Walked",
+    mode: "open",
+    open: "walked",
+    hint: "minutes",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 8l-2 5 3 1 1 7M14 8l2 4-3 2M8 13H6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  },
+  weights: {
+    label: "Weights",
+    mode: "open",
+    open: "weights",
+    hint: "weight / reps",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><path d="M6 8v8M18 8v8M9 10v4M15 10v4M6 12h12M4 10v4M20 10v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
   slept: {
     label: "Slept",
     mode: "instant",
@@ -1812,6 +1828,8 @@ const DEFAULT_LOG_TILE_ORDER = [
   "food",
   "shower",
   "exercise",
+  "walked",
+  "weights",
   "slept",
 ];
 
@@ -10421,8 +10439,8 @@ async function quickLogInstant(key) {
 }
 
 function openJournalForQuick(mode) {
-  if (mode === "exercise") {
-    openExerciseModal();
+  if (mode === "exercise" || mode === "walked" || mode === "weights") {
+    openExerciseModal(mode === "exercise" ? "walked" : mode);
     return;
   }
   state.journalDraft = emptyJournalDraft();
@@ -10450,8 +10468,9 @@ function openJournalForQuick(mode) {
   }
 }
 
-function resetExerciseModal() {
-  state.exerciseType = "walked";
+function resetExerciseModal(initialType = "walked") {
+  const type = initialType === "weights" ? "weights" : "walked";
+  state.exerciseType = type;
   state.exerciseFelt = null;
   const walkMin = document.getElementById("exercise-walk-minutes");
   const weight = document.getElementById("exercise-weight");
@@ -10462,22 +10481,28 @@ function resetExerciseModal() {
   if (reps) reps.value = "";
   if (wMin) wMin.value = "";
   document.querySelectorAll(".exercise-type-btn").forEach((btn) => {
-    btn.classList.toggle("is-selected", btn.dataset.exerciseType === "walked");
+    btn.classList.toggle("is-selected", btn.dataset.exerciseType === type);
   });
   document.querySelectorAll(".exercise-felt-btn").forEach((btn) => {
     btn.classList.remove("is-selected");
   });
-  document.getElementById("exercise-walked-fields")?.classList.remove("hidden");
-  document.getElementById("exercise-weights-fields")?.classList.add("hidden");
+  document.getElementById("exercise-walked-fields")?.classList.toggle("hidden", type !== "walked");
+  document.getElementById("exercise-weights-fields")?.classList.toggle("hidden", type !== "weights");
 }
 
-function openExerciseModal() {
+function openExerciseModal(initialType = "walked") {
   if (!state.activePatientId) return toast("Select a patient first", "error");
-  resetExerciseModal();
+  resetExerciseModal(initialType);
   hideModal("modal-journal");
+  const title = document.getElementById("exercise-title");
+  if (title) {
+    title.textContent =
+      initialType === "walked" ? "Walked" : initialType === "weights" ? "Weights" : "Exercise";
+  }
   showModal("modal-exercise");
   requestAnimationFrame(() => {
-    document.getElementById("exercise-walk-minutes")?.focus?.();
+    if (state.exerciseType === "weights") document.getElementById("exercise-weight")?.focus?.();
+    else document.getElementById("exercise-walk-minutes")?.focus?.();
   });
 }
 
@@ -10495,6 +10520,8 @@ function setExerciseType(type) {
   });
   document.getElementById("exercise-walked-fields")?.classList.toggle("hidden", next !== "walked");
   document.getElementById("exercise-weights-fields")?.classList.toggle("hidden", next !== "weights");
+  const title = document.getElementById("exercise-title");
+  if (title) title.textContent = next === "weights" ? "Weights" : "Walked";
   requestAnimationFrame(() => {
     if (next === "walked") document.getElementById("exercise-walk-minutes")?.focus?.();
     else document.getElementById("exercise-weight")?.focus?.();
@@ -10525,7 +10552,6 @@ async function submitExerciseLog() {
     if (!minutes) return toast("Enter how many minutes you walked", "error");
     const mins = Math.round(minutes);
     textParts.push(`${mins} min`);
-    if (state.exerciseFelt) textParts.push(`Felt ${state.exerciseFelt}`);
     label = "Walked";
   } else {
     const weight = parsePositiveNumber(document.getElementById("exercise-weight")?.value);
@@ -10539,6 +10565,7 @@ async function submitExerciseLog() {
     if (minutes) textParts.push(`${Math.round(minutes)} min`);
     label = "Weights";
   }
+  if (state.exerciseFelt) textParts.push(`Felt ${state.exerciseFelt}`);
 
   const btn = document.getElementById("btn-log-exercise");
   if (btn) btn.disabled = true;
