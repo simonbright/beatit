@@ -34,6 +34,7 @@ const state = {
   activePatientId: null,
   activeCaseId: null,
   activePatientLabel: null,
+  caseContextReady: false,
   patientProfileId: null,
   mobileLogDays: 1,
   diagnosticPresets: [],
@@ -1102,9 +1103,11 @@ function renderCoverageReport() {
   });
   if (!coverage) {
     if (summary) summary.textContent = "";
-    body.innerHTML = `<p class="muted small">${
-      state.activePatientId ? "Loading coverage…" : "Select a patient to see documentation coverage."
-    }</p>`;
+    body.innerHTML = `<p class="muted small">${escapeHtml(
+      state.activePatientId
+        ? "Loading coverage…"
+        : emptyPatientCopy("Select a patient to see documentation coverage.")
+    )}</p>`;
     return;
   }
   const total = coverage.total || 0;
@@ -1760,11 +1763,15 @@ function resolveLogTileOrder(profile = state.patientProfile) {
   return ordered.filter((key) => isLogTileVisible(resolveLogTileDef(key, profile)));
 }
 
+function emptyPatientCopy(readyCopy) {
+  return state.caseContextReady ? readyCopy : "Loading…";
+}
+
 function renderMobileLogTiles(profile = state.patientProfile) {
   const grid = document.getElementById("mobile-log-grid");
   if (!grid) return;
   if (!state.activePatientId) {
-    grid.innerHTML = `<p class="muted small">Select a patient to see log options.</p>`;
+    grid.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see log options."))}</p>`;
     return;
   }
   const order = resolveLogTileOrder(profile);
@@ -1794,7 +1801,7 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
   const el = document.getElementById("log-tiles-order-list");
   if (!el) return;
   if (!state.activePatientId) {
-    el.innerHTML = `<p class="muted small">No patient selected.</p>`;
+    el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("No patient selected."))}</p>`;
     return;
   }
   const order = resolveLogTileOrder(profile);
@@ -8000,6 +8007,7 @@ async function loadCaseContext() {
   try {
     const r = await fetch("/api/patients");
     const data = await r.json();
+    state.caseContextReady = true;
     const ctx = data.active || {};
     const patients = data.patients || [];
     const nameEl = document.getElementById("header-patient-name");
@@ -8015,8 +8023,8 @@ async function loadCaseContext() {
 
     const label = ctx.patient_label || "No patient";
     if (nameEl) nameEl.textContent = label;
-    if (initialsEl) initialsEl.textContent = patientInitials(label);
-    if (settingsInitialsEl) settingsInitialsEl.textContent = patientInitials(label);
+    if (initialsEl) initialsEl.textContent = ctx.patient_id ? patientInitials(label) : "?";
+    if (settingsInitialsEl) settingsInitialsEl.textContent = ctx.patient_id ? patientInitials(label) : "?";
     if (settingsPatient) settingsPatient.textContent = label;
     if (settingsCase) settingsCase.textContent = ctx.case_label || "No case";
 
@@ -8064,7 +8072,13 @@ async function loadCaseContext() {
     if (state.homeSection === "coverage") {
       loadCoverageReport().catch(() => {});
     }
-  } catch { /* ignore */ }
+  } catch {
+    state.caseContextReady = true;
+    const nameEl = document.getElementById("header-patient-name");
+    if (nameEl && nameEl.textContent === "Loading…") nameEl.textContent = "No patient";
+    syncPatientSpecificLogTiles();
+    renderMobileLogRecent();
+  }
 }
 
 function ageFromDob(dob) {
@@ -8119,15 +8133,16 @@ function renderPatientProfile(profile, patientId, extras = {}) {
     state.patientProfileId = null;
     if (dobEl) dobEl.value = "";
     if (genderEl) genderEl.value = "";
-    if (hintEl) hintEl.textContent = "Select or create a patient first";
-    if (listEl) listEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
-    if (diagListEl) diagListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
-    if (journalListEl) journalListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
-    if (medListEl) medListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    if (hintEl) hintEl.textContent = emptyPatientCopy("Select or create a patient first");
+    const empty = `<p class='muted small'>${escapeHtml(emptyPatientCopy("No patient selected."))}</p>`;
+    if (listEl) listEl.innerHTML = empty;
+    if (diagListEl) diagListEl.innerHTML = empty;
+    if (journalListEl) journalListEl.innerHTML = empty;
+    if (medListEl) medListEl.innerHTML = empty;
     const foodListEl = document.getElementById("patient-food-drinks-list");
-    if (foodListEl) foodListEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    if (foodListEl) foodListEl.innerHTML = empty;
     const logOrderEl = document.getElementById("log-tiles-order-list");
-    if (logOrderEl) logOrderEl.innerHTML = "<p class='muted small'>No patient selected.</p>";
+    if (logOrderEl) logOrderEl.innerHTML = empty;
     renderMobileLogTiles(null);
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
@@ -8307,7 +8322,7 @@ function renderMedicationsHome(profile) {
   if (!el) return;
   renderMedSafetyHomeStatus(profile);
   if (!profile) {
-    el.innerHTML = `<p class="muted small">Select a patient to see medications.</p>`;
+    el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see medications."))}</p>`;
     return;
   }
   const meds = profile.medications || [];
@@ -9827,7 +9842,7 @@ function renderJournalHome(profile, series) {
   if (!recentEl || !chartsEl) return;
 
   if (!profile) {
-    recentEl.innerHTML = `<p class="muted small">Select a patient to log how you feel.</p>`;
+    recentEl.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to log how you feel."))}</p>`;
     chartsEl.innerHTML = "";
     renderMobileLogRecent();
     return;
@@ -9948,7 +9963,7 @@ function clearPatientScopedLogState({ keepPatientId = false } = {}) {
   if (recentEl) {
     recentEl.innerHTML = state.activePatientId
       ? `<p class="muted small">Loading logs…</p>`
-      : `<p class="muted small">Select a patient to log how you feel.</p>`;
+      : `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to log how you feel."))}</p>`;
   }
 }
 
@@ -9982,7 +9997,7 @@ function renderMobileLogRecent() {
   if (!el) return;
   syncMobileLogRangeControl();
   if (!state.activePatientId) {
-    el.innerHTML = `<p class="muted small">Select a patient to start logging.</p>`;
+    el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to start logging."))}</p>`;
     return;
   }
   if (state.patientProfileId && state.patientProfileId !== state.activePatientId) {
