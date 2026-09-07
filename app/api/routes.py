@@ -79,6 +79,7 @@ from app.services.pdf_export import (
     normalize_journal_export_days,
     normalize_medication_export_scope,
 )
+from app.services.log_observations import log_observations_payload
 from app.services.source_catalog import (
     DEFAULT_SOURCE_TYPES,
     SOURCE_TYPE_KEYS,
@@ -3100,6 +3101,21 @@ async def api_delete_patient_journal(patient_id: str, entry_id: str):
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
     }
+
+
+@router.get("/patients/{patient_id}/log-observations")
+async def api_patient_log_observations(patient_id: str, days: str = "1"):
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    try:
+        days_key = normalize_journal_export_days(days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    profile = get_patient_profile(patient_id)
+    payload = log_observations_payload(profile.get("journal") or [], days_key)
+    return payload
 
 
 @router.get("/patients/{patient_id}/journal/export.pdf")

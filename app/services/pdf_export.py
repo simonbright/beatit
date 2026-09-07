@@ -2209,6 +2209,32 @@ def build_journal_pdf(
     pdf.cell(0, 4.5, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
+    from app.services.log_observations import build_log_observations
+
+    observations = build_log_observations(entries, days_key)
+    if observations:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(14, 116, 144)
+        pdf.cell(0, 6, "Observations", new_x="LMARGIN", new_y="NEXT", align="L")
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(
+            0,
+            4,
+            _safe_text("Auto insights from this range — not a diagnosis"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(30, 30, 30)
+        for obs in observations:
+            text = _safe_text(f"- {obs.get('text') or ''}")
+            if pdf.get_y() + 8 > pdf.h - pdf.b_margin:
+                pdf.add_page()
+            pdf.multi_cell(0, 4.5, text, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
     usable = pdf.w - pdf.l_margin - pdf.r_margin
     cols: list[tuple[str, float]] = [
         ("When", usable * 0.26),

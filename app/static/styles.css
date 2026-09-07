@@ -802,6 +802,41 @@ body {
   font-size: 0.85rem;
 }
 
+.mobile-log-observations {
+  margin: 0 0 0.85rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #0e7490) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent, #0e7490) 8%, var(--surface, #fff));
+}
+
+.mobile-log-observations.hidden {
+  display: none;
+}
+
+.mobile-log-observations-title {
+  margin: 0 0 0.15rem;
+  font-size: 0.82rem;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+}
+
+.mobile-log-observations-hint {
+  margin: 0 0 0.45rem;
+}
+
+.mobile-log-observations-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mobile-log-observations-list li {
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 .mobile-log-recent {
   margin-top: 0;
   display: grid;

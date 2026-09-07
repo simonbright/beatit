@@ -10144,6 +10144,7 @@ function renderMobileLogRecent() {
   const el = document.getElementById("mobile-log-recent");
   if (!el) return;
   syncMobileLogRangeControl();
+  refreshLogObservations();
   if (!state.activePatientId) {
     el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to start logging."))}</p>`;
     return;
@@ -10169,6 +10170,56 @@ function renderMobileLogRecent() {
   }
   el.classList.add("is-timeline");
   el.innerHTML = renderMobileLogTimelineRows(entries);
+}
+
+let _logObservationsRequest = 0;
+
+function renderLogObservations(observations) {
+  const el = document.getElementById("mobile-log-observations");
+  if (!el) return;
+  const items = Array.isArray(observations) ? observations : [];
+  if (!items.length) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = `<p class="mobile-log-observations-title">Observations</p>
+    <p class="muted small mobile-log-observations-hint">From this range — patterns only, not a diagnosis</p>
+    <ul class="mobile-log-observations-list">
+      ${items
+        .map((o) => `<li>${escapeHtml(o.text || "")}</li>`)
+        .join("")}
+    </ul>`;
+}
+
+async function refreshLogObservations() {
+  const el = document.getElementById("mobile-log-observations");
+  if (!el) return;
+  if (!state.activePatientId || !state.caseContextReady) {
+    renderLogObservations([]);
+    return;
+  }
+  const patientId = state.activePatientId;
+  const days = normalizeMobileLogDays(state.mobileLogDays);
+  const reqId = ++_logObservationsRequest;
+  try {
+    const res = await fetch(
+      `/api/patients/${patientId}/log-observations?days=${encodeURIComponent(String(days))}`,
+      { credentials: "include" }
+    );
+    if (reqId !== _logObservationsRequest || state.activePatientId !== patientId) return;
+    if (!res.ok) {
+      renderLogObservations([]);
+      return;
+    }
+    const data = await res.json();
+    if (reqId !== _logObservationsRequest || state.activePatientId !== patientId) return;
+    renderLogObservations(data.observations || []);
+  } catch {
+    if (reqId !== _logObservationsRequest) return;
+    renderLogObservations([]);
+  }
 }
 
 const MOM_MED_NAME = "MoM (Milk of Magnesia)";
