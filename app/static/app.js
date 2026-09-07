@@ -39,6 +39,7 @@ const state = {
   activePatientLabel: null,
   caseContextReady: false,
   patientProfileId: null,
+  logObservationsRequest: 0,
   mobileLogDays: 1,
   mobileLogView: "timeline",
   diagnosticPresets: [],
@@ -8344,6 +8345,10 @@ function bmiFor(heightCm, weightKg) {
 }
 
 function renderPatientProfile(profile, patientId, extras = {}) {
+  // Guard before any DOM writes — never paint another patient's data into the active view.
+  if (patientId && state.activePatientId && patientId !== state.activePatientId) {
+    return;
+  }
   const dobEl = document.getElementById("profile-dob");
   const genderEl = document.getElementById("profile-gender");
   const hintEl = document.getElementById("profile-age-hint");
@@ -8454,10 +8459,6 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderLogTilesOrderSettings(profile);
   renderMilestonesSettings(profile);
   const series = resolveDiagnosticSeries(profile, extras);
-  // Never attach another patient's profile to the active log view.
-  if (patientId && state.activePatientId && patientId !== state.activePatientId) {
-    return;
-  }
   state.patientProfile = profile || null;
   state.patientProfileId = patientId || null;
   state.diagnosticSeriesCache = extras.diagnostic_series || series;
@@ -10258,12 +10259,14 @@ function clearPatientScopedLogState({ keepPatientId = false } = {}) {
   state.patientProfileId = null;
   state.journalDraft = emptyJournalDraft();
   state.quickScaleKey = null;
+  state.logObservationsRequest += 1;
   hideModal("modal-journal");
   hideModal("modal-quick-scale");
   if (!keepPatientId) {
     // used when fully clearing selection
   }
   syncMobileLogRangeControl();
+  renderLogObservations([]);
   renderMobileLogRecent();
   const recentEl = document.getElementById("journal-recent");
   if (recentEl) {
@@ -10442,8 +10445,6 @@ function renderMobileLogRecent() {
   el.innerHTML = renderMobileLogTimelineRows(entries);
 }
 
-let _logObservationsRequest = 0;
-
 function renderLogObservations(observations) {
   const el = document.getElementById("mobile-log-observations");
   if (!el) return;
@@ -10472,22 +10473,23 @@ async function refreshLogObservations() {
   }
   const patientId = state.activePatientId;
   const days = normalizeMobileLogDays(state.mobileLogDays);
-  const reqId = ++_logObservationsRequest;
+  const reqId = ++state.logObservationsRequest;
   try {
     const res = await fetch(
       `/api/patients/${patientId}/log-observations?days=${encodeURIComponent(String(days))}`,
       { credentials: "include" }
     );
-    if (reqId !== _logObservationsRequest || state.activePatientId !== patientId) return;
+    if (reqId !== state.logObservationsRequest || state.activePatientId !== patientId) return;
     if (!res.ok) {
       renderLogObservations([]);
       return;
     }
     const data = await res.json();
-    if (reqId !== _logObservationsRequest || state.activePatientId !== patientId) return;
+    if (reqId !== state.logObservationsRequest || state.activePatientId !== patientId) return;
+    if (data.patient_id && data.patient_id !== patientId) return;
     renderLogObservations(data.observations || []);
   } catch {
-    if (reqId !== _logObservationsRequest) return;
+    if (reqId !== state.logObservationsRequest) return;
     renderLogObservations([]);
   }
 }
@@ -10533,7 +10535,13 @@ async function postJournalEntry({ kind, label, text = null, severity = null }) {
   }
   // Drop the response if the active patient changed while saving.
   if (state.activePatientId !== patientId) return null;
-  return res.json();
+  const data = await res.json();
+  if (state.activePatientId !== patientId) return null;
+  return {
+    ...data,
+    patient_id: data.patient_id || patientId,
+    patient: data.patient || { id: patientId },
+  };
 }
 
 async function ensureMomOnLogList() {
@@ -10921,13 +10929,15 @@ async function submitQuickScale(severity) {
   }
 }
 
-function applyProfileResponse(data) {
+function applyProfileResponse(data, { expectedPatientId = null } = {}) {
   const profilePatientId =
-    data?.patient?.id || data?.patient_id || state.activePatientId || null;
-  if (profilePatientId && state.activePatientId && profilePatientId !== state.activePatientId) {
+    data?.patient?.id || data?.patient_id || expectedPatientId || null;
+  // Unscoped profile payloads are unsafe when switching patients mid-request.
+  if (!profilePatientId) return;
+  if (state.activePatientId && profilePatientId !== state.activePatientId) {
     return;
   }
-  renderPatientProfile(data.profile || {}, profilePatientId || state.activePatientId, {
+  renderPatientProfile(data.profile || {}, profilePatientId, {
     diagnostic_series: data.diagnostic_series,
     diagnostic_presets: data.diagnostic_presets,
     journal_series: data.journal_series,

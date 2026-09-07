@@ -2616,6 +2616,7 @@ class PatientMeasurementRequest(BaseModel):
     notes: str | None = None
 
 
+
 @router.get("/patients/{patient_id}/profile")
 async def api_get_patient_profile(patient_id: str):
     patients = list_patients()
@@ -2624,6 +2625,7 @@ async def api_get_patient_profile(patient_id: str):
         raise HTTPException(status_code=404, detail="Patient not found")
     profile = get_patient_profile(patient_id)
     return {
+        "patient_id": patient_id,
         "profile": profile,
         "patient": {"id": patient["id"], "label": patient["label"]},
         "diagnostic_series": group_diagnostics_for_charts(profile),
@@ -2774,6 +2776,8 @@ async def api_update_patient_profile(patient_id: str, body: PatientDemographicsR
     if profile is None:
         raise HTTPException(status_code=404, detail="Patient not found")
     return {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -2811,6 +2815,8 @@ async def api_add_patient_measurement(patient_id: str, body: PatientMeasurementR
         raise HTTPException(status_code=404, detail="Patient not found")
     profile = get_patient_profile(patient_id)
     return {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "measurement": entry,
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
@@ -2823,7 +2829,7 @@ async def api_delete_patient_measurement(patient_id: str, measurement_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="Measurement not found")
     profile = get_patient_profile(patient_id)
-    return {"ok": True, "profile": profile, "diagnostic_series": group_diagnostics_for_charts(profile)}
+    return {"ok": True, "patient_id": patient_id, "patient": {"id": patient_id}, "profile": profile, "diagnostic_series": group_diagnostics_for_charts(profile)}
 
 
 @router.post("/patients/{patient_id}/diagnostics")
@@ -2850,6 +2856,8 @@ async def api_add_patient_diagnostic(patient_id: str, body: PatientDiagnosticReq
         raise HTTPException(status_code=404, detail="Patient not found")
     profile = get_patient_profile(patient_id)
     return {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "diagnostic": entry,
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
@@ -2864,6 +2872,8 @@ async def api_delete_patient_diagnostic(patient_id: str, diagnostic_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3022,6 +3032,8 @@ async def api_confirm_patient_diagnostics_import(
         except Exception:
             pass
     return {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "added": added,
         "added_count": len(added),
         "errors": errors,
@@ -3059,6 +3071,8 @@ async def api_add_patient_journal(patient_id: str, body: PatientJournalRequest):
     profile = get_patient_profile(patient_id)
     return {
         "entry": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3096,6 +3110,8 @@ async def api_update_patient_journal(
     profile = get_patient_profile(patient_id)
     return {
         "entry": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3110,6 +3126,8 @@ async def api_delete_patient_journal(patient_id: str, entry_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3128,6 +3146,8 @@ async def api_patient_log_observations(patient_id: str, days: str = "1"):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     profile = get_patient_profile(patient_id)
     payload = log_observations_payload(profile.get("journal") or [], days_key)
+    payload["patient_id"] = patient_id
+    payload["patient"] = {"id": patient["id"], "label": patient["label"]}
     return payload
 
 
@@ -3503,6 +3523,8 @@ async def api_get_medication_safety_review(patient_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "medication_safety": saved,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
     }
 
@@ -3519,6 +3541,8 @@ async def api_run_medication_safety_review(patient_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "medication_safety": saved,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3584,6 +3608,8 @@ async def api_confirm_patient_medications_import(
         raise HTTPException(status_code=400, detail=errors[0])
     profile = get_patient_profile(patient_id)
     return {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "added": added,
         "added_count": len(added),
         "errors": errors,
@@ -3616,6 +3642,8 @@ async def api_add_patient_medication(patient_id: str, body: PatientMedicationCre
     profile = get_patient_profile(patient_id)
     return {
         "medication": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3661,6 +3689,8 @@ async def api_update_patient_medication(
     profile = get_patient_profile(patient_id)
     return {
         "medication": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3686,6 +3716,8 @@ async def api_stop_patient_medication(
     profile = get_patient_profile(patient_id)
     return {
         "medication": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3700,6 +3732,8 @@ async def api_delete_patient_medication(patient_id: str, medication_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3725,6 +3759,8 @@ async def api_add_patient_food_drink(patient_id: str, body: PatientFoodDrinkCrea
     profile = get_patient_profile(patient_id)
     return {
         "food_drink": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3746,6 +3782,8 @@ async def api_update_patient_food_drink(
     profile = get_patient_profile(patient_id)
     return {
         "food_drink": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3760,6 +3798,8 @@ async def api_delete_patient_food_drink(patient_id: str, food_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3785,14 +3825,15 @@ def _patient_profile_payload(patient_id: str, profile: dict[str, Any] | None = N
     patient = next((p for p in patients if p["id"] == patient_id), None)
     body_profile = profile if profile is not None else get_patient_profile(patient_id)
     payload: dict[str, Any] = {
+        "patient_id": patient_id,
+        "patient": {
+            "id": patient_id,
+            "label": (patient or {}).get("label") or patient_id,
+        },
         "profile": body_profile,
         "diagnostic_series": group_diagnostics_for_charts(body_profile),
         "journal_series": group_journal_for_charts(body_profile),
     }
-    if patient:
-        payload["patient"] = {"id": patient["id"], "label": patient["label"]}
-    else:
-        payload["patient"] = {"id": patient_id, "label": patient_id}
     return payload
 
 
@@ -3882,6 +3923,8 @@ async def api_add_patient_milestone(patient_id: str, body: PatientMilestoneCreat
     profile = get_patient_profile(patient_id)
     return {
         "milestone": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3913,6 +3956,8 @@ async def api_update_patient_milestone(
     profile = get_patient_profile(patient_id)
     return {
         "milestone": entry,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -3927,6 +3972,8 @@ async def api_delete_patient_milestone(patient_id: str, milestone_id: str):
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
