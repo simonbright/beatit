@@ -1746,6 +1746,7 @@ const BUILTIN_LOG_TILES = {
     mode: "instant",
     hint: "1 tap",
     kind: "note",
+    forPatient: "susan",
     icon: '<svg viewBox="0 0 24 24"><path d="M7 4h10v3H7zM9 7v10M15 7v10M8 17h8M12 11v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   },
   mom: {
@@ -1753,6 +1754,7 @@ const BUILTIN_LOG_TILES = {
     mode: "instant",
     hint: "as needed",
     kind: "medication",
+    forPatient: "susan",
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   },
   water: {
