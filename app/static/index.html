@@ -252,6 +252,53 @@
     </div>
   </div>
 
+  <!-- Quick exercise log -->
+  <div id="modal-exercise" class="modal-overlay hidden">
+    <div class="modal-card modal-exercise-card" role="dialog" aria-modal="true" aria-labelledby="exercise-title">
+      <div class="row-between wrap">
+        <h3 id="exercise-title">Exercise</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-exercise">Close</button>
+      </div>
+      <p class="muted small">Quick log — we can refine details later.</p>
+      <div class="exercise-type-toggle" role="group" aria-label="Exercise type">
+        <button type="button" class="exercise-type-btn is-selected" data-exercise-type="walked">Walked</button>
+        <button type="button" class="exercise-type-btn" data-exercise-type="weights">Weights</button>
+      </div>
+
+      <div id="exercise-walked-fields" class="exercise-fields">
+        <label for="exercise-walk-minutes">Minutes
+          <input type="number" id="exercise-walk-minutes" class="input" min="1" max="600" step="1" inputmode="numeric" placeholder="e.g. 20">
+        </label>
+        <div class="exercise-felt-block">
+          <p class="muted small">How I felt <span class="muted">(optional)</span></p>
+          <div class="exercise-felt-chips" id="exercise-felt-chips" role="group" aria-label="How I felt">
+            <button type="button" class="exercise-felt-btn" data-felt="Good">Good</button>
+            <button type="button" class="exercise-felt-btn" data-felt="OK">OK</button>
+            <button type="button" class="exercise-felt-btn" data-felt="Tired">Tired</button>
+            <button type="button" class="exercise-felt-btn" data-felt="Hard">Hard</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="exercise-weights-fields" class="exercise-fields hidden">
+        <label for="exercise-weight">Weight
+          <input type="number" id="exercise-weight" class="input" min="0" max="2000" step="0.5" inputmode="decimal" placeholder="e.g. 20">
+        </label>
+        <label for="exercise-reps">Reps
+          <input type="number" id="exercise-reps" class="input" min="1" max="500" step="1" inputmode="numeric" placeholder="e.g. 10">
+        </label>
+        <label for="exercise-weights-minutes">Time (min)
+          <input type="number" id="exercise-weights-minutes" class="input" min="1" max="600" step="1" inputmode="numeric" placeholder="e.g. 15">
+        </label>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="btn-cancel-exercise">Cancel</button>
+        <button type="button" class="btn primary" id="btn-log-exercise">Log</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Edit journal / log entry -->
   <div id="modal-edit-journal" class="modal-overlay hidden">
     <div class="modal-card modal-edit-journal-card" role="dialog" aria-modal="true" aria-labelledby="edit-journal-title">

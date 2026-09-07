@@ -702,6 +702,8 @@ JOURNAL_PRESETS = [
     {"label": "Anxiety", "kind": "feeling"},
     {"label": "Took medication", "kind": "medication"},
     {"label": "Ate/Drank", "kind": "note"},
+    {"label": "Walked", "kind": "note"},
+    {"label": "Weights", "kind": "note"},
     {"label": "Bathroom #2", "kind": "note"},
     {"label": "Took shower", "kind": "note"},
     {"label": "Slept", "kind": "note"},

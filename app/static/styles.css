@@ -1033,6 +1033,79 @@ body {
   max-width: 26rem;
 }
 
+.modal-exercise-card {
+  max-width: 26rem;
+}
+
+.exercise-type-toggle {
+  display: flex;
+  gap: 0.45rem;
+  margin: 0.85rem 0 1rem;
+}
+
+.exercise-type-btn {
+  appearance: none;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.55rem 0.8rem;
+  min-height: 2.5rem;
+  cursor: pointer;
+}
+
+.exercise-type-btn.is-selected {
+  border-color: var(--accent, #0e7490);
+  background: color-mix(in srgb, var(--accent, #0e7490) 16%, var(--surface, #fff));
+}
+
+.exercise-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.exercise-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.exercise-felt-block {
+  margin-top: 0.15rem;
+}
+
+.exercise-felt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.exercise-felt-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.4rem 0.75rem;
+  min-height: 2.25rem;
+  cursor: pointer;
+}
+
+.exercise-felt-btn.is-selected {
+  border-color: var(--accent, #0e7490);
+  background: color-mix(in srgb, var(--accent, #0e7490) 16%, var(--surface, #fff));
+}
+
 .quick-scale-site-wrap {
   margin-top: 0.75rem;
 }

@@ -12,6 +12,8 @@ const state = {
   settingsSection: "patients",
   quickScaleKey: null,
   quickScaleSite: null,
+  exerciseType: "walked",
+  exerciseFelt: null,
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
@@ -1777,6 +1779,14 @@ const BUILTIN_LOG_TILES = {
     kind: "note",
     icon: '<svg viewBox="0 0 24 24"><path d="M12 3v2M8 7h8M9 9v8a3 3 0 0 0 6 0V9M10 13h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   },
+  exercise: {
+    label: "Exercise",
+    mode: "open",
+    open: "exercise",
+    hint: "walk / weights",
+    kind: "note",
+    icon: '<svg viewBox="0 0 24 24"><path d="M4 12h3l2-6 3 12 2-6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="18" r="1.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="18" r="1.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+  },
   slept: {
     label: "Slept",
     mode: "instant",
@@ -1801,6 +1811,7 @@ const DEFAULT_LOG_TILE_ORDER = [
   "meds",
   "food",
   "shower",
+  "exercise",
   "slept",
 ];
 
@@ -9572,6 +9583,8 @@ function defaultJournalPresets() {
     { label: "Anxiety", kind: "feeling" },
     { label: "Took medication", kind: "medication" },
     { label: "Ate/Drank", kind: "note" },
+    { label: "Walked", kind: "note" },
+    { label: "Weights", kind: "note" },
     { label: "Bathroom #2", kind: "note" },
     { label: "Took shower", kind: "note" },
     { label: "Slept", kind: "note" },
@@ -10408,6 +10421,10 @@ async function quickLogInstant(key) {
 }
 
 function openJournalForQuick(mode) {
+  if (mode === "exercise") {
+    openExerciseModal();
+    return;
+  }
   state.journalDraft = emptyJournalDraft();
   ensureJournalChips();
   const draft = state.journalDraft;
@@ -10430,6 +10447,114 @@ function openJournalForQuick(mode) {
   } else if (mode === "food") {
     document.getElementById("journal-food-options")?.scrollIntoView({ block: "nearest" });
     document.getElementById("journal-text")?.focus();
+  }
+}
+
+function resetExerciseModal() {
+  state.exerciseType = "walked";
+  state.exerciseFelt = null;
+  const walkMin = document.getElementById("exercise-walk-minutes");
+  const weight = document.getElementById("exercise-weight");
+  const reps = document.getElementById("exercise-reps");
+  const wMin = document.getElementById("exercise-weights-minutes");
+  if (walkMin) walkMin.value = "";
+  if (weight) weight.value = "";
+  if (reps) reps.value = "";
+  if (wMin) wMin.value = "";
+  document.querySelectorAll(".exercise-type-btn").forEach((btn) => {
+    btn.classList.toggle("is-selected", btn.dataset.exerciseType === "walked");
+  });
+  document.querySelectorAll(".exercise-felt-btn").forEach((btn) => {
+    btn.classList.remove("is-selected");
+  });
+  document.getElementById("exercise-walked-fields")?.classList.remove("hidden");
+  document.getElementById("exercise-weights-fields")?.classList.add("hidden");
+}
+
+function openExerciseModal() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  resetExerciseModal();
+  hideModal("modal-journal");
+  showModal("modal-exercise");
+  requestAnimationFrame(() => {
+    document.getElementById("exercise-walk-minutes")?.focus?.();
+  });
+}
+
+function closeExerciseModal() {
+  hideModal("modal-exercise");
+  state.exerciseType = "walked";
+  state.exerciseFelt = null;
+}
+
+function setExerciseType(type) {
+  const next = type === "weights" ? "weights" : "walked";
+  state.exerciseType = next;
+  document.querySelectorAll(".exercise-type-btn").forEach((btn) => {
+    btn.classList.toggle("is-selected", btn.dataset.exerciseType === next);
+  });
+  document.getElementById("exercise-walked-fields")?.classList.toggle("hidden", next !== "walked");
+  document.getElementById("exercise-weights-fields")?.classList.toggle("hidden", next !== "weights");
+  requestAnimationFrame(() => {
+    if (next === "walked") document.getElementById("exercise-walk-minutes")?.focus?.();
+    else document.getElementById("exercise-weight")?.focus?.();
+  });
+}
+
+function setExerciseFelt(felt) {
+  const value = String(felt || "").trim();
+  state.exerciseFelt = state.exerciseFelt === value ? null : value || null;
+  document.querySelectorAll(".exercise-felt-btn").forEach((btn) => {
+    btn.classList.toggle("is-selected", btn.dataset.felt === state.exerciseFelt);
+  });
+}
+
+function parsePositiveNumber(raw) {
+  const n = Number(String(raw || "").trim());
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+async function submitExerciseLog() {
+  const type = state.exerciseType === "weights" ? "weights" : "walked";
+  let label = "Walked";
+  let textParts = [];
+
+  if (type === "walked") {
+    const minutes = parsePositiveNumber(document.getElementById("exercise-walk-minutes")?.value);
+    if (!minutes) return toast("Enter how many minutes you walked", "error");
+    const mins = Math.round(minutes);
+    textParts.push(`${mins} min`);
+    if (state.exerciseFelt) textParts.push(`Felt ${state.exerciseFelt}`);
+    label = "Walked";
+  } else {
+    const weight = parsePositiveNumber(document.getElementById("exercise-weight")?.value);
+    const reps = parsePositiveNumber(document.getElementById("exercise-reps")?.value);
+    const minutes = parsePositiveNumber(document.getElementById("exercise-weights-minutes")?.value);
+    if (!weight && !reps && !minutes) {
+      return toast("Enter weight, reps, or time", "error");
+    }
+    if (weight) textParts.push(`${Number.isInteger(weight) ? weight : weight} lb`);
+    if (reps) textParts.push(`${Math.round(reps)} reps`);
+    if (minutes) textParts.push(`${Math.round(minutes)} min`);
+    label = "Weights";
+  }
+
+  const btn = document.getElementById("btn-log-exercise");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await postJournalEntry({
+      kind: "note",
+      label,
+      text: textParts.join(" · ") || null,
+    });
+    if (data) applyProfileResponse(data);
+    closeExerciseModal();
+    toast(`Logged ${label}`);
+  } catch (err) {
+    toast(err.message || "Log failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -11790,6 +11915,35 @@ document.getElementById("mobile-log-grid")?.addEventListener("click", (event) =>
 document.getElementById("btn-close-quick-scale")?.addEventListener("click", () => {
   closeQuickScaleModal();
 });
+
+document.getElementById("btn-close-exercise")?.addEventListener("click", () => closeExerciseModal());
+document.getElementById("btn-cancel-exercise")?.addEventListener("click", () => closeExerciseModal());
+document.getElementById("modal-exercise")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-exercise") closeExerciseModal();
+});
+document.querySelector(".exercise-type-toggle")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-exercise-type]");
+  if (!btn) return;
+  setExerciseType(btn.dataset.exerciseType);
+});
+document.getElementById("exercise-felt-chips")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-felt]");
+  if (!btn) return;
+  setExerciseFelt(btn.dataset.felt);
+});
+document.getElementById("btn-log-exercise")?.addEventListener("click", () => {
+  submitExerciseLog().catch((e) => toast(e.message || "Log failed", "error"));
+});
+["exercise-walk-minutes", "exercise-weight", "exercise-reps", "exercise-weights-minutes"].forEach(
+  (id) => {
+    document.getElementById(id)?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submitExerciseLog().catch((e) => toast(e.message || "Log failed", "error"));
+      }
+    });
+  }
+);
 
 document.getElementById("modal-quick-scale")?.addEventListener("click", (event) => {
   if (event.target?.id === "modal-quick-scale") {
