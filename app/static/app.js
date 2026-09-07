@@ -1651,7 +1651,6 @@ function setLibraryView(view) {
 const HOME_SECTIONS = new Set([
   "log",
   "assessment",
-  "journal",
   "medications",
   "diagnostics",
   "flagged",
@@ -2112,6 +2111,8 @@ function focusMobileLogViewport({ behavior = "auto" } = {}) {
 }
 
 function setHomeSection(section, { scroll = false } = {}) {
+  // Journal home view removed — keep Log as the place for recent entries.
+  if (section === "journal") section = "log";
   const next = HOME_SECTIONS.has(section) ? section : preferredHomeSection();
   const changed = state.homeSection !== next;
   state.homeSection = next;
@@ -2128,7 +2129,7 @@ function setHomeSection(section, { scroll = false } = {}) {
     renderMobileLogRecent();
     syncPatientSpecificLogTiles();
   }
-  if (changed && (next === "diagnostics" || next === "journal" || next === "medications" || next === "log")) {
+  if (changed && (next === "diagnostics" || next === "medications" || next === "log")) {
     refreshActivePatientProfile().catch(() => {});
   }
   if (changed && next === "flagged") {
@@ -12174,7 +12175,6 @@ async function exportJournalLogPdf(triggerBtn) {
   );
   const buttons = [
     document.getElementById("btn-export-log-pdf"),
-    document.getElementById("btn-export-log-pdf-journal"),
   ].filter(Boolean);
   buttons.forEach((btn) => {
     btn.disabled = true;
@@ -12211,16 +12211,6 @@ document.getElementById("btn-export-log-pdf")?.addEventListener("click", () => {
   exportJournalLogPdf(document.getElementById("btn-export-log-pdf")).catch((e) =>
     toast(e.message || "Export failed", "error")
   );
-});
-
-document.getElementById("btn-export-log-pdf-journal")?.addEventListener("click", () => {
-  exportJournalLogPdf(document.getElementById("btn-export-log-pdf-journal")).catch((e) =>
-    toast(e.message || "Export failed", "error")
-  );
-});
-
-document.getElementById("btn-mobile-log-history")?.addEventListener("click", () => {
-  setHomeSection("journal", { scroll: true });
 });
 
 document.getElementById("btn-close-journal")?.addEventListener("click", () => {

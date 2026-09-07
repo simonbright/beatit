@@ -454,10 +454,6 @@
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v16H6z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 8h6M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Summary</span>
         </button>
-        <button type="button" class="section-subtab" data-home-section="journal" role="tab" aria-selected="false" title="How you feel">
-          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 11c0 5.5-7 10-7 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-          <span class="section-subtab-label">Journal</span>
-        </button>
         <button type="button" class="section-subtab" data-home-section="medications" role="tab" aria-selected="false" title="Medications &amp; remedies">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Meds</span>
@@ -505,7 +501,6 @@
           <div class="mobile-log-footer">
             <button type="button" class="btn secondary" id="btn-mobile-log-add-option">Add option</button>
             <button type="button" class="btn ghost" id="btn-mobile-log-more">More…</button>
-            <button type="button" class="btn ghost" id="btn-mobile-log-history" data-home-section="journal">Trends</button>
           </div>
           <div class="mobile-log-history">
             <div class="mobile-log-recent-head">
@@ -597,22 +592,7 @@
         </div>
       </div>
 
-      <div id="home-pane-journal" class="section-pane hidden" data-home-pane="journal">
-        <div class="card journal-card" id="journal-card">
-          <div class="row-between wrap">
-            <div>
-              <h3>How you have been</h3>
-              <p class="muted small">Recent logs and trends.</p>
-            </div>
-            <div class="journal-home-actions">
-              <button type="button" class="btn secondary btn-sm" id="btn-export-log-pdf-journal" title="Download log PDF">Export PDF</button>
-              <button type="button" class="btn secondary btn-sm" id="btn-journal-open-home">Log now</button>
-            </div>
-          </div>
-          <div id="journal-recent" class="journal-recent"></div>
-          <div id="journal-charts" class="journal-charts"></div>
-        </div>
-      </div>
+      <!-- Journal home view removed — Log timeline/list covers recent entries -->
 
       <div id="home-pane-medications" class="section-pane hidden" data-home-pane="medications">
         <div class="card medications-card" id="medications-card">
