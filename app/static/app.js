@@ -9124,6 +9124,7 @@ function defaultJournalPresets() {
     { label: "Feel Weak", kind: "feeling" },
     { label: "Weak", kind: "feeling" },
     { label: "Feel Nauseous", kind: "symptom" },
+    { label: "Vomiting", kind: "symptom" },
     { label: "Esophageal Spasm", kind: "symptom" },
     { label: "Headache", kind: "symptom" },
     { label: "Nauseous", kind: "symptom" },
@@ -9798,6 +9799,7 @@ function openJournalForQuick(mode) {
 
 const QUICK_SCALE_ENTRIES = {
   nauseous: { kind: "symptom", label: "Feel Nauseous", title: "Feel Nauseous", hint: "How nauseous? Tap a level to log" },
+  vomiting: { kind: "symptom", label: "Vomiting", title: "Vomiting", hint: "How severe? Tap a level to log" },
   weak: { kind: "feeling", label: "Feel Weak", title: "Feel Weak", hint: "How weak? Tap a level to log" },
   "esophageal-spasm": {
     kind: "symptom",
@@ -9815,6 +9817,7 @@ function resolveQuickScaleKey(raw) {
     if (String(entry.label || "").toLowerCase() === text) return key;
   }
   if (text.includes("esophageal")) return "esophageal-spasm";
+  if (text.includes("vomit")) return "vomiting";
   if (text.includes("nauseous") || text === "nauseous") return "nauseous";
   if (text === "weak" || text.includes("feel weak")) return "weak";
   return null;
@@ -11034,7 +11037,7 @@ document.getElementById("journal-feeling-chips")?.addEventListener("click", (eve
   const label = chip.dataset.label || "";
   const scaleKey = resolveQuickScaleKey(label);
   // Scale-required items open the 1–5 severity bar immediately.
-  if (scaleKey === "esophageal-spasm" || scaleKey === "nauseous" || scaleKey === "weak") {
+  if (scaleKey === "esophageal-spasm" || scaleKey === "nauseous" || scaleKey === "weak" || scaleKey === "vomiting") {
     openQuickScale(scaleKey);
     return;
   }
