@@ -1052,6 +1052,32 @@ def add_patient_medication(
     return next((m for m in saved["medications"] if m["id"] == entry["id"]), entry)
 
 
+def _sync_log_tiles_for_medication_rename(
+    profile: dict[str, Any],
+    *,
+    old_name: str,
+    new_name: str,
+) -> bool:
+    """Rename Home Log custom tiles that matched the old medication name."""
+    old_key = _normalize_log_tile_label(old_name).lower()
+    new_label = _normalize_log_tile_label(new_name)
+    if not old_key or not new_label or old_key == new_label.lower():
+        return False
+    tiles = list(profile.get("log_custom_tiles") or [])
+    changed = False
+    for tile in tiles:
+        if not isinstance(tile, dict):
+            continue
+        label = _normalize_log_tile_label(str(tile.get("label") or ""))
+        if label.lower() != old_key:
+            continue
+        tile["label"] = new_label
+        changed = True
+    if changed:
+        profile["log_custom_tiles"] = tiles
+    return changed
+
+
 def update_patient_medication(
     patient_id: str,
     medication_id: str,
@@ -1086,6 +1112,7 @@ def update_patient_medication(
     med = dict(meds[idx])
     old_dosage = med.get("dosage")
     old_frequency = med.get("frequency")
+    old_name = str(med.get("name") or "").strip()
 
     if name is not None:
         cleaned = " ".join(name.strip().split())
@@ -1139,6 +1166,12 @@ def update_patient_medication(
     apply_identity_fields(med)
     meds[idx] = med
     profile["medications"] = meds
+    if name is not None and old_name and old_name.lower() != str(med.get("name") or "").lower():
+        _sync_log_tiles_for_medication_rename(
+            profile,
+            old_name=old_name,
+            new_name=str(med.get("name") or ""),
+        )
     saved = save_patient_profile(patient_id, profile)
     return next((m for m in saved["medications"] if m["id"] == medication_id), med)
 
@@ -1359,6 +1392,45 @@ def delete_patient_log_tile(patient_id: str, tile_id: str) -> bool:
     ]
     save_patient_profile(patient_id, profile)
     return True
+
+
+def rename_patient_log_tile(
+    patient_id: str,
+    tile_id: str,
+    *,
+    label: str,
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = _normalize_log_tile_label(label)
+    if not cleaned:
+        raise ValueError("Option name is required")
+    profile = get_patient_profile(patient_id)
+    tiles = list(profile.get("log_custom_tiles") or [])
+    idx = next((i for i, t in enumerate(tiles) if str(t.get("id")) == str(tile_id)), None)
+    if idx is None:
+        return None
+    clash = next(
+        (
+            t
+            for t in tiles
+            if str(t.get("id")) != str(tile_id)
+            and str(t.get("label") or "").lower() == cleaned.lower()
+        ),
+        None,
+    )
+    if clash:
+        raise ValueError("That option name already exists")
+    tile = dict(tiles[idx])
+    tile["label"] = cleaned
+    tiles[idx] = tile
+    profile["log_custom_tiles"] = tiles
+    saved = save_patient_profile(patient_id, profile)
+    return next(
+        (t for t in saved.get("log_custom_tiles") or [] if str(t.get("id")) == str(tile_id)),
+        tile,
+    )
 
 
 def set_patient_log_tile_order(patient_id: str, order: list[str]) -> list[str] | None:

@@ -169,6 +169,7 @@ from app.services.case_manager import (
     delete_patient_food_drink,
     add_patient_log_tile,
     delete_patient_log_tile,
+    rename_patient_log_tile,
     set_patient_log_tile_order,
     add_patient_milestone,
     update_patient_milestone,
@@ -3770,6 +3771,10 @@ class PatientLogTileOrderRequest(BaseModel):
     order: list[str] = Field(default_factory=list, max_length=80)
 
 
+class PatientLogTileRenameRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+
+
 @router.post("/patients/{patient_id}/log-tiles")
 async def api_add_patient_log_tile(patient_id: str, body: PatientLogTileCreateRequest):
     try:
@@ -3800,6 +3805,27 @@ async def api_set_patient_log_tile_order(patient_id: str, body: PatientLogTileOr
     profile = get_patient_profile(patient_id)
     return {
         "order": order,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.patch("/patients/{patient_id}/log-tiles/{tile_id}")
+async def api_rename_patient_log_tile(
+    patient_id: str,
+    tile_id: str,
+    body: PatientLogTileRenameRequest,
+):
+    try:
+        entry = rename_patient_log_tile(patient_id, tile_id, label=body.label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Log option not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "log_tile": entry,
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),

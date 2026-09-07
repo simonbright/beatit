@@ -1843,7 +1843,17 @@ function getCustomLogTiles(profile = state.patientProfile) {
 
 function resolveLogTileDef(key, profile = state.patientProfile) {
   const builtin = BUILTIN_LOG_TILES[key];
-  if (builtin) return { key, ...builtin, custom: false };
+  if (builtin) {
+    const def = { key, ...builtin, custom: false };
+    if (key === "mom") {
+      const mom = resolveMomMedication(profile);
+      if (mom?.name) {
+        def.label = String(mom.name).trim();
+        def.kind = "medication";
+      }
+    }
+    return def;
+  }
   if (!String(key || "").startsWith("custom:")) return null;
   const id = String(key).slice("custom:".length);
   const tile = getCustomLogTiles(profile).find((t) => String(t.id) === id);
@@ -1937,7 +1947,8 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
       if (!def) return "";
       const meta = def.mode === "scale" ? "scale" : def.mode === "open" ? "choose" : "1 tap";
       const removeBtn = def.custom
-        ? `<button type="button" class="btn ghost btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">Remove</button>`
+        ? `<button type="button" class="btn ghost btn-sm btn-rename-log-tile" data-id="${escapeHtml(def.customId)}" data-label="${escapeHtml(def.label)}">Rename</button>
+           <button type="button" class="btn ghost btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">Remove</button>`
         : "";
       return `<div class="log-tile-order-row" data-key="${escapeHtml(key)}">
         <div class="log-tile-order-main">
@@ -8356,6 +8367,10 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderMedicationsHome(profile);
   renderMedSafetyResult(profile?.medication_safety);
   syncPatientSpecificLogTiles();
+  // Keep Meds chips (and other journal chip UIs) in sync when profile names change.
+  if (document.getElementById("journal-med-chips")) {
+    renderJournalMedChips();
+  }
 }
 
 function parseConditionsInput(raw) {
@@ -10357,6 +10372,21 @@ async function refreshLogObservations() {
 
 const MOM_MED_NAME = "MoM (Milk of Magnesia)";
 
+function resolveMomMedication(profile = state.patientProfile) {
+  const meds = (profile?.medications || []).filter(
+    (m) => m && (m.status || "active") === "active" && !m.ended_at && String(m.name || "").trim()
+  );
+  const exact = meds.find(
+    (m) => String(m.name || "").trim().toLowerCase() === MOM_MED_NAME.toLowerCase()
+  );
+  if (exact) return exact;
+  const momish = meds.find((m) => {
+    const name = String(m.name || "");
+    return /milk of magnesia/i.test(name) || /\bmom\b/i.test(name);
+  });
+  return momish || null;
+}
+
 async function postJournalEntry({ kind, label, text = null, severity = null }) {
   if (!state.activePatientId) {
     toast("Select a patient first", "error");
@@ -10387,9 +10417,7 @@ async function postJournalEntry({ kind, label, text = null, severity = null }) {
 async function ensureMomOnLogList() {
   if (!state.activePatientId) return;
   const patientId = state.activePatientId;
-  const existing = activePatientMedications().find(
-    (m) => String(m.name || "").trim().toLowerCase() === MOM_MED_NAME.toLowerCase()
-  );
+  const existing = resolveMomMedication(state.patientProfile);
   if (existing) {
     if (!existing.show_on_log && existing.id) {
       const patchRes = await fetch(
@@ -10428,7 +10456,10 @@ async function quickLogInstant(key) {
     water: { kind: "note", label: "Water", text: "Ate/Drank" },
     slept: { kind: "note", label: "Slept" },
     shower: { kind: "note", label: "Took shower" },
-    mom: { kind: "medication", label: MOM_MED_NAME },
+    mom: {
+      kind: "medication",
+      label: resolveMomMedication()?.name || MOM_MED_NAME,
+    },
   };
   let entry = map[key];
   if (!entry) {
@@ -12050,6 +12081,29 @@ document.getElementById("log-tiles-order-list")?.addEventListener("click", async
     } catch (err) {
       toast(err.message || "Could not reorder", "error");
     }
+    return;
+  }
+  const renameBtn = event.target.closest(".btn-rename-log-tile");
+  if (renameBtn) {
+    if (!state.activePatientId) return;
+    const id = renameBtn.dataset.id;
+    const current = renameBtn.dataset.label || "";
+    if (!id) return;
+    const next = window.prompt("Rename Home Log option", current);
+    if (next == null) return;
+    const label = String(next).trim();
+    if (!label || label === current) return;
+    const res = await fetch(`/api/patients/${state.activePatientId}/log-tiles/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return toast(err.detail || "Could not rename option", "error");
+    }
+    applyProfileResponse(await res.json());
+    toast(`Renamed to “${label}”`);
     return;
   }
   const delBtn = event.target.closest(".btn-delete-log-tile");
