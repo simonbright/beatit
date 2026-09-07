@@ -37,6 +37,7 @@ const state = {
   caseContextReady: false,
   patientProfileId: null,
   mobileLogDays: 1,
+  mobileLogView: "timeline",
   diagnosticPresets: [],
   journalPresets: [],
   commonRemedies: [],
@@ -9934,6 +9935,40 @@ function saveMobileLogDays(patientId, days) {
   }
 }
 
+function mobileLogViewStorageKey(patientId) {
+  return patientId ? `beatit-mobile-log-view:${patientId}` : "beatit-mobile-log-view";
+}
+
+function normalizeMobileLogView(raw) {
+  return raw === "list" ? "list" : "timeline";
+}
+
+function loadMobileLogView(patientId) {
+  try {
+    return normalizeMobileLogView(localStorage.getItem(mobileLogViewStorageKey(patientId)));
+  } catch {
+    return "timeline";
+  }
+}
+
+function saveMobileLogView(patientId, view) {
+  try {
+    localStorage.setItem(mobileLogViewStorageKey(patientId), normalizeMobileLogView(view));
+  } catch {
+    /* ignore */
+  }
+}
+
+function syncMobileLogViewControl() {
+  const view = loadMobileLogView(state.activePatientId);
+  state.mobileLogView = view;
+  document.querySelectorAll(".mobile-log-view-btn").forEach((btn) => {
+    const active = btn.dataset.logView === view;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
 function syncMobileLogRangeControl() {
   const days = loadMobileLogDays(state.activePatientId);
   state.mobileLogDays = days;
@@ -9945,6 +9980,7 @@ function syncMobileLogRangeControl() {
     else if (days === 1) title.textContent = "Logged today";
     else title.textContent = `Last ${days} days`;
   }
+  syncMobileLogViewControl();
 }
 
 function clearPatientScopedLogState({ keepPatientId = false } = {}) {
@@ -9992,6 +10028,118 @@ function filterJournalByDayRange(entries, days) {
   });
 }
 
+function formatJournalTimeOnly(iso) {
+  const d = new Date(iso || "");
+  if (Number.isNaN(d.getTime())) return "—";
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function formatJournalDayHeading(iso) {
+  const d = new Date(iso || "");
+  if (Number.isNaN(d.getTime())) return "Unknown day";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = new Date(d);
+  day.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const label = `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  if (diff === 0) return `Today · ${label}`;
+  if (diff === 1) return `Yesterday · ${label}`;
+  return label;
+}
+
+function journalDayKey(iso) {
+  const d = new Date(iso || "");
+  if (Number.isNaN(d.getTime())) return "unknown";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Group newest-first entries into day buckets; within each day, chronological (oldest→newest). */
+function groupJournalEntriesForTimeline(entries) {
+  const groups = [];
+  const byDay = new Map();
+  for (const j of entries || []) {
+    const key = journalDayKey(j.recorded_at || j.created_at);
+    if (!byDay.has(key)) {
+      const group = { key, sampleAt: j.recorded_at || j.created_at, entries: [] };
+      byDay.set(key, group);
+      groups.push(group);
+    }
+    byDay.get(key).entries.push(j);
+  }
+  for (const g of groups) {
+    g.entries.sort((a, b) =>
+      String(a.recorded_at || a.created_at || "").localeCompare(
+        String(b.recorded_at || b.created_at || "")
+      )
+    );
+  }
+  return groups;
+}
+
+function journalEmptyRangeMessage() {
+  if (state.mobileLogDays === 1) return "Nothing today — tap a tile above.";
+  if (state.mobileLogDays === "all") return "Nothing logged yet — tap a tile above.";
+  return `Nothing in the last ${state.mobileLogDays} days.`;
+}
+
+function renderMobileLogListRows(entries) {
+  return entries
+    .map((j) => {
+      const sev = j.severity != null ? ` · ${j.severity}/5` : "";
+      return `<div class="mobile-log-recent-row" data-id="${escapeHtml(j.id)}">
+        <button type="button" class="mobile-log-recent-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
+          <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}
+          <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
+        </button>
+        <div class="mobile-log-recent-row-actions">
+          <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
+          <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderMobileLogTimelineRows(entries) {
+  const groups = groupJournalEntriesForTimeline(entries);
+  return groups
+    .map((group) => {
+      const items = group.entries
+        .map((j) => {
+          const sev = j.severity != null ? `<span class="log-tl-sev">${escapeHtml(String(j.severity))}/5</span>` : "";
+          const detail = j.text ? `<span class="muted small log-tl-detail">${escapeHtml(j.text)}</span>` : "";
+          const kind = j.kind ? `<span class="journal-kind-tag">${escapeHtml(j.kind)}</span>` : "";
+          return `<li class="log-tl-item" data-id="${escapeHtml(j.id)}">
+            <div class="log-tl-rail" aria-hidden="true"><span class="log-tl-dot"></span></div>
+            <time class="log-tl-time" datetime="${escapeHtml(j.recorded_at || "")}">${escapeHtml(formatJournalTimeOnly(j.recorded_at || j.created_at))}</time>
+            <div class="log-tl-body">
+              <button type="button" class="log-tl-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
+                <span class="log-tl-label-row">${kind}<strong>${escapeHtml(j.label || "")}</strong>${sev}</span>
+                ${detail}
+              </button>
+              <div class="mobile-log-recent-row-actions">
+                <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
+                <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
+              </div>
+            </div>
+          </li>`;
+        })
+        .join("");
+      return `<section class="log-tl-day">
+        <h4 class="log-tl-day-title">${escapeHtml(formatJournalDayHeading(group.sampleAt))}</h4>
+        <ol class="log-tl-list">${items}</ol>
+      </section>`;
+    })
+    .join("");
+}
+
 function renderMobileLogRecent() {
   const el = document.getElementById("mobile-log-recent");
   if (!el) return;
@@ -10010,30 +10158,17 @@ function renderMobileLogRecent() {
   }
   const entries = filterJournalByDayRange(journalEntriesForActivePatient(), state.mobileLogDays);
   if (!entries.length) {
-    const empty =
-      state.mobileLogDays === 1
-        ? "Nothing today — tap a tile above."
-        : state.mobileLogDays === "all"
-          ? "Nothing logged yet — tap a tile above."
-          : `Nothing in the last ${state.mobileLogDays} days.`;
-    el.innerHTML = `<p class="muted small">${empty}</p>`;
+    el.innerHTML = `<p class="muted small">${escapeHtml(journalEmptyRangeMessage())}</p>`;
     return;
   }
-  el.innerHTML = entries
-    .map((j) => {
-      const sev = j.severity != null ? ` · ${j.severity}/5` : "";
-      return `<div class="mobile-log-recent-row" data-id="${escapeHtml(j.id)}">
-        <button type="button" class="mobile-log-recent-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
-          <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}
-          <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
-        </button>
-        <div class="mobile-log-recent-row-actions">
-          <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
-          <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
-        </div>
-      </div>`;
-    })
-    .join("");
+  const view = normalizeMobileLogView(state.mobileLogView);
+  if (view === "list") {
+    el.classList.remove("is-timeline");
+    el.innerHTML = renderMobileLogListRows(entries);
+    return;
+  }
+  el.classList.add("is-timeline");
+  el.innerHTML = renderMobileLogTimelineRows(entries);
 }
 
 const MOM_MED_NAME = "MoM (Milk of Magnesia)";
@@ -11581,6 +11716,16 @@ document.getElementById("mobile-log-range")?.addEventListener("change", (event) 
   const days = normalizeMobileLogDays(event.target.value);
   state.mobileLogDays = days;
   saveMobileLogDays(state.activePatientId, days);
+  renderMobileLogRecent();
+});
+
+document.querySelector(".mobile-log-view-toggle")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-log-view]");
+  if (!btn) return;
+  const view = normalizeMobileLogView(btn.dataset.logView);
+  state.mobileLogView = view;
+  saveMobileLogView(state.activePatientId, view);
+  syncMobileLogViewControl();
   renderMobileLogRecent();
 });
 

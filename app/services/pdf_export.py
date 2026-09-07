@@ -2006,6 +2006,161 @@ def _format_journal_export_when(iso: str | None) -> str:
     return f"{date} {hour}:{eastern.strftime('%M %p')}"
 
 
+def _format_journal_export_time(iso: str | None) -> str:
+    dt = _parse_iso_datetime(iso)
+    if not dt:
+        return "—"
+    eastern = _to_eastern(dt)
+    hour = eastern.strftime("%I").lstrip("0") or "12"
+    return f"{hour}:{eastern.strftime('%M %p')}"
+
+
+def _format_journal_export_day_heading(iso: str | None) -> str:
+    dt = _parse_iso_datetime(iso)
+    if not dt:
+        return "Unknown day"
+    eastern = _to_eastern(dt)
+    return eastern.strftime("%A, %b %d, %Y").replace(" 0", " ")
+
+
+def _group_journal_for_timeline(
+    entries: list[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Newest days first; within each day chronological (oldest→newest), one row each."""
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for entry in entries:
+        raw = entry.get("recorded_at") or entry.get("created_at")
+        dt = _parse_iso_datetime(str(raw) if raw else None)
+        key = _to_eastern(dt).strftime("%Y-%m-%d") if dt else "unknown"
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(entry)
+    groups: list[tuple[str, list[dict[str, Any]]]] = []
+    for key in order:
+        day_rows = list(buckets[key])
+        day_rows.sort(
+            key=lambda e: str(e.get("recorded_at") or e.get("created_at") or "")
+        )
+        groups.append((key, day_rows))
+    return groups
+
+
+def _write_journal_timeline(pdf: FPDF, rows: list[dict[str, Any]]) -> None:
+    """Vertical day-grouped timeline: dedicated row per entry (no overlapping labels)."""
+    usable = pdf.w - pdf.l_margin - pdf.r_margin
+    time_w = 22.0
+    rail_x = pdf.l_margin + time_w + 4.0
+    body_x = rail_x + 6.0
+    body_w = max(usable - (body_x - pdf.l_margin), 40.0)
+    accent = (14, 116, 144)
+    muted = (100, 100, 100)
+    ink = (30, 30, 30)
+
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*accent)
+    pdf.cell(0, 6, "Timeline", new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(*muted)
+    pdf.cell(
+        0,
+        4,
+        _safe_text("One row per entry · chronological within each day"),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    pdf.ln(1.5)
+
+    groups = _group_journal_for_timeline(rows)
+    for day_key, day_rows in groups:
+        sample = day_rows[0].get("recorded_at") or day_rows[0].get("created_at")
+        if pdf.get_y() + 18 > pdf.h - pdf.b_margin:
+            pdf.add_page()
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*ink)
+        pdf.cell(
+            0,
+            5.5,
+            _safe_text(_format_journal_export_day_heading(str(sample) if sample else None)),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        pdf.ln(0.5)
+
+        for idx, entry in enumerate(day_rows):
+            label = str(entry.get("label") or "—").strip() or "—"
+            kind = str(entry.get("kind") or "note").strip() or "note"
+            sev = entry.get("severity")
+            sev_text = f"{sev}/5" if sev is not None else ""
+            detail = (entry.get("text") or "").strip()
+            when = _format_journal_export_time(
+                str(entry.get("recorded_at") or entry.get("created_at") or "")
+            )
+            line1 = f"{kind} · {label}"
+            if sev_text:
+                line1 = f"{line1} · {sev_text}"
+            line1 = _safe_text(line1)
+            detail_safe = _safe_text(detail) if detail else ""
+
+            pdf.set_font("Helvetica", "", 8)
+            line1_h = 4.2
+            detail_h = 0.0
+            if detail_safe:
+                # Reserve space for up to 2 wrapped detail lines without colliding next row.
+                detail_h = min(pdf.get_string_width(detail_safe) / max(body_w, 1) * 3.8 + 3.8, 8.0)
+            row_h = max(8.5, line1_h + detail_h + 2.0)
+
+            if pdf.get_y() + row_h > pdf.h - pdf.b_margin - 2:
+                pdf.add_page()
+                # Repeat day heading after page break
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(*ink)
+                pdf.cell(
+                    0,
+                    5.5,
+                    _safe_text(
+                        f"{_format_journal_export_day_heading(str(sample) if sample else None)} (cont.)"
+                    ),
+                    new_x="LMARGIN",
+                    new_y="NEXT",
+                )
+                pdf.ln(0.5)
+
+            y0 = pdf.get_y()
+            y_mid = y0 + 3.2
+            y1 = y0 + row_h
+
+            # Spine segment — continuous within the day, exclusive per-row body.
+            pdf.set_draw_color(*accent)
+            pdf.set_line_width(0.45)
+            line_top = y0 if idx > 0 else y_mid
+            line_bot = y1 if idx < len(day_rows) - 1 else y_mid
+            pdf.line(rail_x, line_top, rail_x, line_bot)
+            pdf.set_fill_color(*accent)
+            pdf.ellipse(rail_x - 1.3, y_mid - 1.3, 2.6, 2.6, style="F")
+
+            pdf.set_xy(pdf.l_margin, y0 + 1.2)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*muted)
+            pdf.cell(time_w, 4, _safe_text(when), align="R")
+
+            pdf.set_xy(body_x, y0 + 1.0)
+            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.set_text_color(*ink)
+            pdf.cell(body_w, line1_h, line1[:90], new_x="LMARGIN", new_y="NEXT")
+            if detail_safe:
+                pdf.set_x(body_x)
+                pdf.set_font("Helvetica", "", 7.5)
+                pdf.set_text_color(*muted)
+                pdf.multi_cell(body_w, 3.6, detail_safe[:160], new_x="LMARGIN", new_y="NEXT")
+
+            # Advance past this exclusive row so the next entry cannot overlap.
+            pdf.set_y(max(pdf.get_y(), y1))
+
+        pdf.ln(2.5)
+
+
 def build_journal_pdf(
     entries: list[dict[str, Any]],
     *,
@@ -2075,6 +2230,12 @@ def build_journal_pdf(
             new_y="NEXT",
         )
     else:
+        _write_journal_timeline(pdf, rows)
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(14, 116, 144)
+        pdf.cell(0, 6, "Entry list", new_x="LMARGIN", new_y="NEXT", align="L")
+        pdf.ln(1)
         _write_med_table_header(pdf, cols, row_h=header_h)
         for idx, entry in enumerate(rows):
             sev = entry.get("severity")
