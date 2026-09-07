@@ -1565,6 +1565,24 @@ function isMobileLogLayout() {
   return window.matchMedia("(max-width: 600px)").matches;
 }
 
+function isSusanPatient(patientId = state.activePatientId, patientLabel = null) {
+  const id = String(patientId || "").toLowerCase();
+  const label = String(
+    patientLabel ||
+      document.getElementById("header-patient-name")?.textContent ||
+      ""
+  ).toLowerCase();
+  return id.includes("susan") || label.includes("susan") || label.includes("brajtman");
+}
+
+function syncPatientSpecificLogTiles() {
+  document.querySelectorAll("[data-for-patient]").forEach((el) => {
+    const key = String(el.getAttribute("data-for-patient") || "").toLowerCase();
+    const show = key === "susan" ? isSusanPatient() : true;
+    el.classList.toggle("hidden", !show);
+  });
+}
+
 function preferredHomeSection() {
   return isMobileLogLayout() ? "log" : state.homeSection || "log";
 }
@@ -1602,7 +1620,10 @@ function setHomeSection(section, { scroll = false } = {}) {
     pane.classList.toggle("hidden", pane.dataset.homePane !== next);
   });
   syncStickyHeaderOffset();
-  if (next === "log") renderMobileLogRecent();
+  if (next === "log") {
+    renderMobileLogRecent();
+    syncPatientSpecificLogTiles();
+  }
   if (changed && (next === "diagnostics" || next === "journal" || next === "medications" || next === "log")) {
     refreshActivePatientProfile().catch(() => {});
   }
@@ -7708,8 +7729,10 @@ async function loadCaseContext() {
     state.coverageReport = null;
     if (ctx.patient_id) {
       syncMobileLogRangeControl();
+      syncPatientSpecificLogTiles();
       await refreshActivePatientProfile();
     } else {
+      syncPatientSpecificLogTiles();
       renderPatientProfile({}, null);
     }
     if (state.homeSection === "coverage") {
@@ -7855,6 +7878,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderJournalHome(profile, journalSeries);
   renderMedicationsHome(profile);
   renderMedSafetyResult(profile?.medication_safety);
+  syncPatientSpecificLogTiles();
 }
 
 function parseConditionsInput(raw) {
