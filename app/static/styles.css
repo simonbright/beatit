@@ -723,6 +723,11 @@ body {
   flex-shrink: 0;
 }
 
+.log-tile-order-scope {
+  margin: 0 0 0.55rem;
+  width: 100%;
+}
+
 .mobile-log-footer .btn {
   flex: 1 1 auto;
   min-height: 2.75rem;

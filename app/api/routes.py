@@ -3775,6 +3775,22 @@ class PatientLogTileRenameRequest(BaseModel):
     label: str = Field(min_length=1, max_length=80)
 
 
+def _patient_profile_payload(patient_id: str, profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    body_profile = profile if profile is not None else get_patient_profile(patient_id)
+    payload: dict[str, Any] = {
+        "profile": body_profile,
+        "diagnostic_series": group_diagnostics_for_charts(body_profile),
+        "journal_series": group_journal_for_charts(body_profile),
+    }
+    if patient:
+        payload["patient"] = {"id": patient["id"], "label": patient["label"]}
+    else:
+        payload["patient"] = {"id": patient_id, "label": patient_id}
+    return payload
+
+
 @router.post("/patients/{patient_id}/log-tiles")
 async def api_add_patient_log_tile(patient_id: str, body: PatientLogTileCreateRequest):
     try:
@@ -3788,13 +3804,9 @@ async def api_add_patient_log_tile(patient_id: str, body: PatientLogTileCreateRe
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if entry is None:
         raise HTTPException(status_code=404, detail="Patient not found")
-    profile = get_patient_profile(patient_id)
-    return {
-        "log_tile": entry,
-        "profile": profile,
-        "diagnostic_series": group_diagnostics_for_charts(profile),
-        "journal_series": group_journal_for_charts(profile),
-    }
+    payload = _patient_profile_payload(patient_id)
+    payload["log_tile"] = entry
+    return payload
 
 
 @router.put("/patients/{patient_id}/log-tiles/order")
@@ -3802,13 +3814,9 @@ async def api_set_patient_log_tile_order(patient_id: str, body: PatientLogTileOr
     order = set_patient_log_tile_order(patient_id, body.order or [])
     if order is None:
         raise HTTPException(status_code=404, detail="Patient not found")
-    profile = get_patient_profile(patient_id)
-    return {
-        "order": order,
-        "profile": profile,
-        "diagnostic_series": group_diagnostics_for_charts(profile),
-        "journal_series": group_journal_for_charts(profile),
-    }
+    payload = _patient_profile_payload(patient_id)
+    payload["order"] = order
+    return payload
 
 
 @router.patch("/patients/{patient_id}/log-tiles/{tile_id}")
@@ -3823,13 +3831,9 @@ async def api_rename_patient_log_tile(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if entry is None:
         raise HTTPException(status_code=404, detail="Log option not found")
-    profile = get_patient_profile(patient_id)
-    return {
-        "log_tile": entry,
-        "profile": profile,
-        "diagnostic_series": group_diagnostics_for_charts(profile),
-        "journal_series": group_journal_for_charts(profile),
-    }
+    payload = _patient_profile_payload(patient_id)
+    payload["log_tile"] = entry
+    return payload
 
 
 @router.delete("/patients/{patient_id}/log-tiles/{tile_id}")
@@ -3837,13 +3841,9 @@ async def api_delete_patient_log_tile(patient_id: str, tile_id: str):
     ok = delete_patient_log_tile(patient_id, tile_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Log option not found")
-    profile = get_patient_profile(patient_id)
-    return {
-        "ok": True,
-        "profile": profile,
-        "diagnostic_series": group_diagnostics_for_charts(profile),
-        "journal_series": group_journal_for_charts(profile),
-    }
+    payload = _patient_profile_payload(patient_id)
+    payload["ok"] = True
+    return payload
 
 
 class PatientMilestoneCreateRequest(BaseModel):

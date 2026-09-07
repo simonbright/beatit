@@ -1878,10 +1878,14 @@ function isLogTileVisible(def) {
 }
 
 function resolveLogTileOrder(profile = state.patientProfile) {
-  const customKeys = getCustomLogTiles(profile).map((t) => customLogTileKey(t.id));
+  if (!state.activePatientId) return [];
+  if (state.patientProfileId && state.patientProfileId !== state.activePatientId) return [];
+  const source = profile || {};
+  const customKeys = getCustomLogTiles(source).map((t) => customLogTileKey(t.id));
   const known = new Set([...Object.keys(BUILTIN_LOG_TILES), ...customKeys]);
   const ordered = [];
-  for (const raw of profile?.log_tile_order || []) {
+  // Patient-specific saved order (from this person's profile.json).
+  for (const raw of source.log_tile_order || []) {
     const key = String(raw || "").trim();
     if (!key || !known.has(key) || ordered.includes(key)) continue;
     ordered.push(key);
@@ -1892,7 +1896,7 @@ function resolveLogTileOrder(profile = state.patientProfile) {
   for (const key of customKeys) {
     if (!ordered.includes(key)) ordered.push(key);
   }
-  return ordered.filter((key) => isLogTileVisible(resolveLogTileDef(key, profile)));
+  return ordered.filter((key) => isLogTileVisible(resolveLogTileDef(key, source)));
 }
 
 function emptyPatientCopy(readyCopy) {
@@ -1904,6 +1908,10 @@ function renderMobileLogTiles(profile = state.patientProfile) {
   if (!grid) return;
   if (!state.activePatientId) {
     grid.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see log options."))}</p>`;
+    return;
+  }
+  if (!state.patientProfileId || state.patientProfileId !== state.activePatientId) {
+    grid.innerHTML = `<p class="muted small">Loading…</p>`;
     return;
   }
   const order = resolveLogTileOrder(profile);
@@ -1936,12 +1944,19 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
     el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("No patient selected."))}</p>`;
     return;
   }
+  if (!state.patientProfileId || state.patientProfileId !== state.activePatientId) {
+    el.innerHTML = `<p class="muted small">Loading…</p>`;
+    return;
+  }
+  const who = state.activePatientLabel ? ` for ${state.activePatientLabel}` : " for this person";
   const order = resolveLogTileOrder(profile);
   if (!order.length) {
     el.innerHTML = `<p class="muted small">No tiles yet.</p>`;
     return;
   }
-  el.innerHTML = order
+  el.innerHTML =
+    `<p class="muted small log-tile-order-scope">Order is saved per person${escapeHtml(who)}.</p>` +
+    order
     .map((key, index) => {
       const def = resolveLogTileDef(key, profile);
       if (!def) return "";
@@ -2019,8 +2034,9 @@ async function saveAddLogOption() {
 }
 
 async function persistLogTileOrder(order) {
-  if (!state.activePatientId) return;
-  const res = await fetch(`/api/patients/${state.activePatientId}/log-tiles/order`, {
+  const patientId = state.activePatientId;
+  if (!patientId) return;
+  const res = await fetch(`/api/patients/${patientId}/log-tiles/order`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ order }),
@@ -2029,10 +2045,20 @@ async function persistLogTileOrder(order) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Could not save order");
   }
-  applyProfileResponse(await res.json());
+  // Ignore if the active patient changed while saving.
+  if (state.activePatientId !== patientId) return;
+  const data = await res.json();
+  if (state.activePatientId !== patientId) return;
+  applyProfileResponse({
+    ...data,
+    patient: data.patient || { id: patientId },
+  });
 }
 
 async function moveLogTile(key, dir) {
+  const patientId = state.activePatientId;
+  if (!patientId) return;
+  if (state.patientProfileId && state.patientProfileId !== patientId) return;
   const profile = state.patientProfile || {};
   const order = resolveLogTileOrder(profile);
   const idx = order.indexOf(key);
@@ -2057,6 +2083,7 @@ async function moveLogTile(key, dir) {
   for (const k of known) {
     if (!saved.includes(k)) saved.push(k);
   }
+  if (state.activePatientId !== patientId) return;
   await persistLogTileOrder(saved);
 }
 
@@ -8206,7 +8233,11 @@ async function loadCaseContext() {
     state.coverageReport = null;
     if (ctx.patient_id) {
       syncMobileLogRangeControl();
-      syncPatientSpecificLogTiles();
+      // Clear tiles until this patient's profile loads — never reuse prior person's order.
+      const grid = document.getElementById("mobile-log-grid");
+      if (grid) grid.innerHTML = `<p class="muted small">Loading…</p>`;
+      const orderEl = document.getElementById("log-tiles-order-list");
+      if (orderEl) orderEl.innerHTML = `<p class="muted small">Loading…</p>`;
       await refreshActivePatientProfile();
     } else {
       syncPatientSpecificLogTiles();
