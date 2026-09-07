@@ -61,6 +61,11 @@
           </svg>
         </button>
         <div class="status-pill hidden" id="llm-status" aria-live="polite"></div>
+        <button type="button" class="header-icon-btn" id="btn-header-chat" aria-label="AI Chat" title="AI Chat">
+          <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button type="button" class="header-icon-btn" id="btn-journal" aria-label="How are you?" title="How are you?">
           <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
@@ -98,10 +103,6 @@
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
           <span class="tab-icon-label">Home</span>
         </button>
-        <button class="tab tab-icon" data-tab="options-chat" role="tab" title="AI Chat" aria-label="AI Chat">
-          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-          <span class="tab-icon-label">Chat</span>
-        </button>
         <button class="tab tab-icon" data-tab="custom-tasks" role="tab" title="Custom Tasks" aria-label="Custom Tasks">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="tab-icon-label">Tasks</span>
@@ -109,10 +110,6 @@
         <button class="tab tab-icon" data-tab="library" role="tab" title="Library" aria-label="Library">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
           <span class="tab-icon-label">Library</span>
-        </button>
-        <button class="tab tab-icon" data-tab="history" role="tab" title="History" aria-label="History">
-          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          <span class="tab-icon-label">History</span>
         </button>
         <button class="tab tab-icon" data-tab="settings" role="tab" title="Settings" aria-label="Settings">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -1175,17 +1172,7 @@
       </div>
     </section>
 
-    <!-- HISTORY -->
-    <section id="panel-history" class="panel">
-      <div class="card">
-        <div class="row-between">
-          <h3>Assessment history</h3>
-          <button class="btn secondary" id="btn-refresh-history">Refresh</button>
-        </div>
-        <p class="muted small">All past assessments, newest first. Each entry is timestamped.</p>
-        <div id="history-list" class="history-list"></div>
-      </div>
-    </section>
+    <!-- HISTORY moved under Settings → Historical Assessments -->
 
     <!-- HOW TO -->
     <section id="panel-howto" class="panel">
@@ -1246,7 +1233,7 @@
       <details class="card howto-section">
         <summary class="howto-section-summary">AI Chat — live guided analysis</summary>
         <div class="howto-section-body">
-          <p>Use the <strong>AI Chat</strong> tab for deep, multi-turn discussion of treatment pathways. It reads your library selection and the current Home assessment, then lets you steer.</p>
+          <p>Use the <strong>chat icon</strong> in the header for deep, multi-turn discussion of treatment pathways. It reads your library selection and the current Home assessment, then lets you steer.</p>
           <ul>
             <li>Start with a broad compare, then ask to go deeper on one regimen, trial class, biomarker, or surgical decision.</li>
             <li>Starter prompts are available for common deep dives.</li>
@@ -1309,15 +1296,15 @@
       </details>
 
       <details class="card howto-section">
-        <summary class="howto-section-summary">History, Settings &amp; audit</summary>
+        <summary class="howto-section-summary">Settings &amp; audit</summary>
         <div class="howto-section-body">
           <ul>
-            <li><strong>History</strong> — past assessments, newest first.</li>
+            <li><strong>Settings → Historical Assessments</strong> — past assessments, newest first.</li>
             <li><strong>Settings</strong> — patient context, source label names, LLM model.</li>
             <li><strong>Audit trail</strong> — who changed what: uploads, analyses, comments, sign-ins.</li>
           </ul>
           <div class="howto-go howto-go-row">
-            <button type="button" class="btn secondary" data-howto-nav="history">History</button>
+            <button type="button" class="btn secondary" data-howto-nav="history">Historical Assessments</button>
             <button type="button" class="btn secondary" data-howto-nav="settings">Settings</button>
           </div>
         </div>
@@ -1339,6 +1326,10 @@
         <button type="button" class="section-subtab" data-settings-section="analysis" role="tab" aria-selected="false" title="Analysis context">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 14l3-5 3 3 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="section-subtab-label">Analysis</span>
+        </button>
+        <button type="button" class="section-subtab" data-settings-section="assessments" role="tab" aria-selected="false" title="Historical assessments">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Historical Assessments</span>
         </button>
         <button type="button" class="section-subtab" data-settings-section="labels" role="tab" aria-selected="false" title="Source labels">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4 12.7 5.5a2 2 0 0 0-1.4-.6H5a2 2 0 0 0-2 2v6.3a2 2 0 0 0 .6 1.4l7.9 7.9a2 2 0 0 0 2.8 0l6.3-6.3a2 2 0 0 0 0-2.8z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor"/></svg>
@@ -1663,6 +1654,17 @@
           <span class="muted small">Cited as [SOURCE: Patient context] when used in assessments. Wrong context causes wrong assessments.</span>
           <button class="btn primary" id="btn-save-patient">Save patient context</button>
         </div>
+      </div>
+      </div>
+
+      <div id="settings-pane-assessments" class="section-pane hidden" data-settings-pane="assessments">
+      <div class="card settings-card">
+        <div class="row-between">
+          <h3>Historical Assessments</h3>
+          <button class="btn secondary" id="btn-refresh-history">Refresh</button>
+        </div>
+        <p class="muted small">All past assessments, newest first. Each entry is timestamped.</p>
+        <div id="history-list" class="history-list"></div>
       </div>
       </div>
 

@@ -1485,6 +1485,11 @@ function switchTab(name, options = {}) {
     name = "library";
     options = { ...options, libraryView: "imaging" };
   }
+  // History moved under Settings → Historical Assessments
+  if (name === "history") {
+    name = "settings";
+    options = { ...options, settingsSection: "assessments" };
+  }
   if (!VALID_TABS.has(name)) return;
   const navTab = MAIN_NAV_TABS.has(name) ? name : null;
   $$(".tab").forEach((t) => {
@@ -1503,7 +1508,6 @@ function switchTab(name, options = {}) {
     setLibraryView(options.libraryView || state.libraryView || "documents");
     if (options.openAdd) openLibraryAddPanel();
   }
-  if (name === "history") loadHistory();
   if (name === "analyze") {
     loadLatestAssessment();
     loadChatObservations().catch(() => {});
@@ -1565,7 +1569,7 @@ const HOME_SECTIONS = new Set([
   "gaps",
   "run",
 ]);
-const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "labels", "llm", "access", "audit"]);
+const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "assessments", "labels", "llm", "access", "audit"]);
 
 function isMobileLogLayout() {
   return window.matchMedia("(max-width: 600px)").matches;
@@ -1993,6 +1997,9 @@ function setSettingsSection(section, { scroll = false, focusSelector = null } = 
   if (next === "access") {
     loadAuthUsers().catch((e) => toast(e.message || "Could not load users", "error"));
   }
+  if (next === "assessments") {
+    loadHistory().catch((e) => toast(e.message, "error"));
+  }
   if (next === "audit") {
     loadAuditTrail(true).catch(() => {});
   }
@@ -2065,6 +2072,7 @@ function closeLibraryAddPanel() {
 function applyTabUi(name) {
   if (name === "imaging") name = "library";
   if (name === "ingest") name = "library";
+  if (name === "history") name = "settings";
   if (!VALID_TABS.has(name)) return;
   const navTab = MAIN_NAV_TABS.has(name) ? name : null;
   $$(".tab").forEach((t) => {
@@ -2885,10 +2893,8 @@ const VALID_TABS = new Set([
 ]);
 const MAIN_NAV_TABS = new Set([
   "analyze",
-  "options-chat",
   "custom-tasks",
   "library",
-  "history",
   "settings",
 ]);
 const IMAGING_VISION_SLICE_LIMIT = 3;
@@ -11656,6 +11662,10 @@ document.getElementById("btn-delete-edit-journal")?.addEventListener("click", as
   if (!entryId) return;
   const ok = await deleteJournalEntry(entryId);
   if (ok) closeEditJournalModal();
+});
+
+document.getElementById("btn-header-chat")?.addEventListener("click", () => {
+  switchTab("options-chat");
 });
 
 document.getElementById("btn-journal")?.addEventListener("click", () => {
