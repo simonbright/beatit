@@ -32,6 +32,7 @@ const state = {
   chatSelectionContext: { excerpt: "", messageId: null },
   activePatientId: null,
   activeCaseId: null,
+  activePatientLabel: null,
   patientProfileId: null,
   mobileLogDays: 1,
   diagnosticPresets: [],
@@ -1569,6 +1570,7 @@ function isSusanPatient(patientId = state.activePatientId, patientLabel = null) 
   const id = String(patientId || "").toLowerCase();
   const label = String(
     patientLabel ||
+      state.activePatientLabel ||
       document.getElementById("header-patient-name")?.textContent ||
       ""
   ).toLowerCase();
@@ -7719,6 +7721,7 @@ async function loadCaseContext() {
     const prevPatientId = state.activePatientId;
     state.activePatientId = ctx.patient_id || null;
     state.activeCaseId = ctx.case_id || null;
+    state.activePatientLabel = ctx.patient_label || label || null;
     if (prevPatientId !== state.activePatientId) {
       clearPatientScopedLogState({ keepPatientId: true });
     } else {
@@ -9804,18 +9807,49 @@ const QUICK_SCALE_ENTRIES = {
   },
 };
 
-function openQuickScale(key) {
-  const entry = QUICK_SCALE_ENTRIES[key];
-  if (!entry) return;
+function resolveQuickScaleKey(raw) {
+  const text = String(raw || "").trim().toLowerCase();
+  if (!text) return null;
+  if (QUICK_SCALE_ENTRIES[text]) return text;
+  for (const [key, entry] of Object.entries(QUICK_SCALE_ENTRIES)) {
+    if (String(entry.label || "").toLowerCase() === text) return key;
+  }
+  if (text.includes("esophageal")) return "esophageal-spasm";
+  if (text.includes("nauseous") || text === "nauseous") return "nauseous";
+  if (text === "weak" || text.includes("feel weak")) return "weak";
+  return null;
+}
+
+function openQuickScale(keyOrLabel) {
+  const key = resolveQuickScaleKey(keyOrLabel);
+  const entry = key ? QUICK_SCALE_ENTRIES[key] : null;
+  if (!entry) {
+    toast("Could not open severity scale", "error");
+    return;
+  }
   state.quickScaleKey = key;
+  const modal = document.getElementById("modal-quick-scale");
   const title = document.getElementById("quick-scale-title");
   const hint = document.getElementById("quick-scale-hint");
+  const levels = document.getElementById("quick-scale-levels");
   if (title) title.textContent = entry.title;
   if (hint) hint.textContent = entry.hint;
   document.querySelectorAll("#quick-scale-levels .quick-scale-btn").forEach((btn) => {
     btn.disabled = false;
+    btn.classList.remove("is-selected");
   });
+  if (!modal || !levels) {
+    toast("Severity scale unavailable — refresh the page", "error");
+    return;
+  }
+  // Close the full journal if it was open so the scale is front and center.
+  hideModal("modal-journal");
   showModal("modal-quick-scale");
+  modal.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    levels.querySelector(".quick-scale-btn")?.focus?.();
+    levels.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
 }
 
 async function submitQuickScale(severity) {
@@ -10880,19 +10914,23 @@ document.getElementById("btn-journal-open-home")?.addEventListener("click", () =
 });
 
 document.getElementById("mobile-log-grid")?.addEventListener("click", (event) => {
-  const instant = event.target.closest("[data-quick-log]");
+  const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+  if (!target?.closest) return;
+  const instant = target.closest("[data-quick-log]");
   if (instant) {
+    event.preventDefault();
     quickLogInstant(instant.getAttribute("data-quick-log")).catch((e) =>
       toast(e.message || "Log failed", "error")
     );
     return;
   }
-  const scale = event.target.closest("[data-quick-scale]");
+  const scale = target.closest("[data-quick-scale]");
   if (scale) {
+    event.preventDefault();
     openQuickScale(scale.getAttribute("data-quick-scale"));
     return;
   }
-  const open = event.target.closest("[data-quick-open]");
+  const open = target.closest("[data-quick-open]");
   if (open) openJournalForQuick(open.getAttribute("data-quick-open"));
 });
 
@@ -10993,10 +11031,17 @@ document.getElementById("modal-journal")?.addEventListener("click", (event) => {
 document.getElementById("journal-feeling-chips")?.addEventListener("click", (event) => {
   const chip = event.target.closest(".journal-chip");
   if (!chip) return;
+  const label = chip.dataset.label || "";
+  const scaleKey = resolveQuickScaleKey(label);
+  // Scale-required items open the 1–5 severity bar immediately.
+  if (scaleKey === "esophageal-spasm" || scaleKey === "nauseous" || scaleKey === "weak") {
+    openQuickScale(scaleKey);
+    return;
+  }
   const draft = state.journalDraft || emptyJournalDraft();
   draft.feelings = toggleJournalSelection(draft.feelings || [], {
     kind: chip.dataset.kind || "feeling",
-    label: chip.dataset.label || "",
+    label,
   });
   state.journalDraft = draft;
   updateJournalDraftUi();
