@@ -9097,6 +9097,7 @@ function defaultJournalPresets() {
     { label: "Feel Weak", kind: "feeling" },
     { label: "Weak", kind: "feeling" },
     { label: "Feel Nauseous", kind: "symptom" },
+    { label: "Esophageal Spasm", kind: "symptom" },
     { label: "Headache", kind: "symptom" },
     { label: "Nauseous", kind: "symptom" },
     { label: "Dizzy", kind: "symptom" },
@@ -9771,6 +9772,12 @@ function openJournalForQuick(mode) {
 const QUICK_SCALE_ENTRIES = {
   nauseous: { kind: "symptom", label: "Feel Nauseous", title: "Feel Nauseous", hint: "How nauseous? Tap a level to log" },
   weak: { kind: "feeling", label: "Feel Weak", title: "Feel Weak", hint: "How weak? Tap a level to log" },
+  "esophageal-spasm": {
+    kind: "symptom",
+    label: "Esophageal Spasm",
+    title: "Esophageal Spasm",
+    hint: "How intense? Tap a level to log",
+  },
 };
 
 function openQuickScale(key) {

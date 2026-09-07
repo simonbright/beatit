@@ -674,6 +674,7 @@ JOURNAL_PRESETS = [
     {"label": "Feel Weak", "kind": "feeling"},
     {"label": "Weak", "kind": "feeling"},
     {"label": "Feel Nauseous", "kind": "symptom"},
+    {"label": "Esophageal Spasm", "kind": "symptom"},
     {"label": "Headache", "kind": "symptom"},
     {"label": "Nauseous", "kind": "symptom"},
     {"label": "Dizzy", "kind": "symptom"},
