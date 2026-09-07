@@ -761,12 +761,59 @@ body {
 .mobile-log-recent-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: 0.35rem 0.75rem;
-  padding: 0.55rem 0.65rem;
+  padding: 0.45rem 0.55rem;
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface, #fff) 88%, #000 4%);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.mobile-log-recent-main {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0.15rem 0.2rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mobile-log-recent-row-actions,
+.journal-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.modal-edit-journal-card {
+  max-width: 24rem;
+}
+
+.modal-edit-journal-card label {
+  display: block;
+  margin-top: 0.65rem;
+}
+
+.edit-journal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.edit-journal-actions #btn-delete-edit-journal {
+  margin-right: auto;
 }
 
 .modal-quick-scale-card {

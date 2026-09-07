@@ -9435,7 +9435,10 @@ function formatJournalListRow(j) {
   const text = j.text ? ` · ${j.text}` : "";
   return `<div class="patient-measurement-row" data-id="${escapeHtml(j.id)}">
     <div><span class="journal-kind-tag">${escapeHtml(j.kind || "note")}</span><strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${escapeHtml(text)} · ${escapeHtml(formatJournalDateTime(j.recorded_at))}</div>
-    <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Remove</button>
+    <div class="journal-row-actions">
+      <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
+      <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
+    </div>
   </div>`;
 }
 
@@ -9852,7 +9855,10 @@ function renderJournalHome(profile, series) {
             <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${text}
             <div class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</div>
           </div>
-          <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Remove</button>
+          <div class="journal-row-actions">
+            <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
+            <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
+          </div>
         </div>`;
       })
       .join("");
@@ -10001,9 +10007,15 @@ function renderMobileLogRecent() {
   el.innerHTML = entries
     .map((j) => {
       const sev = j.severity != null ? ` · ${j.severity}/5` : "";
-      return `<div class="mobile-log-recent-row">
-        <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}
-        <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
+      return `<div class="mobile-log-recent-row" data-id="${escapeHtml(j.id)}">
+        <button type="button" class="mobile-log-recent-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
+          <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}
+          <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
+        </button>
+        <div class="mobile-log-recent-row-actions">
+          <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
+          <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
+        </div>
       </div>`;
     })
     .join("");
@@ -11293,29 +11305,143 @@ document.getElementById("patient-diagnostics-list")?.addEventListener("click", a
   applyProfileResponse(data);
 });
 
-async function deleteJournalEntry(entryId) {
-  if (!state.activePatientId || !entryId) return;
+async function deleteJournalEntry(entryId, { confirmDelete = true } = {}) {
+  if (!state.activePatientId || !entryId) return false;
+  if (confirmDelete && !confirm("Delete this log entry?")) return false;
   const res = await fetch(`/api/patients/${state.activePatientId}/journal/${entryId}`, {
     method: "DELETE",
   });
   if (!res.ok) {
-    toast("Could not remove self-report", "error");
-    return;
+    toast("Could not delete log entry", "error");
+    return false;
   }
   const data = await res.json();
   applyProfileResponse(data);
+  toast("Deleted");
+  return true;
 }
 
-document.getElementById("patient-journal-list")?.addEventListener("click", async (event) => {
-  const btn = event.target.closest(".btn-delete-journal");
-  if (!btn) return;
-  await deleteJournalEntry(btn.dataset.id);
-});
+function toDatetimeLocalValue(iso) {
+  const d = new Date(iso || "");
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
-document.getElementById("journal-recent")?.addEventListener("click", async (event) => {
-  const btn = event.target.closest(".btn-delete-journal");
-  if (!btn) return;
-  await deleteJournalEntry(btn.dataset.id);
+function findJournalEntryById(entryId) {
+  return (state.patientProfile?.journal || []).find((j) => j.id === entryId) || null;
+}
+
+function openEditJournalModal(entryId) {
+  const entry = findJournalEntryById(entryId);
+  if (!entry) return toast("Log entry not found", "error");
+  const idEl = document.getElementById("edit-journal-id");
+  const labelEl = document.getElementById("edit-journal-label");
+  const kindEl = document.getElementById("edit-journal-kind");
+  const sevEl = document.getElementById("edit-journal-severity");
+  const textEl = document.getElementById("edit-journal-text");
+  const whenEl = document.getElementById("edit-journal-when");
+  if (!idEl || !labelEl || !kindEl || !sevEl || !textEl || !whenEl) {
+    return toast("Edit form unavailable — refresh the page", "error");
+  }
+  idEl.value = entry.id || "";
+  labelEl.value = entry.label || "";
+  kindEl.value = entry.kind || "note";
+  sevEl.value = entry.severity != null ? String(entry.severity) : "";
+  textEl.value = entry.text || "";
+  whenEl.value = toDatetimeLocalValue(entry.recorded_at || entry.created_at);
+  showModal("modal-edit-journal");
+  requestAnimationFrame(() => labelEl.focus());
+}
+
+function closeEditJournalModal() {
+  hideModal("modal-edit-journal");
+  const idEl = document.getElementById("edit-journal-id");
+  if (idEl) idEl.value = "";
+}
+
+async function saveEditJournalEntry() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const entryId = document.getElementById("edit-journal-id")?.value;
+  if (!entryId) return;
+  const label = document.getElementById("edit-journal-label")?.value.trim() || "";
+  if (!label) return toast("Enter what was logged", "error");
+  const kind = document.getElementById("edit-journal-kind")?.value || "note";
+  const sevRaw = document.getElementById("edit-journal-severity")?.value || "";
+  const text = document.getElementById("edit-journal-text")?.value.trim() || "";
+  const whenRaw = document.getElementById("edit-journal-when")?.value || "";
+  let recorded_at = null;
+  if (whenRaw) {
+    const local = new Date(whenRaw);
+    recorded_at = Number.isNaN(local.getTime()) ? whenRaw : local.toISOString();
+  }
+  const body = {
+    kind,
+    label,
+    text,
+    recorded_at,
+    clear_severity: !sevRaw,
+    severity: sevRaw ? Number(sevRaw) : null,
+  };
+  const btn = document.getElementById("btn-save-edit-journal");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/journal/${entryId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save changes");
+    }
+    applyProfileResponse(await res.json());
+    closeEditJournalModal();
+    toast("Log updated");
+  } catch (err) {
+    toast(err.message || "Could not save changes", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function handleJournalListClick(event) {
+  const editBtn = event.target.closest(".btn-edit-journal");
+  if (editBtn) {
+    event.preventDefault();
+    openEditJournalModal(editBtn.dataset.id);
+    return;
+  }
+  const delBtn = event.target.closest(".btn-delete-journal");
+  if (delBtn) {
+    event.preventDefault();
+    deleteJournalEntry(delBtn.dataset.id).catch((e) =>
+      toast(e.message || "Could not delete", "error")
+    );
+  }
+}
+
+document.getElementById("patient-journal-list")?.addEventListener("click", handleJournalListClick);
+document.getElementById("journal-recent")?.addEventListener("click", handleJournalListClick);
+document.getElementById("mobile-log-recent")?.addEventListener("click", handleJournalListClick);
+
+document.getElementById("btn-close-edit-journal")?.addEventListener("click", () => {
+  closeEditJournalModal();
+});
+document.getElementById("btn-cancel-edit-journal")?.addEventListener("click", () => {
+  closeEditJournalModal();
+});
+document.getElementById("modal-edit-journal")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-edit-journal") closeEditJournalModal();
+});
+document.getElementById("btn-save-edit-journal")?.addEventListener("click", () => {
+  saveEditJournalEntry().catch((e) => toast(e.message || "Could not save", "error"));
+});
+document.getElementById("btn-delete-edit-journal")?.addEventListener("click", async () => {
+  const entryId = document.getElementById("edit-journal-id")?.value;
+  if (!entryId) return;
+  const ok = await deleteJournalEntry(entryId);
+  if (ok) closeEditJournalModal();
 });
 
 document.getElementById("btn-journal")?.addEventListener("click", () => {

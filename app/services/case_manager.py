@@ -793,6 +793,57 @@ def delete_patient_journal_entry(patient_id: str, entry_id: str) -> bool:
     return True
 
 
+def update_patient_journal_entry(
+    patient_id: str,
+    entry_id: str,
+    *,
+    kind: str | None = None,
+    label: str | None = None,
+    text: str | None = None,
+    severity: int | None = None,
+    clear_severity: bool = False,
+    recorded_at: str | None = None,
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    journal = list(profile.get("journal") or [])
+    idx = next((i for i, j in enumerate(journal) if j.get("id") == entry_id), None)
+    if idx is None:
+        return None
+    entry = dict(journal[idx])
+    if kind is not None:
+        kind_clean = (kind or "").strip().lower()
+        if kind_clean not in JOURNAL_KINDS:
+            raise ValueError(f"kind must be one of: {', '.join(sorted(JOURNAL_KINDS))}")
+        entry["kind"] = kind_clean
+    if label is not None:
+        label_clean = _normalize_journal_label(label)
+        if not label_clean:
+            raise ValueError("label is required")
+        entry["label"] = label_clean
+    if text is not None:
+        entry["text"] = (text or "").strip() or None
+    if clear_severity:
+        entry["severity"] = None
+    elif severity is not None:
+        try:
+            severity_val = int(severity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("severity must be an integer 1–5") from exc
+        if severity_val < 1 or severity_val > 5:
+            raise ValueError("severity must be 1–5")
+        entry["severity"] = severity_val
+    if recorded_at is not None:
+        entry["recorded_at"] = _parse_journal_datetime(recorded_at)
+    entry["updated_at"] = _now_iso()
+    journal[idx] = entry
+    profile["journal"] = journal
+    saved = save_patient_profile(patient_id, profile)
+    return next((j for j in saved.get("journal") or [] if j.get("id") == entry_id), entry)
+
+
 def add_patient_milestone(
     patient_id: str,
     *,

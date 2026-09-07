@@ -155,6 +155,7 @@ from app.services.case_manager import (
     group_diagnostics_for_charts,
     add_patient_journal_entry,
     delete_patient_journal_entry,
+    update_patient_journal_entry,
     group_journal_for_charts,
     add_patient_medication,
     update_patient_medication,
@@ -3041,6 +3042,43 @@ async def api_add_patient_journal(patient_id: str, body: PatientJournalRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if entry is None:
         raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_profile(patient_id)
+    return {
+        "entry": entry,
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+class PatientJournalUpdateRequest(BaseModel):
+    kind: str | None = Field(default=None, min_length=1, max_length=20)
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    text: str | None = Field(default=None, max_length=500)
+    severity: int | None = Field(default=None, ge=1, le=5)
+    clear_severity: bool = False
+    recorded_at: str | None = Field(default=None, max_length=40)
+
+
+@router.patch("/patients/{patient_id}/journal/{entry_id}")
+async def api_update_patient_journal(
+    patient_id: str, entry_id: str, body: PatientJournalUpdateRequest
+):
+    try:
+        entry = update_patient_journal_entry(
+            patient_id,
+            entry_id,
+            kind=body.kind,
+            label=body.label,
+            text=body.text,
+            severity=body.severity,
+            clear_severity=body.clear_severity,
+            recorded_at=body.recorded_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
     profile = get_patient_profile(patient_id)
     return {
         "entry": entry,

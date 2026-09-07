@@ -205,6 +205,50 @@
     </div>
   </div>
 
+  <!-- Edit journal / log entry -->
+  <div id="modal-edit-journal" class="modal-overlay hidden">
+    <div class="modal-card modal-edit-journal-card" role="dialog" aria-modal="true" aria-labelledby="edit-journal-title">
+      <div class="row-between wrap">
+        <h3 id="edit-journal-title">Edit log</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-edit-journal">Close</button>
+      </div>
+      <p class="muted small">Fix an incorrect entry or change when it happened.</p>
+      <input type="hidden" id="edit-journal-id">
+      <label for="edit-journal-label">What
+        <input type="text" id="edit-journal-label" class="input" maxlength="80" autocomplete="off">
+      </label>
+      <label for="edit-journal-kind">Type
+        <select id="edit-journal-kind" class="input">
+          <option value="feeling">Feeling</option>
+          <option value="symptom">Symptom</option>
+          <option value="medication">Medication</option>
+          <option value="note">Note</option>
+        </select>
+      </label>
+      <label for="edit-journal-severity">Severity
+        <select id="edit-journal-severity" class="input">
+          <option value="">None</option>
+          <option value="1">1 · Mild</option>
+          <option value="2">2</option>
+          <option value="3">3 · Moderate</option>
+          <option value="4">4</option>
+          <option value="5">5 · Bad</option>
+        </select>
+      </label>
+      <label for="edit-journal-text">Details
+        <input type="text" id="edit-journal-text" class="input" maxlength="500" placeholder="Optional" autocomplete="off">
+      </label>
+      <label for="edit-journal-when">When
+        <input type="datetime-local" id="edit-journal-when" class="input">
+      </label>
+      <div class="modal-actions edit-journal-actions">
+        <button type="button" class="btn ghost" id="btn-delete-edit-journal">Delete</button>
+        <button type="button" class="btn secondary" id="btn-cancel-edit-journal">Cancel</button>
+        <button type="button" class="btn primary" id="btn-save-edit-journal">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add custom Home Log option -->
   <div id="modal-add-log-option" class="modal-overlay hidden">
     <div class="modal-card modal-add-log-option-card" role="dialog" aria-modal="true" aria-labelledby="add-log-option-title">
