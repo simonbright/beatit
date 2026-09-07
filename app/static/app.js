@@ -7124,6 +7124,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
         let lastDoc = null;
         let lastLabImport = null;
         let lastHandling = null;
+        const fileResults = [];
         for (let i = 0; i < files.length; i++) {
           if (isCancelled()) return;
           const file = files[i];
@@ -7141,9 +7142,30 @@ safeOn("#btn-ingest-pdf", "click", async () => {
             lastDoc = data.document;
             if (data.lab_import) lastLabImport = data.lab_import;
             lastHandling = data.handling || data.document?.handling || lastHandling;
+            const li = data.lab_import || {};
+            const orig =
+              li.original_filename ||
+              data.document?.metadata?.original_filename ||
+              file.name;
+            const added = li.added_count || 0;
+            const skipped = li.skipped_duplicate || 0;
+            let outcome = data.document?.metadata?.clinical_report_kind_label
+              ? `tagged as ${data.document.metadata.clinical_report_kind_label}`
+              : "uploaded";
+            if (li.already_on_profile || (added === 0 && skipped > 0)) {
+              outcome = `already on charts (skipped ${skipped})`;
+            } else if (added > 0) {
+              outcome = `added ${added} lab reading${added === 1 ? "" : "s"}${
+                skipped ? `, skipped ${skipped} duplicates` : ""
+              }`;
+            } else if (li.offer_manual_import || data.handling?.status === "flagged") {
+              outcome = "needs review";
+            }
+            fileResults.push(`${orig} — ${outcome}`);
             ok += 1;
           } catch (err) {
             failed += 1;
+            fileResults.push(`${file.name} — failed`);
             console.error(`Upload failed for ${file.name}`, err);
           }
         }
@@ -7159,6 +7181,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
         if (lastDoc) showUploadResult(lastDoc);
         const shouldOpenFlagged =
           lastHandling?.status === "flagged" || lastLabImport?.flagged;
+        const summary = fileResults.join(" · ");
         if (ok && !failed) {
           if (lastLabImport || shouldOpenFlagged) {
             notifyLabImportResult(lastLabImport, {
@@ -7166,13 +7189,13 @@ safeOn("#btn-ingest-pdf", "click", async () => {
                 ok === 1 ? `Uploaded · ${files[0].name}` : `${ok} files uploaded`,
               handling: lastHandling,
             });
+            if (ok > 1 && summary) setDiagImportStatus(summary);
           } else {
-            const kindLabel = lastDoc?.metadata?.clinical_report_kind_label;
             toast(
               ok === 1
-                ? kindLabel
-                  ? `Uploaded · tagged as ${kindLabel}`
-                  : `Uploaded · ${files[0].name}`
+                ? `Uploaded · ${
+                    lastDoc?.metadata?.original_filename || files[0].name
+                  }`
                 : `${ok} files uploaded`
             );
             await refreshHandlingFlags();
