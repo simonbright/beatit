@@ -11,6 +11,7 @@ const state = {
   homeSection: "log",
   settingsSection: "patients",
   quickScaleKey: null,
+  quickScaleSite: null,
   selectedIds: new Set(),
   analyses: [],
   latestAnalysis: null,
@@ -10133,8 +10134,22 @@ const QUICK_SCALE_ENTRIES = {
   nauseous: { kind: "symptom", label: "Feel Nauseous", title: "Feel Nauseous", hint: "How nauseous? Tap a level to log" },
   vomiting: { kind: "symptom", label: "Vomiting", title: "Vomiting", hint: "How severe? Tap a level to log" },
   weak: { kind: "feeling", label: "Feel Weak", title: "Feel Weak", hint: "How weak? Tap a level to log" },
-  "back-pain": { kind: "symptom", label: "Back Pain", title: "Back Pain", hint: "How bad is the pain? Tap a level to log" },
-  "leg-pain": { kind: "symptom", label: "Leg Pain", title: "Leg Pain", hint: "How bad is the pain? Tap a level to log" },
+  "back-pain": {
+    kind: "symptom",
+    label: "Back Pain",
+    title: "Back Pain",
+    hint: "Pick where, then tap a level",
+    sitesLabel: "Where on your back?",
+    sites: ["Upper", "Mid", "Lower", "Left side", "Right side", "Across"],
+  },
+  "leg-pain": {
+    kind: "symptom",
+    label: "Leg Pain",
+    title: "Leg Pain",
+    hint: "Pick which leg, then tap a level",
+    sitesLabel: "Which leg?",
+    sites: ["Left", "Right", "Both"],
+  },
   "esophageal-spasm": {
     kind: "symptom",
     label: "Esophageal Spasm",
@@ -10155,6 +10170,42 @@ function getQuickScaleEntry(key) {
     };
   }
   return null;
+}
+
+function syncQuickScaleSites(entry) {
+  const wrap = document.getElementById("quick-scale-site-wrap");
+  const sitesEl = document.getElementById("quick-scale-sites");
+  const labelEl = document.getElementById("quick-scale-site-label");
+  const sites = entry?.sites || [];
+  state.quickScaleSite = null;
+  if (!wrap || !sitesEl) return;
+  if (!sites.length) {
+    wrap.classList.add("hidden");
+    sitesEl.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  if (labelEl) labelEl.textContent = entry.sitesLabel || "Where?";
+  sitesEl.innerHTML = sites
+    .map(
+      (site) =>
+        `<button type="button" class="quick-scale-site-btn" data-site="${escapeHtml(site)}">${escapeHtml(site)}</button>`
+    )
+    .join("");
+}
+
+function setQuickScaleSite(site) {
+  const value = String(site || "").trim();
+  state.quickScaleSite = value || null;
+  document.querySelectorAll("#quick-scale-sites .quick-scale-site-btn").forEach((btn) => {
+    btn.classList.toggle("is-selected", btn.getAttribute("data-site") === state.quickScaleSite);
+  });
+}
+
+function closeQuickScaleModal() {
+  hideModal("modal-quick-scale");
+  state.quickScaleKey = null;
+  state.quickScaleSite = null;
 }
 
 function resolveQuickScaleKey(raw) {
@@ -10193,6 +10244,7 @@ function openQuickScale(keyOrLabel) {
   const levels = document.getElementById("quick-scale-levels");
   if (title) title.textContent = entry.title;
   if (hint) hint.textContent = entry.hint;
+  syncQuickScaleSites(entry);
   document.querySelectorAll("#quick-scale-levels .quick-scale-btn").forEach((btn) => {
     btn.disabled = false;
     btn.classList.remove("is-selected");
@@ -10206,8 +10258,9 @@ function openQuickScale(keyOrLabel) {
   showModal("modal-quick-scale");
   modal.classList.remove("hidden");
   requestAnimationFrame(() => {
-    levels.querySelector(".quick-scale-btn")?.focus?.();
-    levels.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const siteBtn = document.querySelector("#quick-scale-sites .quick-scale-site-btn");
+    (siteBtn || levels.querySelector(".quick-scale-btn"))?.focus?.();
+    (siteBtn || levels).scrollIntoView({ block: "nearest", behavior: "smooth" });
   });
 }
 
@@ -10217,6 +10270,13 @@ async function submitQuickScale(severity) {
   if (!entry) return;
   const sev = Number(severity);
   if (!Number.isFinite(sev) || sev < 1 || sev > 5) return;
+  if (entry.sites?.length && !state.quickScaleSite) {
+    toast("Pick a location first", "error");
+    document.getElementById("quick-scale-site-wrap")?.classList.add("needs-site");
+    return;
+  }
+  const site = state.quickScaleSite;
+  const label = site ? `${entry.label} · ${site}` : entry.label;
   const buttons = document.querySelectorAll("#quick-scale-levels .quick-scale-btn");
   buttons.forEach((btn) => {
     btn.disabled = true;
@@ -10224,13 +10284,13 @@ async function submitQuickScale(severity) {
   try {
     const data = await postJournalEntry({
       kind: entry.kind,
-      label: entry.label,
+      label,
+      text: site || null,
       severity: sev,
     });
     if (data) applyProfileResponse(data);
-    hideModal("modal-quick-scale");
-    state.quickScaleKey = null;
-    toast(`Logged ${entry.label} · ${sev}/5`);
+    closeQuickScaleModal();
+    toast(`Logged ${label} · ${sev}/5`);
   } catch (err) {
     toast(err.message || "Log failed", "error");
   } finally {
@@ -11294,15 +11354,20 @@ document.getElementById("mobile-log-grid")?.addEventListener("click", (event) =>
 });
 
 document.getElementById("btn-close-quick-scale")?.addEventListener("click", () => {
-  hideModal("modal-quick-scale");
-  state.quickScaleKey = null;
+  closeQuickScaleModal();
 });
 
 document.getElementById("modal-quick-scale")?.addEventListener("click", (event) => {
   if (event.target?.id === "modal-quick-scale") {
-    hideModal("modal-quick-scale");
-    state.quickScaleKey = null;
+    closeQuickScaleModal();
   }
+});
+
+document.getElementById("quick-scale-sites")?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".quick-scale-site-btn");
+  if (!btn) return;
+  setQuickScaleSite(btn.getAttribute("data-site"));
+  document.getElementById("quick-scale-site-wrap")?.classList.remove("needs-site");
 });
 
 document.getElementById("quick-scale-levels")?.addEventListener("click", (event) => {

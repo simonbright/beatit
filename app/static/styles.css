@@ -773,6 +773,45 @@ body {
   max-width: 26rem;
 }
 
+.quick-scale-site-wrap {
+  margin-top: 0.75rem;
+}
+
+.quick-scale-site-wrap.needs-site .quick-scale-sites {
+  outline: 2px solid color-mix(in srgb, var(--accent, #0e7490) 55%, transparent);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+.quick-scale-site-label {
+  margin: 0 0 0.4rem;
+}
+
+.quick-scale-sites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.quick-scale-site-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 0.45rem 0.8rem;
+  min-height: 2.4rem;
+  cursor: pointer;
+}
+
+.quick-scale-site-btn.is-selected {
+  border-color: var(--accent, #0e7490);
+  background: color-mix(in srgb, var(--accent, #0e7490) 16%, var(--surface, #fff));
+}
+
 .quick-scale-levels {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
