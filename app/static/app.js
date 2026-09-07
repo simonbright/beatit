@@ -1073,11 +1073,9 @@ function renderFlaggedList() {
             <span class="badge badge-flag-${severity}">${severity === "critical" ? "Needs handling" : "Review"}</span>
           </div>
           ${
-            item.original_filename && item.original_filename !== item.title
-              ? `<p class="muted small">Original file: ${escapeHtml(item.original_filename)}</p>`
-              : item.original_filename
-                ? `<p class="muted small">File: ${escapeHtml(item.original_filename)}</p>`
-                : ""
+            item.original_filename
+              ? `<p class="doc-original-file"><span class="doc-original-label">Original file</span> <code>${escapeHtml(item.original_filename)}</code></p>`
+              : ""
           }
           <p class="flagged-item-message">${escapeHtml(item.message || "Needs review")}</p>
           <div class="flagged-reasons">${reasons}</div>
@@ -4668,6 +4666,39 @@ function toggleImagingGroupSelection(groupKey, selected) {
   renderAssessmentScopeCard();
 }
 
+function docFileBasename(doc) {
+  const meta = doc?.metadata || {};
+  const raw = String(meta.original_filename || meta.relative_path || "").trim();
+  if (!raw) return "";
+  return raw.split(/[/\\]/).pop() || raw;
+}
+
+function libraryDocPrimaryName(doc) {
+  const file = docFileBasename(doc);
+  if (file) return file;
+  return doc?.source_info?.display_name || doc?.citation_display_name || doc?.title || "Untitled";
+}
+
+function renderDocOriginalFileLine(doc, { compact = false } = {}) {
+  const file = docFileBasename(doc);
+  const meta = doc?.metadata || {};
+  const title = String(doc?.title || "").trim();
+  if (file) {
+    const titleNote =
+      !compact && title && title !== file
+        ? `<span class="doc-stored-title-inline"> · stored as ${escapeHtml(title)}</span>`
+        : "";
+    return `<p class="doc-original-file"><span class="doc-original-label">Original file</span> <code>${escapeHtml(file)}</code>${titleNote}</p>`;
+  }
+  if (meta.backfill_from_diagnostics) {
+    return `<p class="doc-original-file doc-original-missing">No original upload file · reconstructed from charts</p>`;
+  }
+  if (String(doc?.source_type || "").toLowerCase() === "pdf") {
+    return `<p class="doc-original-file doc-original-missing">No original filename recorded</p>`;
+  }
+  return "";
+}
+
 function renderLibraryDocItem(doc, { compact = false } = {}) {
   const selected = state.selectedIds.has(doc.id);
   const meta = doc.metadata || {};
@@ -4688,7 +4719,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
   const sourceBadge = info.shorthand
     ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}" title="${escapeHtml(info.type_display || "")}">${escapeHtml(info.shorthand)}</span>`
     : "";
-  const displayName = info.display_name || doc.title;
+  const displayName = libraryDocPrimaryName(doc);
   const inclusionBadges = renderDocInclusionBadges(doc.id);
   const newClass = isNewForNextAssessment(doc.id) ? " doc-item-new" : "";
   const metaNeedsOcr = Boolean(meta.needs_ocr) || String(meta.extraction_method || "") === "empty";
@@ -4708,7 +4739,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
       : "";
   const replaceBtn =
     editable && String(doc.source_type || "").toLowerCase() === "pdf"
-      ? `<button type="button" class="btn ghost btn-replace-file" data-id="${doc.id}" title="Re-upload the PDF if the stored file is missing">Replace file</button><input type="file" class="hidden doc-replace-file-input" data-id="${doc.id}" accept=".pdf,application/pdf">`
+      ? `<button type="button" class="btn ghost btn-replace-file" data-id="${doc.id}" title="Re-upload the PDF if the stored file is missing">Replace file</button><input type="file" class="hidden doc-replace-file-input" data-id="${doc.id}" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/*">`
       : "";
   const deleteBtn = editable
     ? `<button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>`
@@ -4726,14 +4757,7 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
         ${ocrBadge}
       </div>
       ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
-      ${!compact && displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
-      ${
-        meta.original_filename
-          ? `<p class="muted small doc-original-file">Original file: ${escapeHtml(
-              String(meta.original_filename).split(/[\\\\/]/).pop()
-            )}</p>`
-          : ""
-      }
+      ${renderDocOriginalFileLine(doc, { compact })}
       <div class="doc-meta">
         <span class="badge">${escapeHtml(doc.source_type)}</span>
         ${compact ? "" : `<span>${formatDate(doc.created_at)}</span>`}
@@ -6470,7 +6494,7 @@ async function viewDocument(id) {
   state.activeDocumentId = id;
   panel.classList.remove("hidden");
   const info = doc.source_info || {};
-  const displayName = info.display_name || doc.title;
+  const displayName = libraryDocPrimaryName(doc);
   $("#doc-detail-title").textContent = displayName;
 
   const metaEl = $("#doc-detail-meta");
@@ -6479,13 +6503,20 @@ async function viewDocument(id) {
     const sourceBadge = info.shorthand
       ? `<span class="source-tag ${escapeHtml(info.css_class || "source-document")}">${escapeHtml(info.shorthand)}</span>`
       : "";
+    const file = docFileBasename(doc);
     metaEl.innerHTML = `
       ${sourceBadge}
       <span class="badge">${escapeHtml(doc.source_type || "document")}</span>
       ${clinicalReportKindBadge(doc)}
       <span class="muted small">${escapeHtml(info.type_display || "")}</span>
       <span class="muted small">${escapeHtml(formatTimestamp(doc.created_at))}</span>
-      ${meta.original_filename ? `<span class="muted small">Original file: ${escapeHtml(String(meta.original_filename).split(/[\\\\/]/).pop())}</span>` : ""}
+      ${
+        file
+          ? `<span class="doc-original-file-inline"><span class="doc-original-label">Original file</span> <code>${escapeHtml(file)}</code></span>`
+          : meta.backfill_from_diagnostics
+            ? `<span class="doc-original-missing">No original upload file</span>`
+            : ""
+      }
       ${meta.modality ? `<span class="badge">${escapeHtml(meta.modality)}</span>` : ""}
       ${meta.file_size_label ? `<span class="muted small">${escapeHtml(meta.file_size_label)}</span>` : ""}`;
   }

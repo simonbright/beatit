@@ -6227,6 +6227,47 @@ textarea { resize: vertical; min-height: 100px; }
   margin: 0.15rem 0 0.35rem;
 }
 
+.doc-original-file {
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.doc-original-file code,
+.doc-original-file-inline code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+
+.doc-original-label {
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+
+.doc-original-file-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.doc-original-missing {
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.doc-stored-title-inline {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 [data-theme="night"] .source-unknown,
 [data-theme="night"] .source-tag-inline.source-unknown {
   color: var(--danger);
