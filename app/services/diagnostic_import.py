@@ -347,6 +347,29 @@ def _preset_names_for_prompt() -> str:
     return ", ".join(p["name"] for p in DIAGNOSTIC_PRESETS)
 
 
+def document_original_filename(doc: dict[str, Any] | None) -> str | None:
+    """Best available original upload filename for a library document."""
+    if not doc:
+        return None
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    for key in ("original_filename", "filename", "relative_path"):
+        raw = str(meta.get(key) or "").strip()
+        if raw:
+            return Path(raw).name
+    title = str(doc.get("title") or "").strip()
+    if title and "." in title and not title.lower().startswith("lab results"):
+        return title
+    return None
+
+
+def _lab_import_doc_fields(doc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "document_id": str(doc.get("id") or "").strip() or None,
+        "document_title": doc.get("title"),
+        "original_filename": document_original_filename(doc),
+    }
+
+
 def _empty_lab_import_result(
     patient_id: str,
     doc: dict[str, Any],
@@ -364,8 +387,7 @@ def _empty_lab_import_result(
         "skipped_incomplete": 0,
         "errors": [],
         "warnings": list(warnings or []),
-        "document_id": str(doc.get("id") or "").strip() or None,
-        "document_title": doc.get("title"),
+        **_lab_import_doc_fields(doc),
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
@@ -445,6 +467,9 @@ async def propose_diagnostics_from_upload(
         if hint:
             msg = f"{msg} {hint}"
         raise ValueError(msg)
+    meta = dict(meta or {})
+    if filename:
+        meta.setdefault("original_filename", Path(filename).name)
     return await _propose_from_text(patient_id, text, meta=meta, llm=llm)
 
 
@@ -462,11 +487,14 @@ async def propose_diagnostics_from_document(
         "document_id": doc.get("id"),
         "title": doc.get("title"),
         "source_type": doc.get("source_type"),
+        "original_filename": document_original_filename(doc),
     }
     doc_meta = doc.get("metadata") or {}
     if isinstance(doc_meta, dict):
         meta["extraction_method"] = doc_meta.get("extraction_method")
         meta["extracted_chars"] = doc_meta.get("extracted_chars")
+        if not meta.get("original_filename") and doc_meta.get("original_filename"):
+            meta["original_filename"] = Path(str(doc_meta["original_filename"])).name
 
     if is_empty_med_extract(text):
         from app.services.document_paths import resolve_document_file_path
@@ -619,8 +647,7 @@ async def auto_confirm_lab_readings_from_document(
         "skipped_incomplete": skipped_incomplete,
         "errors": errors,
         "warnings": warnings,
-        "document_id": doc_id,
-        "document_title": doc.get("title"),
+        **_lab_import_doc_fields(doc),
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),

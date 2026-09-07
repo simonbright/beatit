@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from app.services.clinical_report_classify import (
@@ -424,9 +425,13 @@ def flag_item_from_document(
     if evaluation["status"] != HANDLING_FLAGGED:
         return None
     meta = _meta(doc)
+    original = str(meta.get("original_filename") or "").strip() or None
+    if original:
+        original = Path(original).name
     return {
         "document_id": doc.get("id"),
         "title": doc.get("citation_display_name") or doc.get("title"),
+        "original_filename": original,
         "source_type": doc.get("source_type"),
         "kind": evaluation.get("kind") or meta.get("clinical_report_kind"),
         "kind_label": evaluation.get("kind_label") or meta.get("clinical_report_kind_label"),

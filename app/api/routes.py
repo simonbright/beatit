@@ -402,6 +402,8 @@ async def _finalize_clinical_report_document(
             if lab_import.get("profile"):
                 profile = lab_import["profile"]
         except Exception:
+            from app.services.diagnostic_import import document_original_filename
+
             lab_import = {
                 "added_count": 0,
                 "proposed_count": 0,
@@ -409,6 +411,7 @@ async def _finalize_clinical_report_document(
                 "offer_manual_import": True,
                 "document_id": doc.get("id"),
                 "document_title": doc.get("title"),
+                "original_filename": document_original_filename(doc),
                 "warnings": ["Automatic lab import failed — use Import to Labs"],
                 "errors": [],
             }

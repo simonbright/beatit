@@ -519,7 +519,6 @@ function ollamaReachabilityHint(ollama) {
 function docPathLines(doc) {
   const lines = [];
   const meta = doc.metadata || {};
-  if (meta.original_filename) lines.push({ label: "Original file", value: meta.original_filename });
   if (meta.modality) lines.push({ label: "Modality", value: meta.modality });
   if (meta.dicom_series_description || meta.series_description) {
     lines.push({
@@ -1073,6 +1072,13 @@ function renderFlaggedList() {
             ${kind}
             <span class="badge badge-flag-${severity}">${severity === "critical" ? "Needs handling" : "Review"}</span>
           </div>
+          ${
+            item.original_filename && item.original_filename !== item.title
+              ? `<p class="muted small">Original file: ${escapeHtml(item.original_filename)}</p>`
+              : item.original_filename
+                ? `<p class="muted small">File: ${escapeHtml(item.original_filename)}</p>`
+                : ""
+          }
           <p class="flagged-item-message">${escapeHtml(item.message || "Needs review")}</p>
           <div class="flagged-reasons">${reasons}</div>
         </div>
@@ -1325,6 +1331,13 @@ async function handleFlaggedAction(action, docId) {
   }
 }
 
+function labReportLabel(labImport, fallback = "lab report") {
+  const original = String(labImport?.original_filename || "").trim();
+  const title = String(labImport?.document_title || "").trim();
+  if (original && title && original !== title) return `${title} (${original})`;
+  return original || title || fallback;
+}
+
 function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
   const flagged =
     labImport?.flagged ||
@@ -1340,9 +1353,10 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
     return;
   }
   const n = labImport.added_count || 0;
-  const title = labImport.document_title || "lab report";
-  if (labImport.already_on_profile || (n === 0 && !flagged && labImport.skipped_duplicate > 0)) {
-    toast(`Lab readings already on charts for ${title}`);
+  const skipped = labImport.skipped_duplicate || 0;
+  const title = labReportLabel(labImport);
+  if (labImport.already_on_profile || (n === 0 && !flagged && skipped > 0)) {
+    toast(`Already on charts · ${title}${skipped ? ` · skipped ${skipped}` : ""}`);
     refreshHandlingFlags({ rescan: true }).then(() => {
       switchTab("analyze");
       setHomeSection("flagged", { scroll: true });
@@ -1350,7 +1364,8 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
     return;
   }
   if (n > 0 && !flagged) {
-    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}`);
+    const skipBit = skipped ? ` · skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}` : "";
+    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}${skipBit}`);
     if (typeof applyProfileResponse === "function") {
       try {
         applyProfileResponse(labImport);
@@ -1382,10 +1397,10 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
   }
   toast(
     flagged
-      ? `Lab report flagged — open Flagged to Import to Labs or re-extract`
+      ? `Lab report flagged · ${title} — open Flagged to Import to Labs or re-extract`
       : labImport.offer_manual_import
-        ? "Tagged as lab report — open Flagged or Import to Labs to finish"
-        : fallbackToast || "Lab report processed",
+        ? `Tagged as lab report · ${title} — open Flagged or Import to Labs to finish`
+        : fallbackToast || `Lab report processed · ${title}`,
     "error"
   );
   refreshHandlingFlags().then(() => {
@@ -4712,6 +4727,13 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
       </div>
       ${inclusionBadges ? `<div class="doc-inclusion-badges">${inclusionBadges}</div>` : ""}
       ${!compact && displayName !== doc.title ? `<p class="muted small doc-stored-title">Stored title: ${escapeHtml(doc.title)}</p>` : ""}
+      ${
+        meta.original_filename
+          ? `<p class="muted small doc-original-file">Original file: ${escapeHtml(
+              String(meta.original_filename).split(/[\\\\/]/).pop()
+            )}</p>`
+          : ""
+      }
       <div class="doc-meta">
         <span class="badge">${escapeHtml(doc.source_type)}</span>
         ${compact ? "" : `<span>${formatDate(doc.created_at)}</span>`}
@@ -6463,6 +6485,7 @@ async function viewDocument(id) {
       ${clinicalReportKindBadge(doc)}
       <span class="muted small">${escapeHtml(info.type_display || "")}</span>
       <span class="muted small">${escapeHtml(formatTimestamp(doc.created_at))}</span>
+      ${meta.original_filename ? `<span class="muted small">Original file: ${escapeHtml(String(meta.original_filename).split(/[\\\\/]/).pop())}</span>` : ""}
       ${meta.modality ? `<span class="badge">${escapeHtml(meta.modality)}</span>` : ""}
       ${meta.file_size_label ? `<span class="muted small">${escapeHtml(meta.file_size_label)}</span>` : ""}`;
   }
@@ -9539,7 +9562,8 @@ function renderDiagImportReview(data) {
   const method = meta.extraction_method || meta.source || "unknown";
   const chars = meta.extracted_chars != null ? `${meta.extracted_chars} chars` : "";
   const bits = [`Extracted via ${method}${chars ? ` · ${chars}` : ""}`];
-  if (meta.title) bits.push(String(meta.title));
+  if (meta.original_filename) bits.push(`File: ${meta.original_filename}`);
+  else if (meta.title) bits.push(String(meta.title));
   if (warnings.length) bits.push(warnings.join(" · "));
   setDiagImportStatus(bits.join(" — "));
 
@@ -13104,6 +13128,7 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
         let lastLabImport = null;
         let lastHandling = null;
         let reviewDocId = null;
+        const fileResults = [];
         for (let i = 0; i < files.length; i++) {
           if (isCancelled()) return;
           const file = files[i];
@@ -13121,6 +13146,22 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
             lastDoc = data.document;
             if (data.lab_import) lastLabImport = data.lab_import;
             lastHandling = data.handling || data.document?.handling || lastHandling;
+            const li = data.lab_import || {};
+            const orig =
+              li.original_filename ||
+              data.document?.metadata?.original_filename ||
+              file.name;
+            const added = li.added_count || 0;
+            const skipped = li.skipped_duplicate || 0;
+            let outcome = "saved to Library";
+            if (li.already_on_profile || (added === 0 && skipped > 0)) {
+              outcome = `already on charts (skipped ${skipped})`;
+            } else if (added > 0) {
+              outcome = `added ${added}${skipped ? `, skipped ${skipped} duplicates` : ""}`;
+            } else if (li.offer_manual_import || data.handling?.status === "flagged") {
+              outcome = "needs review";
+            }
+            fileResults.push(`${orig} — ${outcome}`);
             const needsReview =
               data.lab_import?.offer_manual_import ||
               (data.lab_import?.flagged && !(data.lab_import?.added_count > 0)) ||
@@ -13134,14 +13175,16 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
             ok += 1;
           } catch (err) {
             failed += 1;
+            fileResults.push(`${file.name} — failed`);
             console.error(`Lab upload failed for ${file.name}`, err);
           }
         }
         if (fileInput) fileInput.value = "";
         await loadDocumentIndex().catch(() => {});
+        const summary = fileResults.join(" · ");
         if (ok && !failed) {
           if (reviewDocId && !(lastLabImport?.added_count > 0 && !lastLabImport?.flagged)) {
-            setDiagImportStatus("Uploaded to Library — review readings below");
+            setDiagImportStatus(`Uploaded — review readings · ${summary}`);
             await importDiagnosticsFromLibraryDocument(reviewDocId);
             return;
           }
@@ -13152,17 +13195,13 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
                 : `${ok} lab files saved to Library`,
             handling: lastHandling,
           });
-          setDiagImportStatus(
-            ok === 1
-              ? `Saved to Library · ${lastDoc?.title || files[0].name}`
-              : `${ok} files saved to Library and processed in order`
-          );
+          setDiagImportStatus(summary || `${ok} files saved to Library`);
         } else if (ok && failed) {
-          setDiagImportStatus(`${ok} uploaded, ${failed} failed`, { error: true });
+          setDiagImportStatus(`${ok} uploaded, ${failed} failed · ${summary}`, { error: true });
           toast(`${ok} uploaded, ${failed} failed`, "error");
           await refreshHandlingFlags().catch(() => {});
         } else {
-          setDiagImportStatus("Lab upload failed", { error: true });
+          setDiagImportStatus(summary || "Lab upload failed", { error: true });
           toast("Lab upload failed", "error");
         }
       },
