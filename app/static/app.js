@@ -7085,7 +7085,7 @@ safeOn("#btn-ingest-facebook", "click", async () => {
 safeOn("#btn-ingest-pdf", "click", async () => {
   try {
     const files = Array.from($("#pdf-file")?.files || []);
-    if (!files.length) return toast("Choose one or more PDF files", "error");
+    if (!files.length) return toast("Choose one or more PDF or image files", "error");
     const customTitle =
       files.length === 1 ? ($("#pdf-title").value.trim() || "") : "";
     const total = files.length;
@@ -7093,8 +7093,8 @@ safeOn("#btn-ingest-pdf", "click", async () => {
       id: `upload-pdf-${Date.now()}`,
       label:
         total === 1
-          ? `Uploading PDF: ${files[0].name}`
-          : `Uploading ${total} PDFs`,
+          ? `Uploading: ${files[0].name}`
+          : `Uploading ${total} files`,
       run: async ({ setDetail, isCancelled }) => {
         let ok = 0;
         let failed = 0;
@@ -7121,7 +7121,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
             ok += 1;
           } catch (err) {
             failed += 1;
-            console.error(`PDF upload failed for ${file.name}`, err);
+            console.error(`Upload failed for ${file.name}`, err);
           }
         }
         $("#pdf-file").value = "";
@@ -7130,7 +7130,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
         if (pdfTitle) {
           pdfTitle.value = "";
           pdfTitle.disabled = false;
-          pdfTitle.placeholder = "Defaults to each PDF filename";
+          pdfTitle.placeholder = "Defaults to each file's name";
           delete pdfTitle.dataset.userEdited;
         }
         if (lastDoc) showUploadResult(lastDoc);
@@ -7140,7 +7140,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
           if (lastLabImport || shouldOpenFlagged) {
             notifyLabImportResult(lastLabImport, {
               fallbackToast:
-                ok === 1 ? `PDF uploaded · ${files[0].name}` : `${ok} PDFs uploaded`,
+                ok === 1 ? `Uploaded · ${files[0].name}` : `${ok} files uploaded`,
               handling: lastHandling,
             });
           } else {
@@ -7148,9 +7148,9 @@ safeOn("#btn-ingest-pdf", "click", async () => {
             toast(
               ok === 1
                 ? kindLabel
-                  ? `PDF uploaded · tagged as ${kindLabel}`
-                  : `PDF uploaded · ${files[0].name}`
-                : `${ok} PDFs uploaded`
+                  ? `Uploaded · tagged as ${kindLabel}`
+                  : `Uploaded · ${files[0].name}`
+                : `${ok} files uploaded`
             );
             await refreshHandlingFlags();
           }
@@ -7158,7 +7158,7 @@ safeOn("#btn-ingest-pdf", "click", async () => {
           toast(`${ok} uploaded, ${failed} failed`, "error");
           await refreshHandlingFlags();
         } else {
-          toast("PDF upload failed", "error");
+          toast("Upload failed", "error");
         }
         if (ok) {
           const openedFlagged =
@@ -13063,24 +13063,99 @@ document.getElementById("btn-med-import-confirm")?.addEventListener("click", asy
 document.getElementById("btn-import-diagnostics")?.addEventListener("click", async () => {
   if (!state.activePatientId) return toast("Select a patient first", "error");
   const fileInput = document.getElementById("diag-import-file");
-  const file = fileInput?.files?.[0];
-  if (!file) return toast("Choose a lab PDF or image first", "error");
+  const files = Array.from(fileInput?.files || []);
+  if (!files.length) return toast("Choose one or more lab PDFs or images first", "error");
   const btn = document.getElementById("btn-import-diagnostics");
   if (btn) btn.disabled = true;
-  setDiagImportStatus("Extracting and parsing lab readings…");
+  clearDiagImportReview();
+  const total = files.length;
+  setDiagImportStatus(
+    total === 1
+      ? `Uploading to Library: ${files[0].name}…`
+      : `Uploading ${total} files to Library (processing in order)…`
+  );
   try {
-    const fd = new FormData();
-    fd.append("file", file);
-    const data = await api(`/api/patients/${state.activePatientId}/diagnostics/import`, {
-      method: "POST",
-      body: fd,
-      timeoutMs: 300000,
+    await withBackgroundTask({
+      id: `upload-labs-${Date.now()}`,
+      label:
+        total === 1
+          ? `Uploading lab: ${files[0].name}`
+          : `Uploading ${total} lab files`,
+      run: async ({ setDetail, isCancelled }) => {
+        let ok = 0;
+        let failed = 0;
+        let lastDoc = null;
+        let lastLabImport = null;
+        let lastHandling = null;
+        let reviewDocId = null;
+        for (let i = 0; i < files.length; i++) {
+          if (isCancelled()) return;
+          const file = files[i];
+          setDetail(`Processing ${i + 1} of ${total}: ${file.name}`);
+          setDiagImportStatus(`Processing ${i + 1} of ${total}: ${file.name}…`);
+          try {
+            const fd = new FormData();
+            fd.append("file", file);
+            const data = await api("/api/ingest/pdf", {
+              method: "POST",
+              body: fd,
+              timeoutMs: 600000,
+            });
+            if (isCancelled()) return;
+            lastDoc = data.document;
+            if (data.lab_import) lastLabImport = data.lab_import;
+            lastHandling = data.handling || data.document?.handling || lastHandling;
+            const needsReview =
+              data.lab_import?.offer_manual_import ||
+              (data.lab_import?.flagged && !(data.lab_import?.added_count > 0)) ||
+              (data.handling?.status === "flagged" &&
+                !(data.lab_import?.added_count > 0) &&
+                String(data.document?.metadata?.clinical_report_kind || "").toLowerCase() ===
+                  "lab");
+            if (needsReview && data.document?.id && !reviewDocId) {
+              reviewDocId = data.document.id;
+            }
+            ok += 1;
+          } catch (err) {
+            failed += 1;
+            console.error(`Lab upload failed for ${file.name}`, err);
+          }
+        }
+        if (fileInput) fileInput.value = "";
+        await loadDocumentIndex().catch(() => {});
+        if (ok && !failed) {
+          if (reviewDocId && !(lastLabImport?.added_count > 0 && !lastLabImport?.flagged)) {
+            setDiagImportStatus("Uploaded to Library — review readings below");
+            await importDiagnosticsFromLibraryDocument(reviewDocId);
+            return;
+          }
+          notifyLabImportResult(lastLabImport, {
+            fallbackToast:
+              ok === 1
+                ? `Lab file saved to Library · ${files[0].name}`
+                : `${ok} lab files saved to Library`,
+            handling: lastHandling,
+          });
+          setDiagImportStatus(
+            ok === 1
+              ? `Saved to Library · ${lastDoc?.title || files[0].name}`
+              : `${ok} files saved to Library and processed in order`
+          );
+        } else if (ok && failed) {
+          setDiagImportStatus(`${ok} uploaded, ${failed} failed`, { error: true });
+          toast(`${ok} uploaded, ${failed} failed`, "error");
+          await refreshHandlingFlags().catch(() => {});
+        } else {
+          setDiagImportStatus("Lab upload failed", { error: true });
+          toast("Lab upload failed", "error");
+        }
+      },
     });
-    renderDiagImportReview(data);
-    toast(`Parsed ${(data.proposed || []).length} lab reading(s)`);
   } catch (err) {
-    setDiagImportStatus(err.message || "Import failed", { error: true });
-    toast(err.message || "Import failed", "error");
+    if (err.message !== "Cancelled") {
+      setDiagImportStatus(err.message || "Import failed", { error: true });
+      toast(err.message || "Import failed", "error");
+    }
   } finally {
     if (btn) btn.disabled = false;
   }

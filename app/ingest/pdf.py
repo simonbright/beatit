@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import shutil
 import subprocess
@@ -524,6 +525,68 @@ def validate_med_import_upload(
     return sniff_med_import_kind(content, content_type=content_type, filename=filename)
 
 
+def _image_data_uri_mime(content: bytes, filename: str | None = None) -> str:
+    name = (filename or "").lower()
+    if name.endswith(".png") or content[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if name.endswith(".webp") or (
+        content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+    ):
+        return "image/webp"
+    return "image/jpeg"
+
+
+async def _ocr_image_with_vision(
+    content: bytes, *, filename: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """OCR a lab/clinical photo via OpenRouter vision."""
+    from app.config import settings
+    from app.services.openrouter_client import OpenRouterClient
+
+    meta: dict[str, Any] = {"vision_mode": "image_direct", "source_kind": "image"}
+    if not settings.openrouter_api_key:
+        meta["vision_error"] = "OPENROUTER_API_KEY not set"
+        return "", meta
+    if len(content) > 12 * 1024 * 1024:
+        meta["vision_error"] = "Image too large for vision OCR"
+        return "", meta
+
+    model = _vision_ocr_model()
+    client = OpenRouterClient(model=model)
+    meta["vision_model"] = model
+    mime = _image_data_uri_mime(content, filename)
+    b64 = base64.b64encode(content).decode("ascii")
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": OCR_VISION_SYSTEM},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "This attachment is a clinical lab report photo or scan. "
+                        "Transcribe ALL readable text exactly. Preserve headings, "
+                        "labels, numbers, and line breaks. Return only the transcript."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                },
+            ],
+        },
+    ]
+    try:
+        text = (await client.chat(messages=messages, temperature=0.0)).strip()
+    except Exception as exc:
+        meta["vision_error"] = str(exc)
+        return "", meta
+    if text:
+        return f"--- Page 1 (Vision OCR) ---\n{text}", meta
+    meta["vision_error"] = "Vision model returned empty transcript"
+    return "", meta
+
+
 def extract_image_text(content: bytes) -> tuple[str, dict[str, Any]]:
     """OCR a single image (JPEG/PNG/WebP) via tesseract. Returns (text, meta)."""
     tesseract = shutil.which("tesseract")
@@ -583,6 +646,67 @@ def extract_image_text(content: bytes) -> tuple[str, dict[str, Any]]:
         return text, meta
 
 
+async def extract_image_text_async(
+    content: bytes, *, filename: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Local image OCR, then OpenRouter vision if local OCR failed or was thin."""
+    text, meta = await asyncio.to_thread(extract_image_text, content)
+    if not meta.get("needs_ocr") and len((text or "").strip()) >= MIN_NATIVE_CHARS:
+        return text, meta
+    if (
+        len((text or "").strip()) >= MIN_NATIVE_CHARS
+        and text != EMPTY_IMAGE_PLACEHOLDER
+        and not is_empty_med_extract(text)
+    ):
+        return text, meta
+
+    vision_text, vision_meta = await _ocr_image_with_vision(
+        content, filename=filename
+    )
+    meta.update(vision_meta)
+    meta["vision_attempted"] = True
+    if vision_text and len(vision_text.strip()) >= MIN_NATIVE_CHARS:
+        meta["extraction_method"] = "vision_ocr"
+        meta["extracted_chars"] = len(vision_text)
+        meta["needs_ocr"] = False
+        meta.pop("ocr_hint", None)
+        return vision_text, meta
+    if vision_text.strip():
+        meta["extraction_method"] = "vision_ocr_thin"
+        meta["extracted_chars"] = len(vision_text)
+        meta["needs_ocr"] = len(vision_text) < MIN_NATIVE_CHARS
+        return vision_text, meta
+    err = vision_meta.get("vision_error") or meta.get("vision_error")
+    if err:
+        meta["ocr_hint"] = f"OCR failed: {err}"
+    return text, meta
+
+
+async def extract_clinical_upload_text_async(
+    content: bytes,
+    *,
+    content_type: str | None = None,
+    filename: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Extract text from a clinical PDF or lab photo for library ingest."""
+    try:
+        kind = sniff_med_import_kind(
+            content, content_type=content_type, filename=filename
+        )
+    except ValueError:
+        # Preserve prior PDF-ingest behavior for ambiguous uploads
+        if content[:5] == b"%PDF-":
+            kind = "pdf"
+        else:
+            raise
+    if kind == "image":
+        return await extract_image_text_async(content, filename=filename)
+    text, meta = await extract_pdf_text_async(content)
+    meta = dict(meta)
+    meta.setdefault("source_kind", "pdf")
+    return text, meta
+
+
 def extract_med_list_text(
     content: bytes,
     *,
@@ -620,10 +744,13 @@ async def ingest_pdf_bytes(
     title: str,
     source_uri: str | None = None,
     metadata: dict[str, Any] | None = None,
+    content_type: str | None = None,
 ) -> dict[str, Any]:
     from app.services.clinical_report_classify import classify_and_update_document
 
-    extracted, extraction_meta = await extract_pdf_text_async(content)
+    extracted, extraction_meta = await extract_clinical_upload_text_async(
+        content, content_type=content_type, filename=filename
+    )
     meta = dict(metadata or {})
     meta["original_filename"] = filename
     meta.update(extraction_meta)
@@ -654,6 +781,7 @@ async def ingest_pdf_file(
     content: bytes,
     title: str | None = None,
     metadata: dict[str, Any] | None = None,
+    content_type: str | None = None,
 ) -> dict[str, Any]:
     return await ingest_pdf_bytes(
         store,
@@ -661,11 +789,12 @@ async def ingest_pdf_file(
         filename=filename,
         title=title or filename,
         metadata=metadata,
+        content_type=content_type,
     )
 
 
 async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> dict[str, Any]:
-    """Re-run text/OCR extraction for an existing PDF document."""
+    """Re-run text/OCR extraction for an existing PDF or lab-image document."""
     from app.services.clinical_report_classify import classify_and_update_document
     from app.services.document_paths import heal_document_paths, resolve_document_file_path
 
@@ -677,7 +806,15 @@ async def reextract_pdf_document(store: DocumentStore, doc: dict[str, Any]) -> d
             "Stored PDF file is missing on disk. Re-upload the PDF with Replace file, then try Re-extract again."
         )
     content = path.read_bytes()
-    extracted, extraction_meta = await extract_pdf_text_async(content)
+    meta_existing = doc.get("metadata") or {}
+    filename = (
+        str(meta_existing.get("original_filename") or "").strip()
+        or Path(path).name
+        or "upload.pdf"
+    )
+    extracted, extraction_meta = await extract_clinical_upload_text_async(
+        content, filename=filename
+    )
     saved = await store.save_extracted_text(doc["id"], extracted)
     meta = dict(doc.get("metadata") or {})
     meta.update(extraction_meta)

@@ -1311,8 +1311,22 @@ async def replace_document_file(
     filename = file.filename or "upload.pdf"
     lower = filename.lower()
     source_type = (doc.get("source_type") or "").lower()
-    if source_type == "pdf" and not lower.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Upload a PDF to replace this document")
+    if source_type == "pdf":
+        allowed = lower.endswith(
+            (".pdf", ".jpg", ".jpeg", ".png", ".webp")
+        ) or content[:5] == b"%PDF-"
+        if not allowed:
+            try:
+                from app.ingest.pdf import sniff_med_import_kind
+
+                sniff_med_import_kind(
+                    content, content_type=file.content_type, filename=filename
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload a PDF or JPEG/PNG/WebP image to replace this document",
+                ) from exc
 
     # Remove stale file at the old path if present
     old = resolve_document_file_path(doc, prefer_dirs=[target_store.documents_dir])
@@ -1332,7 +1346,9 @@ async def replace_document_file(
     updated = updated or {**doc, "file_path": str(saved), "metadata": meta}
 
     lab_import = None
-    if source_type == "pdf" or lower.endswith(".pdf"):
+    if source_type == "pdf" or lower.endswith(
+        (".pdf", ".jpg", ".jpeg", ".png", ".webp")
+    ):
         try:
             updated = await reextract_pdf_document(target_store, updated)
             updated, lab_import = await _finalize_clinical_report_document(target_store, updated)
@@ -1487,12 +1503,16 @@ async def ingest_pdf_route(
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
     filename = file.filename or "upload.pdf"
-    doc = await ingest_pdf_file(
-        store,
-        filename=filename,
-        content=content,
-        title=title or filename,
-    )
+    try:
+        doc = await ingest_pdf_file(
+            store,
+            filename=filename,
+            content=content,
+            title=title or filename,
+            content_type=file.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _audit(
         db,
         request,
