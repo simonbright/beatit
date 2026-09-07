@@ -1945,8 +1945,10 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
           <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}</span>
         </div>
         <div class="log-tile-order-actions">
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="top" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move to top" title="Move to top">⤒</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move up" title="Move up">↑</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move down" title="Move down">↓</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="bottom" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move to bottom" title="Move to bottom">⤓</button>
           ${removeBtn}
         </div>
       </div>`;
@@ -2024,10 +2026,20 @@ async function moveLogTile(key, dir) {
   const order = resolveLogTileOrder(profile);
   const idx = order.indexOf(key);
   if (idx < 0) return;
-  const swap = dir === "up" ? idx - 1 : idx + 1;
-  if (swap < 0 || swap >= order.length) return;
   const next = order.slice();
-  [next[idx], next[swap]] = [next[swap], next[idx]];
+  if (dir === "top") {
+    if (idx === 0) return;
+    next.splice(idx, 1);
+    next.unshift(key);
+  } else if (dir === "bottom") {
+    if (idx >= order.length - 1) return;
+    next.splice(idx, 1);
+    next.push(key);
+  } else {
+    const swap = dir === "up" ? idx - 1 : idx + 1;
+    if (swap < 0 || swap >= order.length) return;
+    [next[idx], next[swap]] = [next[swap], next[idx]];
+  }
   const customKeys = getCustomLogTiles(profile).map((t) => customLogTileKey(t.id));
   const known = [...DEFAULT_LOG_TILE_ORDER, ...customKeys];
   const saved = [...next];
@@ -10440,7 +10452,7 @@ async function quickLogInstant(key) {
 
 function openJournalForQuick(mode) {
   if (mode === "exercise" || mode === "walked" || mode === "weights") {
-    openExerciseModal(mode === "exercise" ? "walked" : mode);
+    openExerciseModal(mode);
     return;
   }
   state.journalDraft = emptyJournalDraft();
@@ -10490,14 +10502,15 @@ function resetExerciseModal(initialType = "walked") {
   document.getElementById("exercise-weights-fields")?.classList.toggle("hidden", type !== "weights");
 }
 
-function openExerciseModal(initialType = "walked") {
+function openExerciseModal(mode = "exercise") {
   if (!state.activePatientId) return toast("Select a patient first", "error");
+  const initialType = mode === "weights" ? "weights" : "walked";
   resetExerciseModal(initialType);
   hideModal("modal-journal");
   const title = document.getElementById("exercise-title");
   if (title) {
     title.textContent =
-      initialType === "walked" ? "Walked" : initialType === "weights" ? "Weights" : "Exercise";
+      mode === "weights" ? "Weights" : mode === "walked" ? "Walked" : "Exercise";
   }
   showModal("modal-exercise");
   requestAnimationFrame(() => {
