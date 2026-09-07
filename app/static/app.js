@@ -8300,6 +8300,7 @@ async function loadCaseContext() {
     } else {
       state.patientProfile = null;
       state.patientProfileId = null;
+      syncMobileLogForLabel();
     }
     state.diagStatusFilter = "all";
     state.coverageReport = null;
@@ -8470,6 +8471,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderMedicationsHome(profile);
   renderMedSafetyResult(profile?.medication_safety);
   syncPatientSpecificLogTiles();
+  syncMobileLogForLabel();
   // Keep Meds chips (and other journal chip UIs) in sync when profile names change.
   if (document.getElementById("journal-med-chips")) {
     renderJournalMedChips();
@@ -10242,6 +10244,23 @@ function syncMobileLogViewControl() {
   });
 }
 
+function syncMobileLogForLabel() {
+  const el = document.getElementById("mobile-log-for");
+  if (!el) return;
+  if (!state.activePatientId) {
+    el.textContent = state.caseContextReady
+      ? "Select a person in the header first."
+      : "Loading…";
+    return;
+  }
+  const name = state.activePatientLabel || "this person";
+  const ready =
+    state.patientProfileId && state.patientProfileId === state.activePatientId;
+  el.textContent = ready
+    ? `Logging for ${name} only · tap once to save · sign-in does not change who this saves to`
+    : `Loading ${name}’s log…`;
+}
+
 function syncMobileLogRangeControl() {
   const days = loadMobileLogDays(state.activePatientId);
   state.mobileLogDays = days;
@@ -10267,6 +10286,7 @@ function clearPatientScopedLogState({ keepPatientId = false } = {}) {
   if (!keepPatientId) {
     // used when fully clearing selection
   }
+  syncMobileLogForLabel();
   syncMobileLogRangeControl();
   renderLogObservations([]);
   renderMobileLogRecent();
@@ -10513,12 +10533,23 @@ function resolveMomMedication(profile = state.patientProfile) {
   return momish || null;
 }
 
+function loggedForToast(label, extra = "") {
+  const who = state.activePatientLabel ? ` · ${state.activePatientLabel}` : "";
+  return `Logged ${label}${extra}${who}`;
+}
+
 async function postJournalEntry({ kind, label, text = null, severity = null }) {
   if (!state.activePatientId) {
-    toast("Select a patient first", "error");
+    toast("Select a person first", "error");
     return null;
   }
   const patientId = state.activePatientId;
+  const patientLabel = state.activePatientLabel || "this person";
+  // Never write until this person's profile is the one on screen.
+  if (!state.patientProfileId || state.patientProfileId !== patientId) {
+    toast(`Still loading ${patientLabel}’s log — try again in a moment`, "error");
+    return null;
+  }
   const res = await fetch(`/api/patients/${patientId}/journal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -10539,10 +10570,12 @@ async function postJournalEntry({ kind, label, text = null, severity = null }) {
   if (state.activePatientId !== patientId) return null;
   const data = await res.json();
   if (state.activePatientId !== patientId) return null;
+  const responsePatientId = data.patient_id || data.patient?.id || null;
+  if (responsePatientId && responsePatientId !== patientId) return null;
   return {
     ...data,
-    patient_id: data.patient_id || patientId,
-    patient: data.patient || { id: patientId },
+    patient_id: responsePatientId || patientId,
+    patient: data.patient || { id: patientId, label: patientLabel },
   };
 }
 
@@ -10605,7 +10638,7 @@ async function quickLogInstant(key) {
     if (key === "mom") await ensureMomOnLogList();
     const data = await postJournalEntry(entry);
     if (data) applyProfileResponse(data);
-    toast(`Logged ${entry.label}`);
+    toast(loggedForToast(entry.label));
   } catch (err) {
     toast(err.message || "Log failed", "error");
   } finally {
@@ -10753,7 +10786,7 @@ async function submitExerciseLog() {
     });
     if (data) applyProfileResponse(data);
     closeExerciseModal();
-    toast(`Logged ${label}`);
+    toast(loggedForToast(label));
   } catch (err) {
     toast(err.message || "Log failed", "error");
   } finally {
@@ -10921,7 +10954,7 @@ async function submitQuickScale(severity) {
     });
     if (data) applyProfileResponse(data);
     closeQuickScaleModal();
-    toast(`Logged ${label} · ${sev}/5`);
+    toast(loggedForToast(label, ` · ${sev}/5`));
   } catch (err) {
     toast(err.message || "Log failed", "error");
   } finally {
@@ -12533,6 +12566,17 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
     return;
   }
 
+  const patientId = state.activePatientId;
+  const patientLabel = state.activePatientLabel || "this person";
+  if (!patientId) {
+    toast("Select a person first", "error");
+    return;
+  }
+  if (!state.patientProfileId || state.patientProfileId !== patientId) {
+    toast(`Still loading ${patientLabel}’s log — try again in a moment`, "error");
+    return;
+  }
+
   const whenRaw = document.getElementById("journal-when")?.value;
   let recorded_at = null;
   if (whenRaw) {
@@ -12553,12 +12597,14 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
         (a) => String(a.label || "").toLowerCase() === "took medication"
       );
       if (ate && text) {
-        const foodRes = await fetch(`/api/patients/${state.activePatientId}/food-drinks`, {
+        const foodRes = await fetch(`/api/patients/${patientId}/food-drinks`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ label: text.slice(0, 80) }),
         });
-        if (foodRes.ok) applyProfileResponse(await foodRes.json());
+        if (foodRes.ok && state.activePatientId === patientId) {
+          applyProfileResponse(await foodRes.json(), { expectedPatientId: patientId });
+        }
       }
       if (tookMed) {
         const onList = personMedNameSet();
@@ -12577,7 +12623,7 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
           pushMed({ name: text.slice(0, 120), category: "remedy", show_on_log: true });
         }
         for (const item of toAdd) {
-          const medRes = await fetch(`/api/patients/${state.activePatientId}/medications`, {
+          const medRes = await fetch(`/api/patients/${patientId}/medications`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -12588,7 +12634,9 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
               show_on_log: true,
             }),
           });
-          if (medRes.ok) applyProfileResponse(await medRes.json());
+          if (medRes.ok && state.activePatientId === patientId) {
+            applyProfileResponse(await medRes.json(), { expectedPatientId: patientId });
+          }
         }
         // If Details names a med already on the list, turn Show on Log on
         if (text && onList.has(text.trim().toLowerCase())) {
@@ -12597,14 +12645,16 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
           );
           if (match?.id && !match.show_on_log) {
             const patchRes = await fetch(
-              `/api/patients/${state.activePatientId}/medications/${match.id}`,
+              `/api/patients/${patientId}/medications/${match.id}`,
               {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ show_on_log: true }),
               }
             );
-            if (patchRes.ok) applyProfileResponse(await patchRes.json());
+            if (patchRes.ok && state.activePatientId === patientId) {
+              applyProfileResponse(await patchRes.json(), { expectedPatientId: patientId });
+            }
           }
         }
       }
@@ -12612,6 +12662,9 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
 
     let lastData = null;
     for (const entry of entries) {
+      if (state.activePatientId !== patientId) {
+        throw new Error(`Switched away from ${patientLabel} — log not saved`);
+      }
       const body = {
         kind: entry.kind,
         label: entry.label,
@@ -12621,7 +12674,7 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
         recorded_at,
         case_id: null,
       };
-      const res = await fetch(`/api/patients/${state.activePatientId}/journal`, {
+      const res = await fetch(`/api/patients/${patientId}/journal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -12632,6 +12685,9 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
       }
       lastData = await res.json();
     }
+    if (state.activePatientId !== patientId) {
+      throw new Error(`Switched away from ${patientLabel} — log not applied`);
+    }
     const textEl = document.getElementById("journal-text");
     if (textEl) textEl.value = "";
     const whenEl = document.getElementById("journal-when");
@@ -12639,9 +12695,10 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
     const addEl = document.getElementById("journal-add-to-list");
     if (addEl) addEl.checked = false;
     state.journalDraft = emptyJournalDraft();
-    if (lastData) applyProfileResponse(lastData);
+    if (lastData) applyProfileResponse(lastData, { expectedPatientId: patientId });
     hideModal("modal-journal");
-    toast(entries.length === 1 ? "Logged" : `Logged ${entries.length} items`);
+    const who = patientLabel ? ` · ${patientLabel}` : "";
+    toast((entries.length === 1 ? "Logged" : `Logged ${entries.length} items`) + who);
   } catch (err) {
     toast(err.message || "Could not save", "error");
   } finally {
