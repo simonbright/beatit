@@ -3385,6 +3385,7 @@ async def export_patient_bundle_pdf(
 
 class PatientMedicationCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    official_name: str | None = Field(default=None, max_length=120)
     dosage: str | None = Field(default=None, max_length=80)
     frequency: str | None = Field(default=None, max_length=80)
     conditions: list[str] | str | None = None
@@ -3397,6 +3398,7 @@ class PatientMedicationCreateRequest(BaseModel):
 
 class PatientMedicationUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
+    official_name: str | None = Field(default=None, max_length=120)
     dosage: str | None = Field(default=None, max_length=80)
     frequency: str | None = Field(default=None, max_length=80)
     conditions: list[str] | str | None = None
@@ -3597,6 +3599,7 @@ async def api_add_patient_medication(patient_id: str, body: PatientMedicationCre
         entry = add_patient_medication(
             patient_id,
             name=body.name,
+            official_name=body.official_name,
             dosage=body.dosage,
             frequency=body.frequency,
             conditions=body.conditions,
@@ -3629,6 +3632,8 @@ async def api_update_patient_medication(
     kwargs: dict[str, Any] = {"history_note": body.history_note}
     if "name" in fields_set:
         kwargs["name"] = body.name
+    if "official_name" in fields_set:
+        kwargs["official_name"] = body.official_name
     if "dosage" in fields_set:
         kwargs["dosage"] = body.dosage
     if "frequency" in fields_set:

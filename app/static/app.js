@@ -10,6 +10,7 @@ const state = {
   handlingFlags: { items: [], count: 0, critical_count: 0 },
   homeSection: "log",
   settingsSection: "patients",
+  profileSection: "basics",
   quickScaleKey: null,
   quickScaleSite: null,
   exerciseType: "walked",
@@ -1627,6 +1628,7 @@ function switchTab(name, options = {}) {
     setSettingsSection(options.settingsSection || state.settingsSection || "patients", {
       focusSelector: options.settingsFocus || null,
       scroll: Boolean(options.settingsFocus),
+      profileSection: options.profileSection || null,
     });
   }
   updateHomeToolbar();
@@ -1659,6 +1661,15 @@ const HOME_SECTIONS = new Set([
   "run",
 ]);
 const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "assessments", "labels", "llm", "access", "audit"]);
+const PROFILE_SECTIONS = new Set([
+  "basics",
+  "labs",
+  "medications",
+  "log-tiles",
+  "food",
+  "timeline",
+  "self-reports",
+]);
 
 function isMobileLogLayout() {
   return window.matchMedia("(max-width: 600px)").matches;
@@ -2151,7 +2162,53 @@ function setHomeSection(section, { scroll = false } = {}) {
   }
 }
 
-function setSettingsSection(section, { scroll = false, focusSelector = null } = {}) {
+function setProfileSection(section, { scroll = false, focusSelector = null } = {}) {
+  const next = PROFILE_SECTIONS.has(section) ? section : "basics";
+  state.profileSection = next;
+  document.querySelectorAll("#profile-subnav [data-profile-section]").forEach((btn) => {
+    const active = btn.dataset.profileSection === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-profile-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.profilePane !== next);
+  });
+  if (scroll || focusSelector) {
+    requestAnimationFrame(() => {
+      const target = focusSelector
+        ? $(focusSelector)
+        : $(`[data-profile-pane="${next}"]`) || $("#profile-subnav");
+      scrollToElement(target || $("#settings-subnav"));
+      if (focusSelector) $(focusSelector)?.focus?.();
+    });
+  }
+}
+
+function profileSectionForFocus(focusSelector) {
+  if (!focusSelector) return null;
+  if (
+    focusSelector.includes("med-") ||
+    focusSelector.includes("medication") ||
+    focusSelector.includes("remedy")
+  ) {
+    return "medications";
+  }
+  if (focusSelector.includes("diag-")) return "labs";
+  if (focusSelector.includes("food-drink")) return "food";
+  if (focusSelector.includes("log-tiles") || focusSelector.includes("log-option")) return "log-tiles";
+  if (focusSelector.includes("ms-") || focusSelector.includes("milestone")) return "timeline";
+  if (focusSelector.includes("journal")) return "self-reports";
+  if (
+    focusSelector.includes("profile-") ||
+    focusSelector.includes("measure-") ||
+    focusSelector.includes("patient-photo")
+  ) {
+    return "basics";
+  }
+  return null;
+}
+
+function setSettingsSection(section, { scroll = false, focusSelector = null, profileSection = null } = {}) {
   const next = SETTINGS_SECTIONS.has(section) ? section : "patients";
   state.settingsSection = next;
   document.querySelectorAll("#settings-subnav [data-settings-section]").forEach((btn) => {
@@ -2162,6 +2219,11 @@ function setSettingsSection(section, { scroll = false, focusSelector = null } = 
   document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
     pane.classList.toggle("hidden", pane.dataset.settingsPane !== next);
   });
+  if (next === "profile") {
+    const inferred =
+      profileSection || profileSectionForFocus(focusSelector) || state.profileSection || "basics";
+    setProfileSection(inferred, { scroll: false, focusSelector: null });
+  }
   if (next === "access") {
     loadAuthUsers().catch((e) => toast(e.message || "Could not load users", "error"));
   }
@@ -6758,8 +6820,14 @@ function initSectionSubnav() {
     if (!btn) return;
     setSettingsSection(btn.dataset.settingsSection, { scroll: true });
   });
+  document.getElementById("profile-subnav")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-profile-section]");
+    if (!btn) return;
+    setProfileSection(btn.dataset.profileSection, { scroll: true });
+  });
   setHomeSection(state.homeSection || preferredHomeSection());
   setSettingsSection(state.settingsSection || "patients");
+  setProfileSection(state.profileSection || "basics");
   window.addEventListener("resize", () => {
     syncHomeLogFocusClass();
     if (document.body.classList.contains("home-log-focus")) {
@@ -8517,7 +8585,7 @@ function renderMedicationsHome(profile) {
     const meta = [formatMedicationDoseLine(m), started, ended].filter(Boolean).join(" · ");
     return `<div class="medication-home-row${isStopped ? " is-stopped" : ""}" data-id="${escapeHtml(m.id || "")}">
       <div class="medication-row-main">
-        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}${
+        ${formatMedicationTitleHtml(m)}${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}${
           isStopped ? `<span class="medication-stopped-pill">Stopped</span>` : ""
         }
         <p class="medication-row-meta">${escapeHtml(meta)}</p>
@@ -9046,12 +9114,12 @@ function updateMedIdentityHint(m) {
     return;
   }
   if (status === "uncertain" && m.identity_match) {
-    el.innerHTML = `Name may need checking — similar to <strong>${escapeHtml(m.identity_match)}</strong>.
-      <button type="button" class="btn secondary btn-sm" id="btn-med-use-suggested" data-name="${escapeHtml(m.identity_match)}">Use ${escapeHtml(m.identity_match)}</button>`;
+    el.innerHTML = `Official name may need checking — similar to <strong>${escapeHtml(m.identity_match)}</strong>.
+      <button type="button" class="btn secondary btn-sm" id="btn-med-use-suggested" data-name="${escapeHtml(m.identity_match)}">Use as official ${escapeHtml(m.identity_match)}</button>`;
   } else if (status === "unknown") {
-    el.innerHTML = `Not found on the known medication list. Rename to a standard brand or generic if you can, or keep as written.`;
+    el.innerHTML = `Not found on the known medication list. Set the official name to a standard brand or generic if you can, or keep as written.`;
   } else {
-    el.innerHTML = `Check the medication name and dose, then save.`;
+    el.innerHTML = `Check the official medication name and dose, then save.`;
   }
   el.classList.remove("hidden");
 }
@@ -9069,7 +9137,7 @@ function formatMedicationFixActions(m) {
   }
   if (status === "uncertain" && m.identity_match) {
     bits.push(
-      `<button type="button" class="btn secondary btn-sm btn-accept-med-name" data-id="${escapeHtml(m.id || "")}" data-name="${escapeHtml(m.identity_match)}">Use ${escapeHtml(m.identity_match)}</button>`
+      `<button type="button" class="btn secondary btn-sm btn-accept-med-name" data-id="${escapeHtml(m.id || "")}" data-name="${escapeHtml(m.identity_match)}">Official: ${escapeHtml(m.identity_match)}</button>`
     );
   }
   return bits.join("");
@@ -9221,6 +9289,24 @@ async function addMilestoneFromForm({ presetSelId, customId, dateId, notesId }) 
   return data;
 }
 
+function medicationPreferredName(m) {
+  return String(m?.name || "").trim();
+}
+
+function medicationOfficialName(m) {
+  const official = String(m?.official_name || "").trim();
+  return official || medicationPreferredName(m);
+}
+
+function formatMedicationTitleHtml(m) {
+  const preferred = medicationPreferredName(m);
+  const official = String(m?.official_name || "").trim();
+  if (official && preferred && official.toLowerCase() !== preferred.toLowerCase()) {
+    return `<strong>${escapeHtml(preferred)}</strong><span class="medication-official-sub muted small">Official: ${escapeHtml(official)}</span>`;
+  }
+  return `<strong>${escapeHtml(preferred || official || "")}</strong>`;
+}
+
 function medicationShowsOnLog(m) {
   return Boolean(m && m.show_on_log === true);
 }
@@ -9263,7 +9349,7 @@ function renderMedicationsSettings(profile) {
          <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
     return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
       <div class="medication-row-main">
-        <strong>${escapeHtml(m.name || "")}</strong>${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}
+        ${formatMedicationTitleHtml(m)}${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}
         <p class="medication-row-meta">${escapeHtml(meta)}</p>
         ${formatMedicationConditions(m)}
         ${formatMedicationHistory(m)}
@@ -9301,7 +9387,7 @@ function renderFoodDrinksSettings(profile) {
 function clearMedicationForm() {
   const idEl = document.getElementById("med-edit-id");
   if (idEl) idEl.value = "";
-  ["med-name", "med-dose-amount", "med-dose-unit-other", "med-frequency", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
+  ["med-official-name", "med-name", "med-dose-amount", "med-dose-unit-other", "med-frequency", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
@@ -9326,7 +9412,10 @@ function clearMedicationForm() {
 
 function fillMedicationForm(m) {
   document.getElementById("med-edit-id").value = m.id || "";
-  document.getElementById("med-name").value = m.name || "";
+  const preferred = medicationPreferredName(m);
+  const official = String(m.official_name || "").trim();
+  document.getElementById("med-official-name").value = official || preferred;
+  document.getElementById("med-name").value = preferred;
   setMedicationDosageFields(m.dosage || "");
   document.getElementById("med-frequency").value = m.frequency || "";
   const catEl = document.getElementById("med-category");
@@ -9349,7 +9438,7 @@ function fillMedicationForm(m) {
   const saveBtn = document.getElementById("btn-save-medication");
   if (saveBtn) saveBtn.textContent = "Save changes";
   document.getElementById("btn-cancel-med-edit")?.classList.remove("hidden");
-  document.getElementById("med-name")?.focus();
+  document.getElementById("med-official-name")?.focus();
 }
 
 async function openMedicationEditor(medId, { focusDose = false } = {}) {
@@ -9362,7 +9451,8 @@ async function openMedicationEditor(medId, { focusDose = false } = {}) {
   fillMedicationForm(med);
   switchTab("settings", {
     settingsSection: "profile",
-    settingsFocus: focusDose ? "#med-dose-amount" : "#med-name",
+    profileSection: "medications",
+    settingsFocus: focusDose ? "#med-dose-amount" : "#med-official-name",
   });
   requestAnimationFrame(() => {
     document.getElementById("medication-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -9374,14 +9464,14 @@ async function acceptSuggestedMedName(medId, suggestedName) {
   const res = await fetch(`/api/patients/${state.activePatientId}/medications/${medId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: suggestedName }),
+    body: JSON.stringify({ official_name: suggestedName }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    return toast(err.detail || "Could not rename medication", "error");
+    return toast(err.detail || "Could not set official name", "error");
   }
   applyProfileResponse(await res.json());
-  toast(`Renamed to ${suggestedName}`);
+  toast(`Official name set to ${suggestedName}`);
 }
 
 function setMedImportStatus(text, { error = false } = {}) {
@@ -12304,7 +12394,11 @@ document.getElementById("journal-med-hidden-chips")?.addEventListener("click", a
 
 document.getElementById("btn-journal-meds-settings")?.addEventListener("click", () => {
   hideModal("modal-journal");
-  switchTab("settings", { settingsSection: "profile", settingsFocus: "#med-show-on-log" });
+  switchTab("settings", {
+    settingsSection: "profile",
+    profileSection: "medications",
+    settingsFocus: "#med-show-on-log",
+  });
   requestAnimationFrame(() => {
     document
       .getElementById("medications-settings-heading")
@@ -12544,11 +12638,19 @@ document.getElementById("btn-journal-log")?.addEventListener("click", async () =
 });
 
 document.getElementById("btn-diagnostics-settings")?.addEventListener("click", () => {
-  switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-name" });
+  switchTab("settings", {
+    settingsSection: "profile",
+    profileSection: "labs",
+    settingsFocus: "#diag-name",
+  });
 });
 
 document.getElementById("btn-medications-settings")?.addEventListener("click", () => {
-  switchTab("settings", { settingsSection: "profile", settingsFocus: "#med-name" });
+  switchTab("settings", {
+    settingsSection: "profile",
+    profileSection: "medications",
+    settingsFocus: "#med-official-name",
+  });
 });
 
 document.getElementById("btn-med-safety-home")?.addEventListener("click", () => {
@@ -12628,10 +12730,12 @@ document.getElementById("remedy-quick-chips")?.addEventListener("click", async (
 document.getElementById("btn-save-medication")?.addEventListener("click", async () => {
   if (!state.activePatientId) return toast("Select a patient first", "error");
   const editId = document.getElementById("med-edit-id")?.value || "";
-  const name = document.getElementById("med-name")?.value.trim();
-  if (!name) return toast("Enter a medication name", "error");
+  const preferred = document.getElementById("med-name")?.value.trim() || "";
+  const official = document.getElementById("med-official-name")?.value.trim() || "";
+  if (!preferred && !official) return toast("Enter an official name or the name you use", "error");
   const body = {
-    name,
+    name: preferred || official,
+    official_name: official || null,
     dosage: composeDosageFromForm(),
     frequency: document.getElementById("med-frequency")?.value.trim() || null,
     category: document.getElementById("med-category")?.value || "prescription",
@@ -12824,11 +12928,11 @@ document.getElementById("med-identity-hint")?.addEventListener("click", (event) 
   const btn = event.target.closest("#btn-med-use-suggested");
   if (!btn) return;
   const name = btn.dataset.name || "";
-  const nameEl = document.getElementById("med-name");
-  if (nameEl && name) {
-    nameEl.value = name;
-    toast(`Name set to ${name} — save to apply`);
-    nameEl.focus();
+  const officialEl = document.getElementById("med-official-name");
+  if (officialEl && name) {
+    officialEl.value = name;
+    toast(`Official name set to ${name} — save to apply`);
+    officialEl.focus();
   }
 });
 

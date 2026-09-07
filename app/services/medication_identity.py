@@ -138,9 +138,33 @@ def identify_medication(name: str | None) -> dict[str, Any]:
     }
 
 
+def medication_preferred_name(med: dict[str, Any] | None) -> str:
+    """Patient-facing name used on Log tiles and everyday lists."""
+    if not isinstance(med, dict):
+        return ""
+    return " ".join(str(med.get("name") or "").split())
+
+
+def medication_official_name(med: dict[str, Any] | None) -> str:
+    """Clinical / official name used for identity matching and analysis."""
+    if not isinstance(med, dict):
+        return ""
+    official = " ".join(str(med.get("official_name") or "").split())
+    return official or medication_preferred_name(med)
+
+
+def medication_analysis_label(med: dict[str, Any] | None) -> str:
+    """Official name for prompts, with preferred alias when different."""
+    preferred = medication_preferred_name(med)
+    official = medication_official_name(med)
+    if preferred and official and preferred.casefold() != official.casefold():
+        return f"{official} (patient calls this {preferred})"
+    return official or preferred or "?"
+
+
 def apply_identity_fields(med: dict[str, Any]) -> dict[str, Any]:
     """Attach identity_* fields onto a medication dict (mutates and returns)."""
-    identity = identify_medication(med.get("name"))
+    identity = identify_medication(medication_official_name(med) or med.get("name"))
     med["identity_status"] = identity["status"]
     med["identity_match"] = identity.get("matched_name")
     med["identity_score"] = identity.get("score")

@@ -14,7 +14,12 @@ from app.services.case_manager import (
     save_patient_profile,
 )
 from app.services.llm import LLMClient
-from app.services.medication_identity import annotate_medications, identify_medication
+from app.services.medication_identity import (
+    annotate_medications,
+    identify_medication,
+    medication_analysis_label,
+    medication_official_name,
+)
 
 SAFETY_DISCLAIMER = (
     "Research support only — not a substitute for a pharmacist or clinician review. "
@@ -106,14 +111,14 @@ def _clamp_str(value: Any, max_len: int) -> str | None:
 
 
 def _format_med_line(m: dict[str, Any]) -> str:
-    bits = [str(m.get("name") or "?")]
+    bits = [medication_analysis_label(m)]
     if m.get("dosage"):
         bits.append(str(m["dosage"]))
     if m.get("frequency"):
         bits.append(str(m["frequency"]))
     if m.get("conditions"):
         bits.append("for " + ", ".join(str(c) for c in m["conditions"]))
-    status = m.get("identity_status") or identify_medication(m.get("name")).get("status")
+    status = m.get("identity_status") or identify_medication(medication_official_name(m)).get("status")
     if status and status != "known":
         match = m.get("identity_match")
         bits.append(f"identity:{status}" + (f"~{match}" if match else ""))
@@ -267,7 +272,7 @@ async def run_medication_safety_review(
     for m in active + adhoc:
         status = m.get("identity_status") or "unknown"
         if status != "known":
-            unidentified_local.append(str(m.get("name") or ""))
+            unidentified_local.append(medication_official_name(m) or str(m.get("name") or ""))
 
     active_block = "\n".join(f"- {_format_med_line(m)}" for m in active) or "- (none)"
     stopped_block = "\n".join(f"- {_format_med_line(m)}" for m in stopped) or "- (none)"
@@ -320,6 +325,7 @@ async def run_medication_safety_review(
         {
             "id": m.get("id"),
             "name": m.get("name"),
+            "official_name": m.get("official_name"),
             "identity_status": m.get("identity_status"),
             "identity_match": m.get("identity_match"),
         }

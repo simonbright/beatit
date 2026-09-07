@@ -221,6 +221,11 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
                 med["show_on_log"] = False
             else:
                 med["show_on_log"] = _coerce_show_on_log(med.get("show_on_log"))
+            official = " ".join(str(med.get("official_name") or "").split())
+            med["official_name"] = official[:120] if official else None
+            preferred = " ".join(str(med.get("name") or "").split())
+            if preferred:
+                med["name"] = preferred[:120]
             normalized_meds.append(med)
         profile["medications"] = annotate_medications(
             _sort_medications(_dedupe_medications(normalized_meds))
@@ -986,6 +991,7 @@ def add_patient_medication(
     patient_id: str,
     *,
     name: str,
+    official_name: str | None = None,
     dosage: str | None = None,
     frequency: str | None = None,
     conditions: Any = None,
@@ -1000,9 +1006,12 @@ def add_patient_medication(
     reg = load_registry()
     if not _find_patient(reg, patient_id):
         return None
-    cleaned_name = " ".join((name or "").strip().split())
+    cleaned_official = " ".join((official_name or "").strip().split()) or None
+    cleaned_name = " ".join((name or "").strip().split()) or cleaned_official or ""
     if not cleaned_name:
         raise ValueError("Medication name is required")
+    if cleaned_official and cleaned_official.casefold() == cleaned_name.casefold():
+        cleaned_official = None
     start = _normalize_med_date(started_at)
     end = _normalize_med_date(ended_at)
     if start and end and end < start:
@@ -1010,12 +1019,19 @@ def add_patient_medication(
     cat = _normalize_medication_category(category)
     freq = (frequency or "").strip() or None
     profile = get_patient_profile(patient_id)
-    # Reuse existing active med with same name instead of creating duplicates
+    # Reuse existing active med with same preferred or official name
     existing = next(
         (
             m
             for m in (profile.get("medications") or [])
-            if _medication_name_key(m.get("name")) == _medication_name_key(cleaned_name)
+            if (
+                _medication_name_key(m.get("name")) == _medication_name_key(cleaned_name)
+                or (
+                    cleaned_official
+                    and _medication_name_key(m.get("official_name") or m.get("name"))
+                    == _medication_name_key(cleaned_official)
+                )
+            )
             and str(m.get("status") or "active") != "stopped"
         ),
         None,
@@ -1031,6 +1047,7 @@ def add_patient_medication(
     entry = {
         "id": str(uuid4()),
         "name": cleaned_name[:120],
+        "official_name": cleaned_official[:120] if cleaned_official else None,
         "dosage": (dosage or "").strip() or None,
         "frequency": freq,
         "conditions": _normalize_conditions(conditions),
@@ -1083,6 +1100,7 @@ def update_patient_medication(
     medication_id: str,
     *,
     name: str | None = None,
+    official_name: str | None = ...,  # type: ignore[assignment]
     dosage: str | None = ...,  # type: ignore[assignment]
     frequency: str | None = ...,  # type: ignore[assignment]
     conditions: Any = ...,
@@ -1119,6 +1137,12 @@ def update_patient_medication(
         if not cleaned:
             raise ValueError("Medication name is required")
         med["name"] = cleaned[:120]
+    if official_name is not ...:
+        cleaned_official = " ".join((official_name or "").strip().split()) or None
+        preferred = str(med.get("name") or "").strip()
+        if cleaned_official and preferred and cleaned_official.casefold() == preferred.casefold():
+            cleaned_official = None
+        med["official_name"] = cleaned_official[:120] if cleaned_official else None
     if dosage is not ...:
         med["dosage"] = (dosage or "").strip() or None
     if frequency is not ...:
@@ -1747,10 +1771,12 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
     meds = profile.get("medications") or []
     active_meds = [m for m in meds if (m.get("status") or "active") == "active"]
     stopped_meds = [m for m in meds if (m.get("status") or "") == "stopped"]
+    from app.services.medication_identity import medication_analysis_label
+
     if active_meds:
         lines.append("Active medications:")
         for m in active_meds[:20]:
-            bits = [str(m.get("name") or "")]
+            bits = [medication_analysis_label(m)]
             if m.get("dosage"):
                 bits.append(str(m["dosage"]))
             if m.get("frequency"):
@@ -1772,7 +1798,7 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
     if stopped_meds:
         lines.append("Stopped medications (recent):")
         for m in stopped_meds[:8]:
-            bits = [str(m.get("name") or "")]
+            bits = [medication_analysis_label(m)]
             if m.get("dosage"):
                 bits.append(str(m["dosage"]))
             if m.get("stopped_at"):

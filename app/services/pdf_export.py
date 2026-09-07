@@ -1917,7 +1917,15 @@ def build_medications_pdf(
         _write_med_table_header(pdf, cols, row_h=header_h)
         for idx, med in enumerate(rows):
             active = (med.get("status") or "active") != "stopped"
-            values = [_safe_text(str(med.get("name") or "").strip() or "—")]
+            preferred = _safe_text(str(med.get("name") or "").strip() or "—")
+            official = _safe_text(str(med.get("official_name") or "").strip())
+            if official and preferred != "—" and official.casefold() != preferred.casefold():
+                name_cell = f"{preferred} (official: {official})"
+            elif official and preferred == "—":
+                name_cell = official
+            else:
+                name_cell = preferred
+            values = [name_cell]
             values.append(_med_category_label(med.get("category")))
             if include_status:
                 values.append("Active" if active else "Stopped")

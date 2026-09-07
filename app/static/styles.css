@@ -426,6 +426,35 @@ body {
   display: none;
 }
 
+.profile-subnav {
+  position: static;
+  top: auto;
+  z-index: auto;
+  margin: 0.35rem 0 1rem;
+  padding: 0 0 0.45rem;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.profile-subnav .profile-subtab {
+  flex-direction: row;
+  gap: 0.35rem;
+  min-width: auto;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.profile-pane.hidden {
+  display: none;
+}
+
+.medication-official-sub {
+  display: block;
+  margin-top: 0.15rem;
+  font-weight: 400;
+}
+
 .home-pane-empty {
   text-align: center;
   padding: 1.5rem 1.25rem;

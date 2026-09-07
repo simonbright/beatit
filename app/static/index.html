@@ -1449,7 +1449,22 @@
       <div id="settings-pane-profile" class="section-pane hidden" data-settings-pane="profile">
       <div class="card settings-card">
         <h3>Who profile</h3>
-        <p class="muted">Basic demographics for the current patient. Date of birth and gender stay fixed; height and weight can be recorded over time.</p>
+        <p class="muted">Patient details for the current person. Use the tabs below — one section at a time.</p>
+        <nav id="profile-subnav" class="section-subnav profile-subnav" role="tablist" aria-label="Profile sections">
+          <div class="section-subnav-track">
+            <button type="button" class="section-subtab profile-subtab active" data-profile-section="basics" role="tab" aria-selected="true">Basics</button>
+            <button type="button" class="section-subtab profile-subtab" data-profile-section="labs" role="tab" aria-selected="false">Labs</button>
+            <button type="button" class="section-subtab profile-subtab" data-profile-section="medications" role="tab" aria-selected="false">Medications</button>
+            <button type="button" class="section-subtab profile-subtab" data-profile-section="log-tiles" role="tab" aria-selected="false">Log tiles</button>
+            <button type="button" class="section-subtab profile-subtab" data-profile-section="food" role="tab" aria-selected="false">Ate / Drank</button>
+            <button type="button" class="section-subtab profile-subtab" data-profile-section="timeline" role="tab" aria-selected="false">Timeline</button>
+            <button type="button" class="section-subtab profile-subtab" data-profile-section="self-reports" role="tab" aria-selected="false">Self-reports</button>
+          </div>
+        </nav>
+
+        <div class="profile-pane" data-profile-pane="basics">
+        <h4 class="patient-measurements-title">Basics</h4>
+        <p class="muted small">Photo, demographics, and height / weight. Date of birth and gender stay fixed; measurements can be recorded over time.</p>
         <div class="settings-photo-row">
           <button type="button" class="patient-photo-btn settings-photo-btn" id="btn-patient-photo" title="Add or change photo" aria-label="Add or change photo">
             <img id="settings-patient-photo" class="patient-photo-img hidden" alt="">
@@ -1499,7 +1514,9 @@
           <button type="button" class="btn secondary" id="btn-add-measurement">Add measurement</button>
         </div>
         <div id="patient-measurements-list" class="patient-measurements-list"></div>
+        </div>
 
+        <div class="profile-pane hidden" data-profile-pane="labs">
         <h4 class="patient-measurements-title">Key diagnostics</h4>
         <p class="muted small">Blood tests first (lipids, HbA1c, creatinine, etc.). Use the lab <strong>collection / date of service</strong>, not the print date. Imaging scores (e.g. calcium score) can be added too.</p>
         <div class="diagnostic-import-block" id="diagnostic-import-block">
@@ -1545,11 +1562,15 @@
           <button type="button" class="btn secondary" id="btn-add-diagnostic">Add reading</button>
         </div>
         <div id="patient-diagnostics-list" class="patient-measurements-list"></div>
+        </div>
 
+        <div class="profile-pane hidden" data-profile-pane="self-reports">
         <h4 class="patient-measurements-title">Self-reports</h4>
         <p class="muted small">Feelings, symptoms, meds taken, and notes for this person (shared across cases). Logged from Home.</p>
         <div id="patient-journal-list" class="patient-measurements-list"></div>
+        </div>
 
+        <div class="profile-pane hidden" data-profile-pane="food">
         <h4 class="patient-measurements-title" id="food-drinks-settings-heading">Ate / Drank list</h4>
         <p class="muted small">Quick picks shown when logging Ate/Drank. Add from here or check <em>Add to my List</em> when logging details.</p>
         <div class="patient-measurement-form food-drink-form" id="food-drink-form">
@@ -1561,14 +1582,18 @@
           </div>
         </div>
         <div id="patient-food-drinks-list" class="patient-measurements-list"></div>
+        </div>
 
+        <div class="profile-pane hidden" data-profile-pane="log-tiles">
         <h4 class="patient-measurements-title" id="log-tiles-settings-heading">Home Log tiles</h4>
         <p class="muted small">Order of quick-log tiles for this person only (not shared across patients). Use ⤒ / ↑ / ↓ / ⤓ to reorder, or add a custom option. Scale options ask for 1–5 when tapped.</p>
         <div class="med-form-actions" style="margin-bottom:0.65rem">
           <button type="button" class="btn secondary btn-sm" id="btn-settings-add-log-option">Add option</button>
         </div>
         <div id="log-tiles-order-list" class="log-tiles-order-list"></div>
+        </div>
 
+        <div class="profile-pane hidden" data-profile-pane="timeline">
         <h4 class="patient-measurements-title" id="milestones-settings-heading">Timeline milestones</h4>
         <p class="muted small">Lifestyle and other dated milestones (exercise, diet changes, etc.) shown on Labs charts alongside medication starts and dose changes.</p>
         <div class="patient-measurement-form patient-milestone-form" id="milestone-form">
@@ -1589,9 +1614,11 @@
           </div>
         </div>
         <div id="patient-milestones-list" class="patient-measurements-list"></div>
+        </div>
 
+        <div class="profile-pane hidden" data-profile-pane="medications">
         <h4 class="patient-measurements-title" id="medications-settings-heading">Medications &amp; remedies</h4>
-        <p class="muted small">Anything this person uses — prescriptions, OTC, and remedies. Check <strong>Show on Log</strong> for meds that should appear under Took medication. Log only shows this person’s opted-in meds (nothing shared between people).</p>
+        <p class="muted small">Anything this person uses — prescriptions, OTC, and remedies. Use the <strong>official name</strong> for clinical analysis and the <strong>name I use</strong> for Log tiles and everyday lists. Check <strong>Show on Log</strong> for meds that should appear under Took medication.</p>
         <div class="med-export-controls med-export-controls-settings" role="group" aria-label="Export medications PDF">
           <label class="med-export-scope-label" for="med-export-scope-settings">Export
             <select id="med-export-scope-settings" aria-label="Export scope">
@@ -1632,9 +1659,13 @@
         <div class="patient-measurement-form patient-medication-form" id="medication-form">
           <input type="hidden" id="med-edit-id" value="">
           <p class="muted small med-identity-hint hidden" id="med-identity-hint" role="status"></p>
-          <label for="med-name">Name
-            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Atorvastatin or Magnesium" autocomplete="off">
+          <label for="med-official-name">Official name
+            <input type="text" id="med-official-name" maxlength="120" placeholder="e.g. Atorvastatin or magnesium hydroxide" autocomplete="off">
           </label>
+          <label for="med-name">Name I use
+            <input type="text" id="med-name" maxlength="120" placeholder="e.g. Lipitor or MoM" autocomplete="off">
+          </label>
+          <p class="muted small med-span-2">Analysis and safety review use the official name (and mention the name you use when it differs). Log chips and lists use the name you prefer.</p>
           <label for="med-category">Type
             <select id="med-category">
               <option value="prescription">Prescription</option>
@@ -1680,7 +1711,7 @@
             <input type="text" id="med-conditions" maxlength="240" placeholder="Optional — comma-separated, e.g. high cholesterol, cardiac risk" autocomplete="off">
           </label>
           <label for="med-notes" class="med-span-2">Notes
-            <input type="text" id="med-notes" maxlength="500" placeholder="Optional" autocomplete="off">
+            <input type="text" id="med-notes" maxlength="500" placeholder="Optional">
           </label>
           <label class="journal-check med-span-2" for="med-show-on-log">
             <input type="checkbox" id="med-show-on-log">
@@ -1698,6 +1729,7 @@
           </div>
         </div>
         <div id="patient-medications-list" class="patient-measurements-list"></div>
+        </div>
       </div>
       </div>
 
