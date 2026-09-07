@@ -44,6 +44,7 @@ Rules:
 - Do not invent values. Skip rows without a numeric result.
 - Prefer standard names when clear (LDL → "LDL cholesterol", HDL → "HDL cholesterol", non-HDL → "Non-HDL cholesterol").
 - Include ratios and scores (e.g. Cholesterol/HDL ratio, coronary calcium) when present.
+- Never emit duplicate rows for the same test on the same collection date (one row per analyte per date).
 - If the document is empty or not a lab report, return [].
 
 Known preferred names (use when matching):
@@ -89,8 +90,34 @@ _NAME_ALIASES = {
     "hemoglobin": "Hemoglobin",
     "hgb": "Hemoglobin",
     "hb": "Hemoglobin",
+    "haemoglobin": "Hemoglobin",
     "platelets": "Platelets",
     "plt": "Platelets",
+    "platelet count": "Platelets",
+    "wbc": "WBC",
+    "white blood cell": "WBC",
+    "white blood cells": "WBC",
+    "white blood cell count": "WBC",
+    "leukocytes": "WBC",
+    "rbc": "RBC",
+    "red blood cell": "RBC",
+    "red blood cells": "RBC",
+    "red blood cell count": "RBC",
+    "hematocrit": "Hematocrit",
+    "hct": "Hematocrit",
+    "mcv": "MCV",
+    "mch": "MCH",
+    "mchc": "MCHC",
+    "rdw": "RDW",
+    "neutrophils": "Neutrophils",
+    "lymphocytes": "Lymphocytes",
+    "monocytes": "Monocytes",
+    "eosinophils": "Eosinophils",
+    "basophils": "Basophils",
+    "psa": "Total PSA",
+    "total psa": "Total PSA",
+    "prostate specific antigen": "Total PSA",
+    "testosterone": "Testosterone",
     "crp": "CRP",
     "tsh": "TSH",
     "vitamin d": "Vitamin D 25-OH",
@@ -230,36 +257,121 @@ def parse_diagnostics_json(raw: str) -> tuple[list[dict[str, Any]], list[str]]:
     return proposed, warnings
 
 
+def diagnostic_identity_key(
+    name: str | None,
+    recorded_at: str | None,
+) -> tuple[str, str] | None:
+    """Normalized (name, date) key used to detect duplicate lab readings."""
+    norm = normalize_diagnostic_name(str(name or ""))
+    date = str(recorded_at or "").strip()[:10]
+    if not norm or not date or len(date) < 10:
+        return None
+    return (norm.lower(), date)
+
+
+def existing_diagnostic_index(patient_id: str) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Map normalized (name, date) → existing profile diagnostic rows."""
+    profile = get_patient_profile(patient_id)
+    index: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in profile.get("diagnostics") or []:
+        key = diagnostic_identity_key(row.get("name"), row.get("recorded_at"))
+        if not key:
+            continue
+        index.setdefault(key, []).append(row)
+    return index
+
+
+def is_duplicate_diagnostic(
+    candidate: dict[str, Any],
+    *,
+    existing_index: dict[tuple[str, str], list[dict[str, Any]]],
+) -> bool:
+    """True when a same normalized name + collection date is already on the profile."""
+    key = diagnostic_identity_key(candidate.get("name"), candidate.get("recorded_at"))
+    if not key:
+        return False
+    return bool(existing_index.get(key))
+
+
+def annotate_proposed_duplicates(
+    proposed: list[dict[str, Any]],
+    patient_id: str,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    """Mark proposed rows that already exist; drop within-batch duplicates."""
+    existing = existing_diagnostic_index(patient_id)
+    seen_in_batch: set[tuple[str, str]] = set()
+    annotated: list[dict[str, Any]] = []
+    overlap_labels: list[str] = []
+    duplicate_count = 0
+    within_batch = 0
+
+    for raw in proposed:
+        row = dict(raw)
+        key = diagnostic_identity_key(row.get("name"), row.get("recorded_at"))
+        if key and key in seen_in_batch:
+            within_batch += 1
+            duplicate_count += 1
+            continue
+        already = bool(key and is_duplicate_diagnostic(row, existing_index=existing))
+        row["already_on_profile"] = already
+        if already:
+            duplicate_count += 1
+            overlap_labels.append(
+                f"{row.get('name')} ({row.get('recorded_at') or 'no date'})"
+            )
+        if key:
+            seen_in_batch.add(key)
+        annotated.append(row)
+
+    warnings: list[str] = []
+    if within_batch:
+        warnings.append(
+            f"Removed {within_batch} duplicate row(s) within this report (same test + date)"
+        )
+    if overlap_labels:
+        sample = ", ".join(overlap_labels[:5])
+        more = f" (+{len(overlap_labels) - 5} more)" if len(overlap_labels) > 5 else ""
+        warnings.append(f"Already on profile for same date: {sample}{more}")
+    return annotated, warnings, duplicate_count
+
+
 def soft_overlap_warnings(
     proposed: list[dict[str, Any]],
     patient_id: str,
 ) -> list[str]:
-    profile = get_patient_profile(patient_id)
-    existing = {
-        (
-            str(d.get("name") or "").strip().lower(),
-            str(d.get("recorded_at") or "")[:10],
-        )
-        for d in (profile.get("diagnostics") or [])
-    }
-    overlaps = [
-        f"{p['name']} ({p.get('recorded_at') or 'no date'})"
-        for p in proposed
-        if (
-            p["name"].strip().lower(),
-            str(p.get("recorded_at") or "")[:10],
-        )
-        in existing
-    ]
-    if not overlaps:
-        return []
-    sample = ", ".join(overlaps[:5])
-    more = f" (+{len(overlaps) - 5} more)" if len(overlaps) > 5 else ""
-    return [f"Already on profile for same date: {sample}{more}"]
+    _, warnings, _ = annotate_proposed_duplicates(proposed, patient_id)
+    return warnings
 
 
 def _preset_names_for_prompt() -> str:
     return ", ".join(p["name"] for p in DIAGNOSTIC_PRESETS)
+
+
+def _empty_lab_import_result(
+    patient_id: str,
+    doc: dict[str, Any],
+    *,
+    skipped_duplicate: int = 0,
+    proposed_count: int = 0,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    profile = get_patient_profile(patient_id)
+    return {
+        "added": [],
+        "added_count": 0,
+        "proposed_count": proposed_count,
+        "skipped_duplicate": skipped_duplicate,
+        "skipped_incomplete": 0,
+        "errors": [],
+        "warnings": list(warnings or []),
+        "document_id": str(doc.get("id") or "").strip() or None,
+        "document_title": doc.get("title"),
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+        "offer_manual_import": False,
+        "already_on_profile": skipped_duplicate > 0,
+    }
 
 
 async def _propose_from_text(
@@ -294,7 +406,8 @@ async def _propose_from_text(
 
     proposed, parse_warnings = parse_diagnostics_json(raw)
     warnings.extend(parse_warnings)
-    warnings.extend(soft_overlap_warnings(proposed, patient_id))
+    proposed, overlap_warnings, _ = annotate_proposed_duplicates(proposed, patient_id)
+    warnings.extend(overlap_warnings)
     missing_dates = sum(1 for p in proposed if not p.get("recorded_at"))
     if missing_dates:
         warnings.append(
@@ -308,6 +421,7 @@ async def _propose_from_text(
         "extraction_meta": meta or {},
         "warnings": warnings,
         "extracted_preview": clipped[:800],
+        "duplicate_count": sum(1 for p in proposed if p.get("already_on_profile")),
     }
 
 
@@ -383,15 +497,15 @@ async def propose_diagnostics_from_document(
     return await _propose_from_text(patient_id, text, meta=meta, llm=llm)
 
 
-def _existing_name_date_keys(patient_id: str) -> set[tuple[str, str]]:
+def _profile_readings_for_document(patient_id: str, doc_id: str | None) -> int:
+    if not doc_id:
+        return 0
     profile = get_patient_profile(patient_id)
-    return {
-        (
-            str(d.get("name") or "").strip().lower(),
-            str(d.get("recorded_at") or "")[:10],
-        )
+    return sum(
+        1
         for d in (profile.get("diagnostics") or [])
-    }
+        if str(d.get("source_document_id") or "") == doc_id
+    )
 
 
 async def auto_confirm_lab_readings_from_document(
@@ -403,9 +517,35 @@ async def auto_confirm_lab_readings_from_document(
 ) -> dict[str, Any]:
     """Propose lab rows and auto-add complete, non-duplicate readings.
 
-    Only rows with name + value + recorded_at are confirmed. Exact name+date
-    duplicates are skipped. Manual Import to Labs remains the fallback.
+    Only rows with name + value + recorded_at are confirmed. Same normalized
+    name + collection date already on the profile are skipped (including
+    within-batch duplicates). Manual Import to Labs remains the fallback.
     """
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    doc_id = str(doc.get("id") or "").strip() or None
+
+    # Reconstructed chart entries / docs already linked to readings — do not re-parse.
+    if meta.get("backfill_from_diagnostics"):
+        linked = _profile_readings_for_document(patient_id, doc_id)
+        return _empty_lab_import_result(
+            patient_id,
+            doc,
+            skipped_duplicate=max(linked, int(meta.get("reading_count") or 0)),
+            proposed_count=max(linked, int(meta.get("reading_count") or 0)),
+            warnings=["Library entry was built from existing chart readings — skipped re-import"],
+        )
+    linked_existing = _profile_readings_for_document(patient_id, doc_id)
+    if linked_existing > 0 and meta.get("handling_status") in {"ok", "handled", "dismissed"}:
+        return _empty_lab_import_result(
+            patient_id,
+            doc,
+            skipped_duplicate=linked_existing,
+            proposed_count=linked_existing,
+            warnings=[
+                f"Skipped re-import — {linked_existing} reading(s) already linked to this document"
+            ],
+        )
+
     proposal = await propose_diagnostics_from_document(
         patient_id,
         doc,
@@ -413,12 +553,12 @@ async def auto_confirm_lab_readings_from_document(
         llm=llm,
     )
     proposed = proposal.get("proposed") or []
-    existing = _existing_name_date_keys(patient_id)
-    doc_id = str(doc.get("id") or "").strip() or None
+    existing = existing_diagnostic_index(patient_id)
     added: list[dict[str, Any]] = []
     skipped_duplicate = 0
     skipped_incomplete = 0
     errors: list[str] = []
+    seen_in_batch: set[tuple[str, str]] = set()
 
     for raw in proposed:
         name = str(raw.get("name") or "").strip()
@@ -426,9 +566,16 @@ async def auto_confirm_lab_readings_from_document(
         if not name or raw.get("value") is None or not recorded_at:
             skipped_incomplete += 1
             continue
-        key = (name.lower(), recorded_at)
-        if key in existing:
+        key = diagnostic_identity_key(name, recorded_at)
+        if not key:
+            skipped_incomplete += 1
+            continue
+        if key in seen_in_batch or is_duplicate_diagnostic(
+            {"name": name, "recorded_at": recorded_at, "value": raw.get("value")},
+            existing_index=existing,
+        ):
             skipped_duplicate += 1
+            seen_in_batch.add(key)
             continue
         try:
             entry = add_patient_diagnostic(
@@ -446,11 +593,18 @@ async def auto_confirm_lab_readings_from_document(
             continue
         if entry:
             added.append(entry)
-            existing.add(key)
+            seen_in_batch.add(key)
+            existing.setdefault(key, []).append(entry)
 
     profile = get_patient_profile(patient_id)
     warnings = list(proposal.get("warnings") or [])
+    # Drop soft-overlap warning text if we already counted skips in this pass
     if skipped_duplicate:
+        warnings = [
+            w
+            for w in warnings
+            if not str(w).startswith("Already on profile for same date:")
+        ]
         warnings.append(f"Skipped {skipped_duplicate} duplicate name+date reading(s)")
     if skipped_incomplete:
         warnings.append(

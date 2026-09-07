@@ -18,6 +18,9 @@ from app.services.medication_import import (
 from app.services.diagnostic_import import (
     auto_confirm_lab_readings_from_document,
     clamp_proposed_diagnostic,
+    diagnostic_identity_key,
+    existing_diagnostic_index,
+    is_duplicate_diagnostic,
     propose_diagnostics_from_document,
     propose_diagnostics_from_upload,
 )
@@ -2998,7 +3001,10 @@ async def api_confirm_patient_diagnostics_import(
         raise HTTPException(status_code=400, detail="Select at least one reading to add")
     added: list[dict[str, Any]] = []
     errors: list[str] = []
+    skipped_duplicate = 0
     default_doc_id = (body.source_document_id or "").strip() or None
+    existing = existing_diagnostic_index(patient_id)
+    seen_in_batch: set[tuple[str, str]] = set()
     for raw in body.diagnostics:
         clamped = clamp_proposed_diagnostic(raw.model_dump())
         if clamped is None:
@@ -3006,6 +3012,15 @@ async def api_confirm_patient_diagnostics_import(
             continue
         if not clamped.get("recorded_at"):
             errors.append(f"Missing date for {clamped.get('name') or 'reading'}")
+            continue
+        key = diagnostic_identity_key(clamped.get("name"), clamped.get("recorded_at"))
+        if key and (
+            key in seen_in_batch
+            or is_duplicate_diagnostic(clamped, existing_index=existing)
+        ):
+            skipped_duplicate += 1
+            if key:
+                seen_in_batch.add(key)
             continue
         row_doc_id = (raw.source_document_id or "").strip() or default_doc_id
         try:
@@ -3025,7 +3040,10 @@ async def api_confirm_patient_diagnostics_import(
         if entry is None:
             raise HTTPException(status_code=404, detail="Patient not found")
         added.append(entry)
-    if not added and errors:
+        if key:
+            seen_in_batch.add(key)
+            existing.setdefault(key, []).append(entry)
+    if not added and errors and skipped_duplicate == 0:
         raise HTTPException(status_code=400, detail=errors[0])
     profile = get_patient_profile(patient_id)
     if default_doc_id:
@@ -3046,7 +3064,7 @@ async def api_confirm_patient_diagnostics_import(
                         "added_count": len(added),
                         "proposed_count": len(body.diagnostics),
                         "skipped_incomplete": 0,
-                        "skipped_duplicate": 0,
+                        "skipped_duplicate": skipped_duplicate,
                     },
                 )
         except Exception:
@@ -3056,6 +3074,7 @@ async def api_confirm_patient_diagnostics_import(
         "patient": {"id": patient_id},
         "added": added,
         "added_count": len(added),
+        "skipped_duplicate": skipped_duplicate,
         "errors": errors,
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),

@@ -9552,9 +9552,14 @@ function renderDiagImportReview(data) {
   list.innerHTML = proposed
     .map((d, i) => {
       const dateVal = d.recorded_at ? String(d.recorded_at).slice(0, 10) : "";
-      return `<div class="med-import-row" data-idx="${i}">
+      const already = Boolean(d.already_on_profile);
+      const checked = already ? "" : "checked";
+      const alreadyNote = already
+        ? `<p class="muted small diag-import-dup-note">Already on charts for this date — left unchecked</p>`
+        : "";
+      return `<div class="med-import-row${already ? " diag-import-row-dup" : ""}" data-idx="${i}" data-already="${already ? "1" : "0"}">
         <label class="med-import-check">
-          <input type="checkbox" class="diag-import-select" checked aria-label="Include ${escapeHtml(d.name || "reading")}">
+          <input type="checkbox" class="diag-import-select" ${checked} aria-label="Include ${escapeHtml(d.name || "reading")}">
         </label>
         <div class="med-import-row-fields">
           <label>Name<input type="text" class="diag-import-name" maxlength="120" list="diag-name-presets" value="${escapeHtml(d.name || "")}"></label>
@@ -9562,6 +9567,7 @@ function renderDiagImportReview(data) {
           <label>Unit<input type="text" class="diag-import-unit" maxlength="40" list="diag-unit-presets" value="${escapeHtml(d.unit || "")}"></label>
           <label>Date<input type="date" class="diag-import-date" value="${escapeHtml(dateVal)}"></label>
           <label class="med-import-span-2">Notes<input type="text" class="diag-import-notes" maxlength="500" value="${escapeHtml(d.notes || "")}"></label>
+          ${alreadyNote}
         </div>
       </div>`;
     })
@@ -9613,7 +9619,17 @@ async function confirmDiagImportAndShowCharts() {
     });
     applyProfileResponse(data);
     clearDiagImportReview();
-    toast(`Added ${data.added_count || diagnostics.length} lab reading(s)`);
+    const added = data.added_count || 0;
+    const skipped = data.skipped_duplicate || 0;
+    if (added && skipped) {
+      toast(`Added ${added} lab reading(s) · skipped ${skipped} already on charts`);
+    } else if (added) {
+      toast(`Added ${added} lab reading(s)`);
+    } else if (skipped) {
+      toast(`All selected readings were already on charts (${skipped} skipped)`);
+    } else {
+      toast("No lab readings added");
+    }
     switchTab("analyze");
     setHomeSection("diagnostics", { scroll: true });
     refreshHandlingFlags({ rescan: true }).catch(() => {});
