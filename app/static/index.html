@@ -49,10 +49,7 @@
         </div>
       </div>
       <div class="header-actions">
-        <button type="button" class="btn secondary header-export-btn header-export-text hidden" id="btn-export-pdf" title="Download assessment as PDF">
-          Export PDF
-        </button>
-        <button type="button" class="header-icon-btn header-export-icon hidden" id="btn-export-pdf-icon" title="Download assessment as PDF" aria-label="Export PDF">
+        <button type="button" class="header-icon-btn hidden" id="btn-export-pdf-icon" title="Export PDF" aria-label="Export PDF">
           <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
             <path d="M14 2v6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
@@ -118,6 +115,57 @@
       </div>
     </nav>
   </header>
+
+  <!-- Export PDF chooser -->
+  <div id="modal-export-pdf" class="modal-overlay hidden">
+    <div class="modal-card modal-export-pdf-card" role="dialog" aria-modal="true" aria-labelledby="export-pdf-title">
+      <div class="row-between wrap">
+        <h3 id="export-pdf-title">Export PDF</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-export-pdf">Close</button>
+      </div>
+      <p class="muted small">Choose what to include. Empty sections are skipped automatically.</p>
+      <div class="export-pdf-all-row">
+        <button type="button" class="btn secondary btn-sm" id="btn-export-pdf-select-all">All</button>
+        <button type="button" class="btn ghost btn-sm" id="btn-export-pdf-select-none">None</button>
+      </div>
+      <fieldset class="export-pdf-options">
+        <legend class="sr-only">Sections to export</legend>
+        <label class="export-pdf-option">
+          <input type="checkbox" id="export-pdf-assessment" value="assessment" checked>
+          <span>Assessment</span>
+        </label>
+        <label class="export-pdf-option">
+          <input type="checkbox" id="export-pdf-logs" value="logs" checked>
+          <span>Logs</span>
+        </label>
+        <label class="export-pdf-option export-pdf-option-indent" for="export-pdf-log-days">
+          <span class="muted small">Log range</span>
+          <select id="export-pdf-log-days" aria-label="Log range for export">
+            <option value="1">Today</option>
+            <option value="2">2 days</option>
+            <option value="3">3 days</option>
+            <option value="4">4 days</option>
+            <option value="7" selected>7 days</option>
+            <option value="10">10 days</option>
+            <option value="20">20 days</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+        <label class="export-pdf-option">
+          <input type="checkbox" id="export-pdf-medications" value="medications" checked>
+          <span>Medications</span>
+        </label>
+        <label class="export-pdf-option">
+          <input type="checkbox" id="export-pdf-labs" value="labs" checked>
+          <span>Labs</span>
+        </label>
+      </fieldset>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="btn-cancel-export-pdf">Cancel</button>
+        <button type="button" class="btn primary" id="btn-confirm-export-pdf">Download</button>
+      </div>
+    </div>
+  </div>
 
   <!-- How are you? quick log -->
   <div id="modal-journal" class="modal-overlay hidden">
@@ -1208,7 +1256,7 @@
             <li><strong>Full assessment</strong> — detailed synthesis from your documents.</li>
             <li><strong>Open items</strong> — gaps and follow-ups to resolve. Tap <strong>Explore</strong> on a row to investigate.</li>
           </ul>
-          <p class="muted small">The status line at the top shows document count and open items. Use <strong>Export PDF</strong> to download the assessment.</p>
+          <p class="muted small">The status line at the top shows document count and open items. Use the <strong>export icon</strong> in the header to download a PDF (assessment, logs, meds, labs — pick All or check boxes).</p>
           <div class="howto-go">
             <button type="button" class="btn secondary" data-howto-nav="analyze">Go to Home</button>
           </div>

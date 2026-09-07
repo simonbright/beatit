@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fpdf import FPDF
+from pypdf import PdfReader, PdfWriter
 
 from app.services.assessment_parse import strip_executive_summary_section
 from app.services.source_catalog import SourceCatalog
@@ -1173,6 +1174,43 @@ def build_assessment_pdf(
     buffer = BytesIO()
     pdf.output(buffer)
     return buffer.getvalue()
+
+
+def merge_pdf_documents(parts: list[bytes]) -> bytes:
+    """Concatenate PDF byte blobs into a single document (order preserved)."""
+    writer = PdfWriter()
+    for raw in parts:
+        if not raw:
+            continue
+        reader = PdfReader(BytesIO(raw))
+        for page in reader.pages:
+            writer.add_page(page)
+    if not writer.pages:
+        raise ValueError("No PDF pages to merge")
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def patient_bundle_pdf_filename(
+    *,
+    patient_label: str | None = None,
+    parts: list[str] | None = None,
+    exported_at: datetime | None = None,
+) -> str:
+    stamp = _format_filename_stamp(
+        (exported_at or datetime.now(timezone.utc)).isoformat()
+    )
+    slug = ""
+    if patient_label:
+        slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
+    part_key = "-".join(parts) if parts else "bundle"
+    if len(part_key) > 40:
+        part_key = "bundle"
+    if slug:
+        return f"beatit-export-{part_key}-{slug}-{stamp}.pdf"
+    return f"beatit-export-{part_key}-{stamp}.pdf"
 
 
 def assessment_pdf_filename(

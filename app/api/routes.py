@@ -76,8 +76,10 @@ from app.services.pdf_export import (
     journal_pdf_filename,
     medication_export_scope_label,
     medications_pdf_filename,
+    merge_pdf_documents,
     normalize_journal_export_days,
     normalize_medication_export_scope,
+    patient_bundle_pdf_filename,
 )
 from app.services.log_observations import log_observations_payload
 from app.services.source_catalog import (
@@ -2180,11 +2182,10 @@ async def export_latest_assessment_pdf(request: Request):
     return await _export_analysis_pdf_response(db, request, analysis)
 
 
-async def _export_analysis_pdf_response(
+async def _build_assessment_pdf_bytes(
     db: Database,
-    request: Request,
     analysis: dict[str, Any],
-) -> FastAPIResponse:
+) -> tuple[bytes, dict[str, Any]]:
     ctx = get_active_context()
     # Prefer identity pinned on the analysis so a live patient switch cannot relabel the PDF.
     patient_id = analysis.get("patient_id") or ctx.get("patient_id")
@@ -2225,28 +2226,39 @@ async def _export_analysis_pdf_response(
     )
     exported_at = datetime.now(timezone.utc)
     filename = assessment_pdf_filename(analysis, exported_at=exported_at)
+    meta = {
+        "analysis_id": analysis.get("id"),
+        "filename": filename,
+        "analysis_type": analysis.get("analysis_type"),
+        "record_status": analysis.get("record_status"),
+        "created_by": analysis.get("created_by"),
+        "patient_id": patient_id,
+        "case_id": case_id,
+        "patient_label": patient_label,
+        "case_label": case_label,
+        "exported_at": exported_at,
+    }
+    return pdf_bytes, meta
+
+
+async def _export_analysis_pdf_response(
+    db: Database,
+    request: Request,
+    analysis: dict[str, Any],
+) -> FastAPIResponse:
+    pdf_bytes, meta = await _build_assessment_pdf_bytes(db, analysis)
     await _audit(
         db,
         request,
         PDF_EXPORTED,
         resource_type="analysis",
         resource_id=analysis.get("id"),
-        metadata={
-            "analysis_id": analysis.get("id"),
-            "filename": filename,
-            "analysis_type": analysis.get("analysis_type"),
-            "record_status": analysis.get("record_status"),
-            "created_by": analysis.get("created_by"),
-            "patient_id": patient_id,
-            "case_id": case_id,
-            "patient_label": patient_label,
-            "case_label": case_label,
-        },
+        metadata={k: v for k, v in meta.items() if k != "exported_at"},
     )
     return FastAPIResponse(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{meta["filename"]}"'},
     )
 
 
@@ -3178,6 +3190,193 @@ async def export_patient_journal_pdf(
     )
     return FastAPIResponse(
         content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/patients/{patient_id}/export-bundle.pdf")
+async def export_patient_bundle_pdf(
+    patient_id: str,
+    request: Request,
+    include: str = "assessment,logs,medications,labs",
+    days: str = "7",
+    med_scope: str = "all",
+):
+    """Export one PDF with selected sections: assessment, logs, medications, labs."""
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for raw in include.split(","):
+        key = raw.strip().lower().replace(" ", "_")
+        if key in {"lab", "labs", "diagnostics", "diagnostic"}:
+            key = "labs"
+        if key in {"meds", "medication", "medications"}:
+            key = "medications"
+        if key in {"log", "logs", "journal"}:
+            key = "logs"
+        if key in {"assessment", "assessments"}:
+            key = "assessment"
+        if key not in {"assessment", "logs", "medications", "labs"}:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        wanted.append(key)
+    if not wanted:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one section: assessment, logs, medications, labs",
+        )
+
+    try:
+        days_key = normalize_journal_export_days(days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        scope_key = normalize_medication_export_scope(med_scope)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    profile = get_patient_profile(patient_id)
+    sub_bits: list[str] = []
+    age = age_years_from_dob(profile.get("date_of_birth"))
+    if age is not None:
+        sub_bits.append(f"Age {age}")
+    if profile.get("gender"):
+        sub_bits.append(str(profile["gender"]))
+    patient_subline = " · ".join(sub_bits) if sub_bits else None
+    patient_label = patient.get("label")
+
+    db, _, _, _, _ = await _get_services()
+    pdf_chunks: list[bytes] = []
+    included: list[str] = []
+    skipped: list[str] = []
+    assessment_analysis: dict[str, Any] | None = None
+
+    if "assessment" in wanted:
+        analysis = await db.get_latest_analysis()
+        if analysis and (analysis.get("response") or analysis.get("executive_summary")):
+            analysis_patient = analysis.get("patient_id")
+            if analysis_patient and analysis_patient != patient_id:
+                skipped.append("assessment")
+            else:
+                pdf_bytes, _meta = await _build_assessment_pdf_bytes(db, analysis)
+                pdf_chunks.append(pdf_bytes)
+                included.append("assessment")
+                assessment_analysis = analysis
+        else:
+            skipped.append("assessment")
+
+    if "logs" in wanted:
+        entries = profile.get("journal") or []
+        filtered = filter_journal_for_export(entries, days_key)
+        if filtered:
+            pdf_chunks.append(
+                build_journal_pdf(
+                    entries,
+                    days=days_key,
+                    patient_label=patient_label,
+                    patient_subline=patient_subline,
+                )
+            )
+            included.append("logs")
+        else:
+            skipped.append("logs")
+
+    if "medications" in wanted:
+        meds = profile.get("medications") or []
+        filtered_meds = filter_medications_for_export(meds, scope_key)
+        if filtered_meds:
+            pdf_chunks.append(
+                build_medications_pdf(
+                    meds,
+                    scope=scope_key,
+                    patient_label=patient_label,
+                    patient_subline=patient_subline,
+                )
+            )
+            included.append("medications")
+        else:
+            skipped.append("medications")
+
+    if "labs" in wanted:
+        series = group_diagnostics_for_charts(profile)
+        if series:
+            milestones = all_chart_milestones(profile)
+            pdf_chunks.append(
+                build_diagnostics_pdf(
+                    series,
+                    patient_label=patient_label,
+                    patient_subline=patient_subline,
+                    milestones=milestones,
+                )
+            )
+            included.append("labs")
+        else:
+            skipped.append("labs")
+
+    if not pdf_chunks:
+        detail = "Nothing to export for the selected sections"
+        if skipped:
+            detail = f"Nothing to export ({', '.join(skipped)} empty)"
+        raise HTTPException(status_code=404, detail=detail)
+
+    exported_at = datetime.now(timezone.utc)
+    if len(pdf_chunks) == 1 and len(included) == 1:
+        content = pdf_chunks[0]
+        alone = included[0]
+        if alone == "assessment":
+            filename = assessment_pdf_filename(
+                assessment_analysis or {},
+                exported_at=exported_at,
+            )
+        elif alone == "logs":
+            filename = journal_pdf_filename(
+                patient_label=patient_label,
+                days=days_key,
+                exported_at=exported_at,
+            )
+        elif alone == "medications":
+            filename = medications_pdf_filename(
+                patient_label=patient_label,
+                scope=scope_key,
+                exported_at=exported_at,
+            )
+        else:
+            filename = diagnostics_pdf_filename(
+                patient_label=patient_label,
+                exported_at=exported_at,
+            )
+    else:
+        content = merge_pdf_documents(pdf_chunks)
+        filename = patient_bundle_pdf_filename(
+            patient_label=patient_label,
+            parts=included,
+            exported_at=exported_at,
+        )
+
+    await _audit(
+        db,
+        request,
+        PDF_EXPORTED,
+        resource_type="patient",
+        resource_id=patient_id,
+        metadata={
+            "filename": filename,
+            "export_kind": "bundle",
+            "included": included,
+            "skipped": skipped,
+            "days": days_key if "logs" in included else None,
+            "med_scope": scope_key if "medications" in included else None,
+        },
+    )
+    return FastAPIResponse(
+        content=content,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

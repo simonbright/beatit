@@ -859,11 +859,99 @@ function scrollToCustomTaskDetail() {
 }
 
 function updateHomeToolbar() {
-  const hasAssessment = Boolean(state.latestAnalysis);
-  const onHome = $("#panel-analyze")?.classList.contains("active");
-  const show = hasAssessment && onHome;
-  $("#btn-export-pdf")?.classList.toggle("hidden", !show);
+  const show = Boolean(state.activePatientId);
   $("#btn-export-pdf-icon")?.classList.toggle("hidden", !show);
+}
+
+function openExportPdfModal() {
+  if (!state.activePatientId) {
+    toast("Select a patient first", "error");
+    return;
+  }
+  const hasAssessment = Boolean(
+    state.latestAnalysis?.response || state.latestAnalysis?.executive_summary
+  );
+  const assessmentCb = document.getElementById("export-pdf-assessment");
+  if (assessmentCb) {
+    assessmentCb.disabled = !hasAssessment;
+    if (!hasAssessment) assessmentCb.checked = false;
+    else if (!assessmentCb.dataset.userTouched) assessmentCb.checked = true;
+  }
+  const daysEl = document.getElementById("export-pdf-log-days");
+  if (daysEl && !daysEl.dataset.userTouched) {
+    const current = normalizeMobileLogDays(
+      document.getElementById("mobile-log-range")?.value || state.mobileLogDays || 7
+    );
+    daysEl.value = String(current);
+  }
+  showModal("modal-export-pdf");
+}
+
+function setExportPdfChecks(checked) {
+  ["export-pdf-assessment", "export-pdf-logs", "export-pdf-medications", "export-pdf-labs"].forEach(
+    (id) => {
+      const el = document.getElementById(id);
+      if (!el || el.disabled) return;
+      el.checked = checked;
+    }
+  );
+}
+
+function selectedExportPdfParts() {
+  return ["assessment", "logs", "medications", "labs"].filter((key) => {
+    const el = document.getElementById(`export-pdf-${key}`);
+    return Boolean(el?.checked && !el.disabled);
+  });
+}
+
+async function downloadSelectedExportPdf() {
+  const patientId = state.activePatientId;
+  if (!patientId) return toast("Select a patient first", "error");
+  const parts = selectedExportPdfParts();
+  if (!parts.length) return toast("Select at least one section", "error");
+
+  const days = document.getElementById("export-pdf-log-days")?.value || "7";
+  const medScope =
+    document.getElementById("med-export-scope")?.value ||
+    document.getElementById("med-export-scope-settings")?.value ||
+    "all";
+
+  const btn = document.getElementById("btn-confirm-export-pdf");
+  const icon = document.getElementById("btn-export-pdf-icon");
+  if (btn) btn.disabled = true;
+  if (icon) icon.disabled = true;
+
+  try {
+    const params = new URLSearchParams({
+      include: parts.join(","),
+      days: String(days),
+      med_scope: String(medScope),
+    });
+    const res = await fetch(
+      `/api/patients/${patientId}/export-bundle.pdf?${params.toString()}`,
+      { credentials: "include" }
+    );
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Export failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = filenameFromContentDisposition(res, `beatit-export-${stamp}.pdf`);
+    triggerPdfDownload(blob, filename);
+    hideModal("modal-export-pdf");
+    const label = parts.length === 4 ? "All sections" : parts.join(", ");
+    toast(`PDF downloaded (${label})`);
+  } catch (err) {
+    toast(err.message || "Export failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+    if (icon) icon.disabled = false;
+  }
 }
 
 function updateHomeWorkflow() {
@@ -6141,33 +6229,6 @@ async function loadLatestAssessment() {
   }
 }
 
-async function exportAssessmentPdf() {
-  if (!state.latestAnalysis) {
-    return toast("No assessment to export", "error");
-  }
-
-  const btns = [$("#btn-export-pdf"), $("#btn-export-pdf-icon")].filter(Boolean);
-  btns.forEach((btn) => {
-    btn.disabled = true;
-  });
-
-  try {
-    const result = await downloadAnalysisPdf(state.latestAnalysis.id, {
-      silent: true,
-      analysis: state.latestAnalysis,
-    });
-    if (!result) return;
-    triggerPdfDownload(result.blob, result.filename);
-    toast("PDF downloaded");
-  } catch (err) {
-    toast(err.message, "error");
-  } finally {
-    btns.forEach((btn) => {
-      btn.disabled = false;
-    });
-  }
-}
-
 function renderHistory() {
   const list = $("#history-list");
   if (!state.analyses.length) {
@@ -7308,11 +7369,34 @@ $("#settings-model")?.addEventListener("change", updateModelDescription);
 $("#audit-filter")?.addEventListener("change", () => loadAuditTrail(true));
 $("#btn-audit-load-more")?.addEventListener("click", () => loadAuditTrail(false));
 
-$("#btn-export-pdf")?.addEventListener("click", () =>
-  exportAssessmentPdf()
-);
-$("#btn-export-pdf-icon")?.addEventListener("click", () =>
-  exportAssessmentPdf()
+$("#btn-export-pdf-icon")?.addEventListener("click", () => openExportPdfModal());
+document.getElementById("btn-close-export-pdf")?.addEventListener("click", () => {
+  hideModal("modal-export-pdf");
+});
+document.getElementById("btn-cancel-export-pdf")?.addEventListener("click", () => {
+  hideModal("modal-export-pdf");
+});
+document.getElementById("modal-export-pdf")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-export-pdf") hideModal("modal-export-pdf");
+});
+document.getElementById("btn-export-pdf-select-all")?.addEventListener("click", () => {
+  setExportPdfChecks(true);
+});
+document.getElementById("btn-export-pdf-select-none")?.addEventListener("click", () => {
+  setExportPdfChecks(false);
+});
+document.getElementById("btn-confirm-export-pdf")?.addEventListener("click", () => {
+  downloadSelectedExportPdf().catch((e) => toast(e.message || "Export failed", "error"));
+});
+document.getElementById("export-pdf-log-days")?.addEventListener("change", (event) => {
+  event.target.dataset.userTouched = "1";
+});
+["export-pdf-assessment", "export-pdf-logs", "export-pdf-medications", "export-pdf-labs"].forEach(
+  (id) => {
+    document.getElementById(id)?.addEventListener("change", (event) => {
+      event.target.dataset.userTouched = "1";
+    });
+  }
 );
 $("#btn-investigate-item")?.addEventListener("click", () =>
   investigateSelectedOpenItem()
