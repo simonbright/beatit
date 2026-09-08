@@ -528,8 +528,8 @@ def _format_diag_date_label(iso: str | None, *, compact: bool = False) -> str:
     if not dt:
         return raw or "-"
     if compact:
-        # Keep day so nearby same-month points stay distinguishable (Jun 10 vs Jun 27)
-        return f"{dt.strftime('%b')} {dt.day} '{str(dt.year)[2:]}"
+        # Short numeric form avoids same-month collisions on crowded axes
+        return f"{dt.month}/{dt.day}/{str(dt.year)[2:]}"
     return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
 
 
@@ -886,7 +886,7 @@ def _sparkline_png_bytes(
                 band_draw = ImageDraw.Draw(band_layer)
                 band_draw.rectangle(
                     (pad_l + 2, y1, pad_l + chart_w - 2, y2),
-                    fill=(21, 128, 61, 38),
+                    fill=(21, 128, 61, 24),
                 )
                 img = Image.alpha_composite(img, band_layer)
                 draw = ImageDraw.Draw(img)
@@ -930,7 +930,7 @@ def _sparkline_png_bytes(
     for x, y, _status in coords:
         draw.line(
             (x, y + 8, x, plot_bottom),
-            fill=(148, 163, 184, 90),
+            fill=(100, 116, 139, 120),
             width=1,
         )
 
@@ -983,6 +983,7 @@ def _sparkline_png_bytes(
         if not d:
             continue
         by_day.setdefault(d, []).append(ev)
+    milestone_marks: list[tuple[float, tuple[int, int, int]]] = []
     for _mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
@@ -1003,24 +1004,38 @@ def _sparkline_png_bytes(
                 fill = marker_fill
         except ValueError:
             fill = marker_fill
-        y0, y1 = pad_t + 2, pad_t + chart_h - 2
-        dash = 10
-        yy = y0
-        while yy < y1:
-            draw.line((x, yy, x, min(yy + dash, y1)), fill=(*fill, 255), width=3)
-            yy += dash * 2
-        # Triangle marker at top so milestones read as overlays
-        tip = 8
-        draw.polygon(
-            [(x, y0 + tip), (x - tip, y0), (x + tip, y0)],
-            fill=(*fill, 255),
-        )
+        milestone_marks.append((x, fill))
+
+    def _draw_milestones() -> None:
+        for x, fill in milestone_marks:
+            y0, y1 = pad_t + 2, pad_t + chart_h - 2
+            # Soft white underlay so dashes stay visible over the green zone
+            dash = 10
+            yy = y0
+            while yy < y1:
+                draw.line((x, yy, x, min(yy + dash, y1)), fill=(255, 255, 255, 200), width=5)
+                yy += dash * 2
+            yy = y0
+            while yy < y1:
+                draw.line((x, yy, x, min(yy + dash, y1)), fill=(*fill, 255), width=3)
+                yy += dash * 2
+            tip = 9
+            draw.polygon(
+                [(x, y0 + tip), (x - tip, y0), (x + tip, y0)],
+                fill=(255, 255, 255, 255),
+            )
+            draw.polygon(
+                [(x, y0 + tip - 1), (x - tip + 1, y0 + 1), (x + tip - 1, y0 + 1)],
+                fill=(*fill, 255),
+            )
+
+    _draw_milestones()
 
     # 6) Axis dates — non-overlapping, with light connectors from plot to label
     axis_y_top = height - 36
     axis_y_bot = height - 16
     n_pts = len(coords)
-    # Prefer short labels; precise text under the chart (points line) already has ISO dates
+    # Prefer short labels; precise ISO stays in the Points line under the chart
     use_compact = n_pts > 2
     candidates: list[tuple[int, float, str, float, float, str]] = []
     for i, ((x, _y, _st), (date, _value, _status)) in enumerate(zip(coords, points)):
@@ -1031,7 +1046,7 @@ def _sparkline_png_bytes(
         )
         if not date_label:
             continue
-        est_w = max(26, len(date_label) * (5.0 if use_compact else 5.4))
+        est_w = max(22, len(date_label) * (4.8 if use_compact else 5.4))
         if i == 0:
             anchor = "lt"
             left, right = x, x + est_w
@@ -1058,24 +1073,27 @@ def _sparkline_png_bytes(
                 return row
         return None
 
-    # First pass: middles that fit; then force first/last (stagger if needed)
+    # Prefer alternating rows when points are dense; always keep first + last
     for cand in candidates:
         i, x, date_label, left, right, anchor = cand
-        if i in (0, n_pts - 1):
-            continue
-        row = _row_for(left, right)
+        preferred = i % 2
+        # Try preferred row first, then the other
+        row = None
+        for try_row in (preferred, 1 - preferred):
+            collide = False
+            for _ki, _kx, _kl, kleft, kright, _ka, krow in kept:
+                if krow != try_row:
+                    continue
+                if left < kright + 10 and right > kleft - 10:
+                    collide = True
+                    break
+            if not collide:
+                row = try_row
+                break
+        if row is None and i in (0, n_pts - 1):
+            row = preferred
         if row is not None:
             kept.append((*cand, row))
-
-    for cand in candidates:
-        i, x, date_label, left, right, anchor = cand
-        if i not in (0, n_pts - 1):
-            continue
-        row = _row_for(left, right)
-        if row is None:
-            # Nudge last/first onto free row even if slightly tight
-            row = 1 if any(k[6] == 0 for k in kept) else 0
-        kept.append((*cand, row))
     kept.sort(key=lambda t: (t[6], t[0]))
 
     for i, x, date_label, _left, _right, anchor, row in kept:
@@ -1083,7 +1101,7 @@ def _sparkline_png_bytes(
         # Light connector from plot bottom to the date label
         draw.line(
             (x, plot_bottom, x, axis_y - 4),
-            fill=(148, 163, 184, 110),
+            fill=(100, 116, 139, 130),
             width=1,
         )
         draw.text(
@@ -1093,6 +1111,9 @@ def _sparkline_png_bytes(
             font=font_small,
             anchor=anchor,
         )
+
+    # Redraw milestones last so they stay above drop-lines / labels near the frame
+    _draw_milestones()
 
     buf = BytesIO()
     # Flatten to RGB for smaller PDFs / broader compatibility
