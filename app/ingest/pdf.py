@@ -402,8 +402,8 @@ async def _ocr_with_openrouter_vision(
     return "", combined
 
 
-def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
-    """Return (text, extraction_meta). Uses OCR when native extract is empty/thin."""
+def extract_pdf_text_quick(content: bytes) -> tuple[str, dict[str, Any]]:
+    """Fast path: native + pdftotext only (no Tesseract / vision). Safe for request handlers."""
     runtime = ocr_runtime_status()
     meta: dict[str, Any] = {
         "page_count": _page_count(content),
@@ -411,6 +411,7 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
         "needs_ocr": False,
         "ocr_available": runtime["local_ocr"],
         "ocr_runtime": runtime,
+        "deferred_ocr": False,
     }
 
     native = extract_pdf_text_native(content).strip()
@@ -421,20 +422,40 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
 
     pdftotext = _run_pdftotext(content).strip()
     if len(pdftotext) >= MIN_NATIVE_CHARS:
-        formatted = pdftotext
         meta["extraction_method"] = "pdftotext"
-        meta["extracted_chars"] = len(formatted)
-        return formatted, meta
+        meta["extracted_chars"] = len(pdftotext)
+        return pdftotext, meta
+
+    fallback = native or pdftotext or EMPTY_PDF_PLACEHOLDER
+    meta["extraction_method"] = "empty"
+    meta["needs_ocr"] = True
+    meta["deferred_ocr"] = True
+    meta["extracted_chars"] = 0 if fallback == EMPTY_PDF_PLACEHOLDER else len(fallback)
+    if not meta["ocr_available"]:
+        meta["ocr_hint"] = (
+            "Local OCR tools are unavailable on this server. "
+            "Background processing will try OpenRouter vision OCR."
+        )
+    return fallback, meta
+
+
+def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
+    """Return (text, extraction_meta). Uses OCR when native extract is empty/thin."""
+    text, meta = extract_pdf_text_quick(content)
+    if not meta.get("needs_ocr"):
+        return text, meta
 
     ocr = _ocr_with_tesseract(content).strip()
     if ocr:
         meta["extraction_method"] = "ocr"
         meta["extracted_chars"] = len(ocr)
         meta["needs_ocr"] = False
+        meta["deferred_ocr"] = False
+        meta.pop("ocr_hint", None)
         return ocr, meta
 
     # Keep any thin native text if present; otherwise placeholder
-    fallback = native or pdftotext or EMPTY_PDF_PLACEHOLDER
+    fallback = text or EMPTY_PDF_PLACEHOLDER
     meta["extraction_method"] = "empty"
     meta["needs_ocr"] = True
     meta["extracted_chars"] = 0 if fallback == EMPTY_PDF_PLACEHOLDER else len(fallback)
@@ -682,6 +703,51 @@ async def extract_image_text_async(
     return text, meta
 
 
+def _sniff_clinical_upload_kind(
+    content: bytes,
+    *,
+    content_type: str | None = None,
+    filename: str | None = None,
+) -> str:
+    try:
+        return sniff_med_import_kind(
+            content, content_type=content_type, filename=filename
+        )
+    except ValueError:
+        # Preserve prior PDF-ingest behavior for ambiguous uploads
+        if content[:5] == b"%PDF-":
+            return "pdf"
+        raise
+
+
+def extract_clinical_upload_text_fast(
+    content: bytes,
+    *,
+    content_type: str | None = None,
+    filename: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Request-safe extract: no vision, no multi-page Tesseract OCR."""
+    kind = _sniff_clinical_upload_kind(
+        content, content_type=content_type, filename=filename
+    )
+    if kind == "image":
+        # Defer image OCR/vision to the background job so uploads return quickly.
+        meta: dict[str, Any] = {
+            "page_count": 1,
+            "extraction_method": "deferred",
+            "needs_ocr": True,
+            "deferred_ocr": True,
+            "ocr_available": _tesseract_available(),
+            "source_kind": "image",
+            "extracted_chars": 0,
+        }
+        return EMPTY_IMAGE_PLACEHOLDER, meta
+    text, meta = extract_pdf_text_quick(content)
+    meta = dict(meta)
+    meta.setdefault("source_kind", "pdf")
+    return text, meta
+
+
 async def extract_clinical_upload_text_async(
     content: bytes,
     *,
@@ -689,16 +755,9 @@ async def extract_clinical_upload_text_async(
     filename: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Extract text from a clinical PDF or lab photo for library ingest."""
-    try:
-        kind = sniff_med_import_kind(
-            content, content_type=content_type, filename=filename
-        )
-    except ValueError:
-        # Preserve prior PDF-ingest behavior for ambiguous uploads
-        if content[:5] == b"%PDF-":
-            kind = "pdf"
-        else:
-            raise
+    kind = _sniff_clinical_upload_kind(
+        content, content_type=content_type, filename=filename
+    )
     if kind == "image":
         return await extract_image_text_async(content, filename=filename)
     text, meta = await extract_pdf_text_async(content)
@@ -745,15 +804,50 @@ async def ingest_pdf_bytes(
     source_uri: str | None = None,
     metadata: dict[str, Any] | None = None,
     content_type: str | None = None,
+    defer_heavy: bool = False,
+    prefer_kind: str | None = None,
 ) -> dict[str, Any]:
-    from app.services.clinical_report_classify import classify_and_update_document
-
-    extracted, extraction_meta = await extract_clinical_upload_text_async(
-        content, content_type=content_type, filename=filename
+    from app.services.clinical_report_classify import (
+        apply_classification_to_metadata,
+        classify_and_update_document,
+        classify_clinical_report_heuristic,
+        clinical_report_kind_label,
+        normalize_clinical_report_kind,
     )
+
+    if defer_heavy:
+        extracted, extraction_meta = await asyncio.to_thread(
+            extract_clinical_upload_text_fast,
+            content,
+            content_type=content_type,
+            filename=filename,
+        )
+    else:
+        extracted, extraction_meta = await extract_clinical_upload_text_async(
+            content, content_type=content_type, filename=filename
+        )
     meta = dict(metadata or {})
     meta["original_filename"] = filename
     meta.update(extraction_meta)
+    if defer_heavy:
+        meta["ingest_processing"] = True
+
+    preferred = normalize_clinical_report_kind(prefer_kind) if prefer_kind else None
+    if preferred and preferred != "unknown":
+        meta = apply_classification_to_metadata(
+            meta,
+            {
+                "kind": preferred,
+                "label": clinical_report_kind_label(preferred),
+                "confidence": 0.85,
+                "method": "upload_hint",
+            },
+        )
+    elif defer_heavy:
+        heuristic = classify_clinical_report_heuristic(
+            title=title, filename=filename, text=extracted
+        )
+        meta = apply_classification_to_metadata(meta, heuristic)
 
     doc = await store.create_document(
         title=title,
@@ -764,13 +858,14 @@ async def ingest_pdf_bytes(
         raw_content=content,
         metadata=meta,
     )
-    try:
-        doc = await classify_and_update_document(
-            store, doc, extracted_text=extracted
-        )
-    except Exception:
-        # Classification is best-effort; never fail ingest.
-        pass
+    if not defer_heavy:
+        try:
+            doc = await classify_and_update_document(
+                store, doc, extracted_text=extracted
+            )
+        except Exception:
+            # Classification is best-effort; never fail ingest.
+            pass
     return doc
 
 
@@ -782,6 +877,8 @@ async def ingest_pdf_file(
     title: str | None = None,
     metadata: dict[str, Any] | None = None,
     content_type: str | None = None,
+    defer_heavy: bool = False,
+    prefer_kind: str | None = None,
 ) -> dict[str, Any]:
     return await ingest_pdf_bytes(
         store,
@@ -790,6 +887,8 @@ async def ingest_pdf_file(
         title=title or filename,
         metadata=metadata,
         content_type=content_type,
+        defer_heavy=defer_heavy,
+        prefer_kind=prefer_kind,
     )
 
 

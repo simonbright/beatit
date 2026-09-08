@@ -187,6 +187,90 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses = [502, 503, 504] } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await api(path, options);
+    } catch (err) {
+      lastErr = err;
+      const status = err?.status;
+      const retriable = retryStatuses.includes(status);
+      if (!retriable || attempt === retries) throw err;
+      await sleep(800 * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
+async function pollPdfIngestJob(jobId, { setDetail, isCancelled, filename } = {}) {
+  const deadline = Date.now() + 20 * 60 * 1000;
+  const label = filename ? ` ${filename}` : "";
+  while (Date.now() < deadline) {
+    if (isCancelled?.()) throw new Error("Cancelled");
+    const data = await api(`/api/ingest/jobs/${encodeURIComponent(jobId)}`);
+    const job = data.job || data;
+    const stage = job.progress?.stage;
+    if (setDetail && stage) {
+      const stageLabel =
+        stage === "queued"
+          ? "queued"
+          : stage === "extracting"
+            ? "extracting text"
+            : stage === "importing_labs"
+              ? "importing labs"
+              : stage === "classifying"
+                ? "classifying"
+                : stage;
+      setDetail(`Processing${label}: ${stageLabel}…`);
+    }
+    if (job.status === "completed") {
+      const result = job.result || {};
+      return {
+        document: result.document,
+        handling: result.handling || result.document?.handling,
+        lab_import: result.lab_import,
+        job_id: jobId,
+        processing: false,
+      };
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error || `Lab processing failed${label}`);
+    }
+    if (job.status === "cancelled") {
+      throw new Error("Cancelled");
+    }
+    if (job.status === "not_found") {
+      throw new Error("Ingest job not found — try uploading again");
+    }
+    await sleep(2000);
+  }
+  throw new Error(`Timed out waiting for processing${label}`);
+}
+
+async function ingestPdfUpload(file, { title, clinicalReportKind, setDetail, isCancelled } = {}) {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (title) fd.append("title", title);
+  if (clinicalReportKind) fd.append("clinical_report_kind", clinicalReportKind);
+  if (setDetail) setDetail(`Uploading ${file.name}…`);
+  const data = await apiWithRetries("/api/ingest/pdf", {
+    method: "POST",
+    body: fd,
+    timeoutMs: 120000,
+  });
+  if (isCancelled?.()) throw new Error("Cancelled");
+  if (data.processing && data.job_id) {
+    if (setDetail) setDetail(`Uploaded ${file.name} — processing on server…`);
+    return await pollPdfIngestJob(data.job_id, {
+      setDetail,
+      isCancelled,
+      filename: file.name,
+    });
+  }
+  return data;
+}
+
 function formatElapsedDuration(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -7161,13 +7245,10 @@ safeOn("#btn-ingest-pdf", "click", async () => {
           const file = files[i];
           setDetail(`Processing ${i + 1} of ${total}: ${file.name}`);
           try {
-            const fd = new FormData();
-            fd.append("file", file);
-            if (customTitle) fd.append("title", customTitle);
-            const data = await api("/api/ingest/pdf", {
-              method: "POST",
-              body: fd,
-              timeoutMs: 600000,
+            const data = await ingestPdfUpload(file, {
+              title: customTitle || undefined,
+              setDetail,
+              isCancelled,
             });
             if (isCancelled()) return;
             lastDoc = data.document;
@@ -13189,12 +13270,13 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
           setDetail(`Processing ${i + 1} of ${total}: ${file.name}`);
           setDiagImportStatus(`Processing ${i + 1} of ${total}: ${file.name}…`);
           try {
-            const fd = new FormData();
-            fd.append("file", file);
-            const data = await api("/api/ingest/pdf", {
-              method: "POST",
-              body: fd,
-              timeoutMs: 600000,
+            const data = await ingestPdfUpload(file, {
+              clinicalReportKind: "lab",
+              setDetail: (msg) => {
+                setDetail(msg);
+                setDiagImportStatus(msg);
+              },
+              isCancelled,
             });
             if (isCancelled()) return;
             lastDoc = data.document;

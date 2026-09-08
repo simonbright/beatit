@@ -63,6 +63,10 @@ from app.services.vision_jobs import (
     enqueue_vision_job,
     get_job_payload as get_vision_job_payload,
 )
+from app.services.pdf_ingest_jobs import (
+    enqueue_pdf_ingest_job,
+    get_job_payload as get_pdf_ingest_job_payload,
+)
 from app.ingest.imaging import reindex_all_imaging_metadata
 from app.services.pdf_export import (
     assessment_pdf_filename,
@@ -380,6 +384,8 @@ async def _audit(
 async def _finalize_clinical_report_document(
     store: DocumentStore,
     doc: dict[str, Any],
+    *,
+    patient_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Auto-import lab charts when applicable, then persist handled/flagged state."""
     from app.services.clinical_report_handling import refresh_document_handling
@@ -387,8 +393,8 @@ async def _finalize_clinical_report_document(
     meta = doc.get("metadata") or {}
     kind = str(meta.get("clinical_report_kind") or "").lower()
     lab_import: dict[str, Any] | None = None
-    ctx = get_active_context()
-    patient_id = ctx.get("patient_id")
+    if not patient_id:
+        patient_id = get_active_context().get("patient_id")
     profile = get_patient_profile(patient_id) if patient_id else None
 
     if kind == "lab" and patient_id:
@@ -1503,12 +1509,26 @@ async def ingest_pdf_route(
     request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
+    clinical_report_kind: str | None = Form(default=None),
 ):
+    """Save the upload quickly, then OCR/classify/import labs in a background job.
+
+    Heavy vision + LLM work used to run in-request and 502 on Render's proxy.
+    Clients should poll GET /api/ingest/jobs/{job_id} when processing is true.
+    """
     db, store, _, _, _ = await _get_services()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
+    # Keep request bodies within typical reverse-proxy limits
+    max_bytes = 20 * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="File too large (max 20 MB). Split or compress the PDF and try again.",
+        )
     filename = file.filename or "upload.pdf"
+    prefer_kind = (clinical_report_kind or "").strip() or None
     try:
         doc = await ingest_pdf_file(
             store,
@@ -1516,6 +1536,8 @@ async def ingest_pdf_route(
             content=content,
             title=title or filename,
             content_type=file.content_type,
+            defer_heavy=True,
+            prefer_kind=prefer_kind,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1531,15 +1553,41 @@ async def ingest_pdf_route(
             "source_uri": doc.get("source_uri"),
             "original_filename": filename,
             "clinical_report_kind": (doc.get("metadata") or {}).get("clinical_report_kind"),
+            "deferred": True,
         },
     )
-    doc, lab_import = await _finalize_clinical_report_document(store, doc)
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id") or ""
+    case_id = ctx.get("case_id") or ""
+    if not patient_id or not case_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Select a patient and case before uploading documents",
+        )
+    job = enqueue_pdf_ingest_job(
+        document_id=doc["id"],
+        patient_id=patient_id,
+        case_id=case_id,
+        original_filename=filename,
+        prefer_kind=prefer_kind,
+    )
     catalog = await _source_catalog(db)
     doc["source_info"] = catalog.describe_document(doc)
-    payload: dict[str, Any] = {"document": doc, "handling": doc.get("handling")}
-    if lab_import is not None:
-        payload["lab_import"] = lab_import
-    return payload
+    return {
+        "document": doc,
+        "handling": doc.get("handling"),
+        "processing": True,
+        "job_id": job["id"],
+        "job": job,
+    }
+
+
+@router.get("/ingest/jobs/{job_id}")
+async def ingest_pdf_job_status(job_id: str):
+    payload = get_pdf_ingest_job_payload(job_id)
+    if payload.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Ingest job not found")
+    return {"job": payload}
 
 
 @router.post("/ingest/video")
