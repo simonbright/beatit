@@ -1164,30 +1164,45 @@ async def get_document_preview(doc_id: str):
 
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, request: Request):
+    """Delete a document from the active patient (any of their cases)."""
+    from app.services.clinical_report_handling import open_store_for_patient_document
+
     db, store, _, _, _ = await _get_services()
-    patient_doc = await resolve_active_patient_document(doc_id)
-    if patient_doc and not patient_doc.get("is_active_case"):
-        raise HTTPException(
-            status_code=403,
-            detail="Switch to that focus case to delete this document",
+    ctx = get_active_context()
+    patient_id = ctx.get("patient_id")
+    target_store = store
+    doc = None
+
+    if patient_id:
+        opened = await open_store_for_patient_document(
+            patient_id,
+            doc_id,
+            active_case_id=ctx.get("case_id"),
         )
-    doc = await db.get_document(doc_id)
-    deleted = await store.delete_document(doc_id)
+        if opened:
+            target_store, doc = opened
+    if doc is None:
+        doc = await db.get_document(doc_id)
+        target_store = store
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    deleted = await target_store.delete_document(doc_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
-    if doc:
-        await _audit(
-            db,
-            request,
-            DOCUMENT_DELETED,
-            resource_type="document",
-            resource_id=doc_id,
-            metadata={
-                "title": doc.get("title"),
-                "source_type": doc.get("source_type"),
-                "source_uri": doc.get("source_uri"),
-            },
-        )
+    await _audit(
+        db,
+        request,
+        DOCUMENT_DELETED,
+        resource_type="document",
+        resource_id=doc_id,
+        metadata={
+            "title": doc.get("title"),
+            "source_type": doc.get("source_type"),
+            "source_uri": doc.get("source_uri"),
+            "case_id": (doc.get("metadata") or {}).get("case_id") or ctx.get("case_id"),
+        },
+    )
     return {"deleted": True}
 
 
