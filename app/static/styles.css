@@ -2379,14 +2379,14 @@ body {
 }
 
 .diag-chart-info-link {
-  font-size: 0.88rem;
-  color: var(--accent);
+  font-size: 0.82rem;
+  color: #64748b;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .diag-chart-info-link:hover {
-  color: var(--accent-2, var(--accent));
+  color: #0f766e;
 }
 
 .diagnostics-actions {

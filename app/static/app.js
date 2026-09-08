@@ -11388,8 +11388,61 @@ function formatDiagDateAxis(iso) {
   const d = new Date(`${raw}T12:00:00`);
   if (Number.isNaN(d.getTime())) return raw;
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  // Compact but complete: Nov 14 · 2026
-  return `${months[d.getMonth()]} ${d.getDate()} · ${d.getFullYear()}`;
+  // Compact: Jun 10 · '26 — shorter than full year to reduce axis collisions
+  return `${months[d.getMonth()]} ${d.getDate()} · '${String(d.getFullYear()).slice(2)}`;
+}
+
+function estimateAxisLabelWidth(label) {
+  return Math.max(36, String(label || "").length * 5.4);
+}
+
+/** Keep first/last dates; drop middles that would collide on the axis. */
+function pickNonOverlappingAxisDates(coords) {
+  if (!coords.length) return [];
+  if (coords.length === 1) {
+    return [{ ...coords[0], anchor: "middle", label: formatDiagDateAxis(coords[0].date) }];
+  }
+  const labeled = coords.map((c, i) => ({
+    ...c,
+    i,
+    label: formatDiagDateAxis(c.date),
+    anchor: i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle",
+  }));
+  const first = labeled[0];
+  const last = labeled[labeled.length - 1];
+  const kept = [first];
+  const minGap = 8;
+  for (let i = 1; i < labeled.length - 1; i++) {
+    const cand = labeled[i];
+    const prev = kept[kept.length - 1];
+    const prevRight =
+      prev.anchor === "start"
+        ? prev.x + estimateAxisLabelWidth(prev.label)
+        : prev.anchor === "end"
+          ? prev.x
+          : prev.x + estimateAxisLabelWidth(prev.label) / 2;
+    const candLeft =
+      cand.anchor === "start"
+        ? cand.x
+        : cand.anchor === "end"
+          ? cand.x - estimateAxisLabelWidth(cand.label)
+          : cand.x - estimateAxisLabelWidth(cand.label) / 2;
+    const lastLeft =
+      last.anchor === "end"
+        ? last.x - estimateAxisLabelWidth(last.label)
+        : last.x - estimateAxisLabelWidth(last.label) / 2;
+    const candRight =
+      cand.anchor === "start"
+        ? cand.x + estimateAxisLabelWidth(cand.label)
+        : cand.anchor === "end"
+          ? cand.x
+          : cand.x + estimateAxisLabelWidth(cand.label) / 2;
+    if (candLeft - prevRight < minGap) continue;
+    if (lastLeft - candRight < minGap) continue;
+    kept.push(cand);
+  }
+  kept.push(last);
+  return kept;
 }
 
 function formatDiagValue(value) {
@@ -11413,7 +11466,8 @@ function statusColor(status) {
   if (status === "green") return "#15803d";
   if (status === "yellow") return "#ca8a04";
   if (status === "red") return "#b91c1c";
-  return "var(--accent)";
+  // Neutral slate — never accent blue (that looked like a special status on single readings)
+  return "#334155";
 }
 
 function statusLabel(status) {
@@ -11535,12 +11589,12 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     const p = points[0];
     const color = statusColor(p.status);
     const refLine = hasRef
-      ? `<text x="180" y="128" text-anchor="middle" fill="currentColor" font-size="13" opacity="0.75">${escapeHtml(reference.label || "Reference")}</text>`
+      ? `<text x="180" y="108" text-anchor="middle" fill="currentColor" font-size="13" opacity="0.75">${escapeHtml(reference.label || "Reference")}</text>`
       : "";
+    // Value only — date already appears in the card header and footer (avoid triple dates)
     return `<div class="diag-chart-plot">
       <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Single reading">
-        <text x="180" y="58" text-anchor="middle" fill="${color}" font-size="36" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
-        <text x="180" y="92" text-anchor="middle" fill="currentColor" font-size="15" opacity="0.85">${escapeHtml(formatDiagDate(p.date))}</text>
+        <text x="180" y="78" text-anchor="middle" fill="${color}" font-size="40" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
         ${refLine}
       </svg>
     </div>`;
@@ -11675,11 +11729,10 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     })
     .join("");
 
-  // Axis labels from readings only — milestone dates use the badges below (avoids Sep/Aug mash)
-  const dateLabels = coords
-    .map((c, i) => {
-      const anchor = i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle";
-      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="10" opacity="0.85" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(formatDiagDateAxis(c.date))}</text>`;
+  // Axis labels from readings only — milestone dates use the badges below (avoids mash)
+  const dateLabels = pickNonOverlappingAxisDates(coords)
+    .map((c) => {
+      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${c.anchor}" fill="currentColor" font-size="10" opacity="0.85" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(c.label)}</text>`;
     })
     .join("");
 

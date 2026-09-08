@@ -664,7 +664,8 @@ def _sparkline_png_bytes(
     img = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    pad_l, pad_r, pad_t, pad_b = 48, 72, 20, 64
+    # Reduce bottom padding now that we don't draw a second milestone date row
+    pad_l, pad_r, pad_t, pad_b = 48, 72, 20, 48
     if title:
         draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42), font=font_title, anchor="lt")
         pad_t = 44
@@ -757,7 +758,7 @@ def _sparkline_png_bytes(
             width=1,
         )
 
-    # Medication milestones — one dashed line per date, stacked labels
+    # Medication milestones — dashed verticals only (no axis dates; those collided)
     marker_fill = (100, 116, 139)
     by_day: dict[str, list[dict[str, Any]]] = {}
     for ev in range_events:
@@ -765,7 +766,6 @@ def _sparkline_png_bytes(
         if not d:
             continue
         by_day.setdefault(d, []).append(ev)
-    milestone_x_labels: list[tuple[float, str, tuple[int, int, int]]] = []
     for mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
@@ -792,11 +792,7 @@ def _sparkline_png_bytes(
         while yy < y1:
             draw.line((x, yy, x, min(yy + dash, y1)), fill=fill, width=2)
             yy += dash * 2
-        # Short date under the marker only — full med text is in the PDF legend
-        # and repeating it on every chart crowded the axis.
-        date_label = _safe_text(_format_diag_date_label(d, compact=False) or d)[:18]
-        if date_label:
-            milestone_x_labels.append((x, date_label, fill))
+        # No axis date for milestones — colored dashes + page legend are enough.
 
     if ref_low is not None or ref_high is not None:
         if ref_low is not None and ref_high is not None:
@@ -857,32 +853,33 @@ def _sparkline_png_bytes(
                 y_off = -12
             draw.text((x + x_off, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor=anchor)
 
-    # Fixed baselines: reading dates on one line, milestone dates on the next
-    axis_y_readings = height - 30
-    axis_y_milestones = height - 12
-    prev_date = None
+    # Reading dates only (milestones are dashed lines — no second date row)
+    axis_y_readings = height - 22
+    prev_right = -1e9
+    n_pts = len(coords)
     for i, ((x, _y), (date, _value, _status)) in enumerate(zip(coords, points)):
-        if date == prev_date:
-            continue
-        prev_date = date
         date_label = _safe_text(_format_diag_date_label(date, compact=True))
+        if not date_label:
+            continue
+        # Estimate label width (~6px/char for the compact font)
+        est_w = max(28, len(date_label) * 6)
         if i == 0:
             anchor = "lt"
-        elif i == n - 1 or date == points[-1][0]:
-            anchor = "rt" if i >= n - 2 else "mt"
+            left, right = x, x + est_w
+        elif i == n_pts - 1:
+            anchor = "rt"
+            left, right = x - est_w, x
         else:
             anchor = "mt"
+            left, right = x - est_w / 2, x + est_w / 2
+        # Always keep first and last; skip middles that collide
+        if i not in (0, n_pts - 1) and left < prev_right + 6:
+            continue
+        if i == n_pts - 1 and left < prev_right + 4 and n_pts > 2:
+            # Prefer last date over a crowded middle that slipped through
+            pass
         draw.text((x, axis_y_readings), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
-
-    for x, date_label, fill in milestone_x_labels:
-        tx = min(max(x, pad_l + 4), pad_l + chart_w - 4)
-        draw.text(
-            (tx, axis_y_milestones),
-            date_label,
-            fill=fill,
-            font=font_small,
-            anchor="mt",
-        )
+        prev_right = right
 
     buf = BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -1293,8 +1290,8 @@ def build_diagnostics_pdf(
 
     pdf.set_font("Helvetica", "", 8)
     legend = (
-        "Green = on target. Yellow = within 10% beyond bound. Red = farther. "
-        "Dashed markers = medication starts, dose changes, stops. "
+        "Green / yellow / red = target status. Gray = no reference band yet. "
+        "Dashed markers = medication or lifestyle milestones (not lab results). "
         "Trend charts first; single readings in the compact table below."
     )
     if milestones:
