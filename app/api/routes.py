@@ -163,6 +163,7 @@ from app.services.case_manager import (
     delete_patient_measurement,
     add_patient_diagnostic,
     delete_patient_diagnostic,
+    clear_patient_diagnostics,
     group_diagnostics_for_charts,
     diagnostic_gaps_for_profile,
     add_patient_journal_entry,
@@ -2958,6 +2959,24 @@ async def api_delete_patient_diagnostic(patient_id: str, diagnostic_id: str):
         "ok": True,
         "patient_id": patient_id,
         "patient": {"id": patient_id},
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+
+
+@router.delete("/patients/{patient_id}/diagnostics")
+async def api_clear_patient_diagnostics(patient_id: str):
+    """Remove all lab/diagnostic readings for a patient in one request."""
+    profile = clear_patient_diagnostics(patient_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    cleared = int(profile.pop("_cleared_diagnostics_count", 0) or 0)
+    return {
+        "ok": True,
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
+        "cleared": cleared,
         "profile": profile,
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),

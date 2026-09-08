@@ -553,6 +553,19 @@ def delete_patient_diagnostic(patient_id: str, diagnostic_id: str) -> bool:
     return True
 
 
+def clear_patient_diagnostics(patient_id: str) -> dict[str, Any] | None:
+    """Remove every lab/diagnostic reading for a patient. Returns updated profile."""
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    removed = len(profile.get("diagnostics") or [])
+    profile["diagnostics"] = []
+    saved = save_patient_profile(patient_id, profile)
+    saved["_cleared_diagnostics_count"] = removed
+    return saved
+
+
 JOURNAL_KINDS = frozenset({"symptom", "feeling", "medication", "note"})
 
 MEDICATION_CATEGORIES = frozenset({"prescription", "otc", "remedy"})
