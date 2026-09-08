@@ -756,13 +756,13 @@ def _sparkline_png_bytes(
     line_stroke = _status_rgb(series_status or points[-1][2], stroke)
     font_title, _font_value, font_label, font_small = _load_chart_fonts(compact=True)
 
-    img = Image.new("RGB", (width, height), (255, 255, 255))
+    img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    # Room on the left for Y-axis value labels
-    pad_l, pad_r, pad_t, pad_b = 78, 56, 20, 48
+    # Room on the left for Y-axis; extra bottom for non-overlapping dates + drop lines
+    pad_l, pad_r, pad_t, pad_b = 78, 48, 20, 64
     if title:
-        draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42), font=font_title, anchor="lt")
+        draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42, 255), font=font_title, anchor="lt")
         pad_t = 44
 
     chart_w = width - pad_l - pad_r
@@ -849,18 +849,132 @@ def _sparkline_png_bytes(
     def x_for_day(day: float) -> float:
         return pad_l + edge_inset + ((day - t_min) / t_span) * usable
 
-    draw.rectangle((pad_l, pad_t, pad_l + chart_w, pad_t + chart_h), outline=(148, 163, 184), width=2)
+    plot_top = float(pad_t)
+    plot_bottom = float(pad_t + chart_h)
 
-    # Thin vertical separators at each result (behind the trend line)
-    for date, _value, _status in points:
+    draw.rectangle(
+        (pad_l, pad_t, pad_l + chart_w, pad_t + chart_h),
+        outline=(148, 163, 184, 255),
+        width=2,
+    )
+
+    # 1) Green target zone — semi-transparent so grid / lines stay readable through it
+    if ref_low is not None or ref_high is not None:
+        band_y1: float | None = None
+        band_y2: float | None = None
+        if direction == "lower_better" and ref_high is not None:
+            band_y1 = y_for(ref_high)
+            band_y2 = plot_bottom
+        elif direction == "higher_better" and ref_low is not None:
+            band_y1 = plot_top
+            band_y2 = y_for(ref_low)
+        elif ref_low is not None and ref_high is not None:
+            band_y1 = y_for(ref_high)
+            band_y2 = y_for(ref_low)
+        elif ref_high is not None:
+            band_y1 = y_for(ref_high)
+            band_y2 = plot_bottom
+        elif ref_low is not None:
+            band_y1 = plot_top
+            band_y2 = y_for(ref_low)
+        if band_y1 is not None and band_y2 is not None:
+            y1 = max(plot_top, min(plot_bottom, min(band_y1, band_y2)))
+            y2 = max(plot_top, min(plot_bottom, max(band_y1, band_y2)))
+            if y2 - y1 >= 2:
+                band_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                band_draw = ImageDraw.Draw(band_layer)
+                band_draw.rectangle(
+                    (pad_l + 2, y1, pad_l + chart_w - 2, y2),
+                    fill=(21, 128, 61, 38),
+                )
+                img = Image.alpha_composite(img, band_layer)
+                draw = ImageDraw.Draw(img)
+
+    # 2) Y-axis scale (+ reference bound lines)
+    y_ticks = _pick_y_axis_ticks(vmin, vmax, ref_low, ref_high)
+    for tick_val, tick_kind in y_ticks:
+        y = y_for(tick_val)
+        if y < plot_top - 2 or y > plot_bottom + 2:
+            continue
+        is_ref = tick_kind == "ref"
+        color = (21, 128, 61, 210) if is_ref else (148, 163, 184, 160)
+        if is_ref:
+            draw.line((pad_l, y, pad_l + chart_w, y), fill=color, width=2)
+        else:
+            dash = 8
+            xx = pad_l + 2
+            while xx < pad_l + chart_w - 2:
+                draw.line(
+                    (xx, y, min(xx + dash, pad_l + chart_w - 2), y),
+                    fill=(203, 213, 225, 140),
+                    width=1,
+                )
+                xx += dash * 2
+        draw.text(
+            (pad_l - 8, y),
+            _safe_text(_format_diag_value_label(tick_val)),
+            fill=(21, 128, 61, 255) if is_ref else (71, 85, 105, 255),
+            font=font_small,
+            anchor="rm",
+        )
+
+    n = len(points)
+    coords: list[tuple[float, float, str | None]] = []
+    for date, value, status in points:
         x = x_for_day(_day(date))
+        y = y_for(value)
+        coords.append((x, y, status))
+
+    # 3) Very light drop-lines from each reading down through the plot (date↔point mapping)
+    for x, y, _status in coords:
         draw.line(
-            (x, pad_t + 2, x, pad_t + chart_h - 2),
-            fill=(203, 213, 225),
+            (x, y + 8, x, plot_bottom),
+            fill=(148, 163, 184, 90),
             width=1,
         )
 
-    # Medication milestones — dashed verticals only (no axis dates; those collided)
+    # 4) Trend segments + dots + value labels
+    for i in range(len(coords) - 1):
+        x0, y0, s0 = coords[i]
+        x1, y1, s1 = coords[i + 1]
+        seg_rgb = _status_rgb(_worse_status(s0, s1), line_stroke)
+        draw.line((x0, y0, x1, y1), fill=(*seg_rgb, 255), width=5)
+
+    label_every = 1 if n <= 5 else 2
+    for i, ((x, y, _st), (_date, value, status)) in enumerate(zip(coords, points)):
+        color = _status_rgb(status, line_stroke)
+        r = 8
+        draw.ellipse(
+            (x - r, y - r, x + r, y + r),
+            fill=(*color, 255),
+            outline=(255, 255, 255, 255),
+            width=2,
+        )
+        if i % label_every == 0 or i in (0, n - 1):
+            val_label = _safe_text(_format_diag_value_label(value))
+            if y - pad_t < 36:
+                y_off = 18
+                anchor = "mt"
+            else:
+                y_off = -12 if (i // label_every) % 2 == 0 else -26
+                anchor = "mb"
+            x_off = 0
+            if i == n - 1 and (
+                (ref_high is not None and abs(value - ref_high) < y_span * 0.03)
+                or (ref_low is not None and abs(value - ref_low) < y_span * 0.03)
+            ):
+                x_off = -14
+                anchor = "mb"
+                y_off = -12
+            draw.text(
+                (x + x_off, y + y_off),
+                val_label,
+                fill=(15, 23, 42, 255),
+                font=font_label,
+                anchor=anchor,
+            )
+
+    # 5) Milestone markers in the foreground (above band + trend)
     marker_fill = (100, 116, 139)
     by_day: dict[str, list[dict[str, Any]]] = {}
     for ev in range_events:
@@ -868,7 +982,7 @@ def _sparkline_png_bytes(
         if not d:
             continue
         by_day.setdefault(d, []).append(ev)
-    for mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
+    for _mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
         except ValueError:
@@ -892,112 +1006,31 @@ def _sparkline_png_bytes(
         dash = 10
         yy = y0
         while yy < y1:
-            draw.line((x, yy, x, min(yy + dash, y1)), fill=fill, width=2)
+            draw.line((x, yy, x, min(yy + dash, y1)), fill=(*fill, 255), width=3)
             yy += dash * 2
-        # No axis date for milestones — colored dashes + page legend are enough.
-
-    plot_top = float(pad_t)
-    plot_bottom = float(pad_t + chart_h)
-    if ref_low is not None or ref_high is not None:
-        band_y1: float | None = None
-        band_y2: float | None = None
-        if direction == "lower_better" and ref_high is not None:
-            band_y1 = y_for(ref_high)
-            band_y2 = plot_bottom
-        elif direction == "higher_better" and ref_low is not None:
-            band_y1 = plot_top
-            band_y2 = y_for(ref_low)
-        elif ref_low is not None and ref_high is not None:
-            band_y1 = y_for(ref_high)
-            band_y2 = y_for(ref_low)
-        elif ref_high is not None:
-            band_y1 = y_for(ref_high)
-            band_y2 = plot_bottom
-        elif ref_low is not None:
-            band_y1 = plot_top
-            band_y2 = y_for(ref_low)
-        if band_y1 is not None and band_y2 is not None:
-            y1 = max(plot_top, min(plot_bottom, min(band_y1, band_y2)))
-            y2 = max(plot_top, min(plot_bottom, max(band_y1, band_y2)))
-            if y2 - y1 >= 2:
-                band = tuple(min(255, int(c * 0.18 + 230)) for c in (21, 128, 61))
-                draw.rectangle((pad_l + 2, y1, pad_l + chart_w - 2, y2), fill=band)
-
-    # Y-axis scale (+ reference bounds in green) so readings can be judged against the band
-    y_ticks = _pick_y_axis_ticks(vmin, vmax, ref_low, ref_high)
-    for tick_val, tick_kind in y_ticks:
-        y = y_for(tick_val)
-        if y < plot_top - 2 or y > plot_bottom + 2:
-            continue
-        is_ref = tick_kind == "ref"
-        color = (21, 128, 61) if is_ref else (100, 116, 139)
-        if is_ref:
-            draw.line((pad_l, y, pad_l + chart_w, y), fill=color, width=2)
-        else:
-            dash = 8
-            xx = pad_l + 2
-            while xx < pad_l + chart_w - 2:
-                draw.line((xx, y, min(xx + dash, pad_l + chart_w - 2), y), fill=(203, 213, 225), width=1)
-                xx += dash * 2
-        draw.text(
-            (pad_l - 8, y),
-            _safe_text(_format_diag_value_label(tick_val)),
-            fill=color,
-            font=font_small,
-            anchor="rm",
+        # Triangle marker at top so milestones read as overlays
+        tip = 8
+        draw.polygon(
+            [(x, y0 + tip), (x - tip, y0), (x + tip, y0)],
+            fill=(*fill, 255),
         )
 
-    n = len(points)
-    coords: list[tuple[float, float, str | None]] = []
-    for date, value, status in points:
-        x = x_for_day(_day(date))
-        y = y_for(value)
-        coords.append((x, y, status))
-    # Segment color tracks readings (worse of the two endpoint statuses)
-    for i in range(len(coords) - 1):
-        x0, y0, s0 = coords[i]
-        x1, y1, s1 = coords[i + 1]
-        seg_color = _status_rgb(_worse_status(s0, s1), line_stroke)
-        draw.line((x0, y0, x1, y1), fill=seg_color, width=5)
-
-    label_every = 1 if n <= 5 else 2
-    for i, ((x, y, _st), (_date, value, status)) in enumerate(zip(coords, points)):
-        color = _status_rgb(status, line_stroke)
-        r = 8
-        draw.ellipse((x - r, y - r, x + r, y + r), fill=color, outline=(255, 255, 255), width=2)
-        if i % label_every == 0 or i in (0, n - 1):
-            val_label = _safe_text(_format_diag_value_label(value))
-            if y - pad_t < 36:
-                y_off = 18
-                anchor = "mt"
-            else:
-                y_off = -12 if (i // label_every) % 2 == 0 else -26
-                anchor = "mb"
-            x_off = 0
-            if i == n - 1 and (
-                (ref_high is not None and abs(value - ref_high) < y_span * 0.03)
-                or (ref_low is not None and abs(value - ref_low) < y_span * 0.03)
-            ):
-                x_off = -14
-                anchor = "mb"
-                y_off = -12
-            draw.text((x + x_off, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor=anchor)
-
-    # Reading dates — prefer full labels when few points so export stays precise
-    axis_y_readings = height - 22
-    prev_right = -1e9
+    # 6) Axis dates — non-overlapping, with light connectors from plot to label
+    axis_y_top = height - 36
+    axis_y_bot = height - 16
     n_pts = len(coords)
-    use_compact = n_pts > 4
+    # Prefer short labels; precise text under the chart (points line) already has ISO dates
+    use_compact = n_pts > 2
+    candidates: list[tuple[int, float, str, float, float, str]] = []
     for i, ((x, _y, _st), (date, _value, _status)) in enumerate(zip(coords, points)):
         date_label = _safe_text(
             _format_diag_date_label(date, compact=use_compact)
             if use_compact
-            else _format_diag_date_precise(date)
+            else _format_diag_date_label(date, compact=False)
         )
         if not date_label:
             continue
-        # Estimate label width (~6px/char for the compact font)
-        est_w = max(28, len(date_label) * (5.2 if use_compact else 4.6))
+        est_w = max(26, len(date_label) * (5.0 if use_compact else 5.4))
         if i == 0:
             anchor = "lt"
             left, right = x, x + est_w
@@ -1007,14 +1040,60 @@ def _sparkline_png_bytes(
         else:
             anchor = "mt"
             left, right = x - est_w / 2, x + est_w / 2
-        # Always keep first and last; skip middles that collide
-        if i not in (0, n_pts - 1) and left < prev_right + 6:
+        candidates.append((i, x, date_label, left, right, anchor))
+
+    kept: list[tuple[int, float, str, float, float, str, int]] = []
+    # Always keep first and last; pack middles without overlap; stagger to second row if needed
+    for cand in candidates:
+        i, x, date_label, left, right, anchor = cand
+        if i in (0, n_pts - 1):
+            kept.append((*cand, 0))
             continue
-        draw.text((x, axis_y_readings), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
-        prev_right = right
+        collide = False
+        for _ki, kx, _kl, kleft, kright, _ka, krow in kept:
+            if left < kright + 8 and right > kleft - 8 and krow == 0:
+                collide = True
+                break
+        if not collide:
+            kept.append((*cand, 0))
+            continue
+        # Try second row
+        collide2 = False
+        for _ki, kx, _kl, kleft, kright, _ka, krow in kept:
+            if krow != 1:
+                continue
+            if left < kright + 8 and right > kleft - 8:
+                collide2 = True
+                break
+        if not collide2:
+            kept.append((*cand, 1))
+
+    # Ensure first/last still present after packing
+    kept_ids = {k[0] for k in kept}
+    for cand in candidates:
+        if cand[0] in (0, n_pts - 1) and cand[0] not in kept_ids:
+            kept.append((*cand, 0))
+    kept.sort(key=lambda t: t[0])
+
+    for i, x, date_label, _left, _right, anchor, row in kept:
+        axis_y = axis_y_top if row == 0 else axis_y_bot
+        # Light connector from plot bottom to the date label
+        draw.line(
+            (x, plot_bottom, x, axis_y - 4),
+            fill=(148, 163, 184, 110),
+            width=1,
+        )
+        draw.text(
+            (x, axis_y),
+            date_label,
+            fill=(51, 65, 85, 255),
+            font=font_small,
+            anchor=anchor,
+        )
 
     buf = BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    # Flatten to RGB for smaller PDFs / broader compatibility
+    img.convert("RGB").save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
@@ -1157,8 +1236,9 @@ def _write_diagnostics_charts(
     pdf.ln(4)
 
     usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-    chart_h_mm = 42
-    row_step = chart_h_mm + 8
+    chart_h_mm = 50
+    gap_after_mm = 10
+    row_step = chart_h_mm + gap_after_mm
     strokes = [(14, 116, 144), (8, 145, 178), (180, 83, 9)]
 
     for index, item in enumerate(ranked):
@@ -1171,7 +1251,7 @@ def _write_diagnostics_charts(
             pdf.set_font("Helvetica", "B", 12)
             pdf.set_text_color(14, 116, 144)
             pdf.cell(0, 7, "Key diagnostics (continued)", new_x="LMARGIN", new_y="NEXT")
-            pdf.ln(1)
+            pdf.ln(2)
 
         x = pdf.l_margin
         y = pdf.get_y()
@@ -1186,12 +1266,17 @@ def _write_diagnostics_charts(
             series_status=status if isinstance(status, str) else None,
             title=name,
             unit=unit or None,
-            height=380,
+            height=420,
             milestones=milestones,
         )
         if png:
             pdf.image(BytesIO(png), x=x, y=y, w=usable_w, h=chart_h_mm)
-            pdf.set_y(y + chart_h_mm + 4)
+            pdf.set_y(y + chart_h_mm + gap_after_mm)
+            # Soft separator between metrics
+            pdf.set_draw_color(226, 232, 240)
+            pdf.set_line_width(0.3)
+            sep_y = pdf.get_y() - gap_after_mm / 2
+            pdf.line(pdf.l_margin, sep_y, pdf.w - pdf.r_margin, sep_y)
 
     pdf.ln(2)
 
@@ -1470,18 +1555,19 @@ def build_diagnostics_pdf(
             else:
                 singles.append(item)
 
-        chart_h_mm = 52
+        chart_h_mm = 58
         for index, item in enumerate(trends):
             points_line = _format_diag_points_reference(item.get("readings") or [])
-            # title + pre-gap + chart + points line + post-gap
+            # title + pre-gap + chart + points line + post-gap (more air between metrics)
             points_h = 7.0 if points_line else 0.0
-            block_h = chart_h_mm + 13 + points_h
+            gap_after = 8.0
+            block_h = chart_h_mm + 16 + points_h + gap_after
             if pdf.get_y() + block_h > pdf.h - pdf.b_margin:
                 pdf.add_page()
                 pdf.set_font("Helvetica", "B", 11)
                 pdf.set_text_color(14, 116, 144)
                 pdf.cell(0, 6, "Trend charts (continued)", new_x="LMARGIN", new_y="NEXT")
-                pdf.ln(3)
+                pdf.ln(4)
 
             x = pdf.l_margin
             name = _safe_text(item.get("name") or "Diagnostic")
@@ -1503,7 +1589,7 @@ def build_diagnostics_pdf(
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_status_rgb(status if isinstance(status, str) else None, (71, 85, 105)))
             pdf.cell(usable_w * 0.60, 5.0, _safe_text(summary), align="R", new_x="LMARGIN", new_y="NEXT")
-            y_chart = pdf.get_y() + 1.5
+            y_chart = pdf.get_y() + 2.0
 
             png = _sparkline_png_bytes(
                 item.get("readings") or [],
@@ -1511,12 +1597,12 @@ def build_diagnostics_pdf(
                 reference=item.get("reference"),
                 series_status=status if isinstance(status, str) else None,
                 unit=unit or None,
-                height=440,
+                height=480,
                 milestones=milestones,
             )
             if png:
                 pdf.image(BytesIO(png), x=x, y=y_chart, w=usable_w, h=chart_h_mm)
-            pdf.set_y(y_chart + chart_h_mm + 1.5)
+            pdf.set_y(y_chart + chart_h_mm + 2.5)
             if points_line:
                 pdf.set_font("Helvetica", "", 6.5)
                 pdf.set_text_color(71, 85, 105)
@@ -1525,9 +1611,14 @@ def build_diagnostics_pdf(
                     _safe_text(f"Points (collection date=value): {points_line}"),
                     h=3.2,
                 )
-                pdf.ln(1.5)
+                pdf.ln(2.0)
             else:
-                pdf.ln(3.5)
+                pdf.ln(2.0)
+            # Soft separator between metrics
+            pdf.set_draw_color(226, 232, 240)
+            pdf.set_line_width(0.3)
+            pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+            pdf.ln(gap_after)
 
         if singles:
             if pdf.get_y() + 20 > pdf.h - pdf.b_margin:
