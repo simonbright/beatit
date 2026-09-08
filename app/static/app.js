@@ -56,6 +56,7 @@ const state = {
   diagMilestonePrefs: { enabled: true, selected: null },
   diagStatusFilter: "all",
   diagnosticGaps: null,
+  diagExpandCache: {},
   diagnosticSeriesCache: null,
   coverageReport: null,
   coverageView: "all",
@@ -11420,21 +11421,20 @@ function estimateAxisLabelWidth(label) {
 }
 
 /** Keep first/last dates; drop middles that would collide on the axis. */
-function pickNonOverlappingAxisDates(coords) {
+function pickNonOverlappingAxisDates(coords, { formatLabel = formatDiagDateAxis, minGap = 8 } = {}) {
   if (!coords.length) return [];
   if (coords.length === 1) {
-    return [{ ...coords[0], anchor: "middle", label: formatDiagDateAxis(coords[0].date) }];
+    return [{ ...coords[0], anchor: "middle", label: formatLabel(coords[0].date) }];
   }
   const labeled = coords.map((c, i) => ({
     ...c,
     i,
-    label: formatDiagDateAxis(c.date),
+    label: formatLabel(c.date),
     anchor: i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle",
   }));
   const first = labeled[0];
   const last = labeled[labeled.length - 1];
   const kept = [first];
-  const minGap = 8;
   for (let i = 1; i < labeled.length - 1; i++) {
     const cand = labeled[i];
     const prev = kept[kept.length - 1];
@@ -11810,7 +11810,27 @@ function clientStatusForValue(value, reference) {
   return null;
 }
 
-function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = null, milestones = null } = {}) {
+function buildSparklineSvg(
+  readings,
+  { stroke = "var(--accent)", reference = null, milestones = null, size = "compact" } = {}
+) {
+  const large = size === "large";
+  const w = large ? 720 : 360;
+  const h = large ? 300 : 150;
+  const padL = large ? 72 : 46;
+  const padR = large ? 28 : 18;
+  const padTop = large ? 40 : 28;
+  const padBottom = large ? 44 : 28;
+  const fontY = large ? 14 : 10;
+  const fontVal = large ? 16 : 13;
+  const fontDate = large ? 12 : 10;
+  const strokeW = large ? 3.6 : 2.8;
+  const dotR = large ? 6.2 : 4.2;
+  const hitR = large ? 18 : 12;
+  const valueLift = large ? 16 : 12;
+  const plotClass = large ? "diag-chart-plot diag-chart-plot-large" : "diag-chart-plot";
+  const svgClass = large ? "diag-chart-svg diag-chart-svg-large" : "diag-chart-svg";
+
   const points = dedupeReadingsByDate(readings || [])
     .map((r) => ({
       date: String(r.recorded_at || "").slice(0, 10),
@@ -11820,7 +11840,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     .filter((p) => p.date && Number.isFinite(p.value))
     .sort((a, b) => a.date.localeCompare(b.date));
   if (!points.length) {
-    return `<div class="diag-chart-plot"><svg class="diag-chart-svg" viewBox="0 0 360 150" role="img"><text x="180" y="75" text-anchor="middle" fill="currentColor" font-size="16">No data</text></svg></div>`;
+    return `<div class="${plotClass}"><svg class="${svgClass}" viewBox="0 0 ${w} ${h}" role="img"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="currentColor" font-size="${large ? 22 : 16}">No data</text></svg></div>`;
   }
 
   const refLow = reference && Number.isFinite(Number(reference.low)) ? Number(reference.low) : null;
@@ -11833,24 +11853,25 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   if (points.length === 1) {
     const p = points[0];
     const color = statusColor(p.status);
-    const refLine = hasRef
-      ? `<text x="180" y="108" text-anchor="middle" fill="currentColor" font-size="13" opacity="0.75">${escapeHtml(reference.label || "Reference")}</text>`
+    const statusBit = p.status
+      ? `<text x="${w / 2}" y="${large ? 210 : 108}" text-anchor="middle" fill="${color}" font-size="${large ? 18 : 13}" font-weight="600">${escapeHtml(statusLabel(p.status))}</text>`
       : "";
-    // Value only — date already appears in the card header and footer (avoid triple dates)
-    return `<div class="diag-chart-plot">
-      <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Single reading">
-        <text x="180" y="78" text-anchor="middle" fill="${color}" font-size="40" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
+    const refLine = hasRef
+      ? `<text x="${w / 2}" y="${large ? 240 : 128}" text-anchor="middle" fill="currentColor" font-size="${large ? 16 : 13}" opacity="0.75">${escapeHtml(reference.label || "Reference")}</text>`
+      : "";
+    const dateLine = large
+      ? `<text x="${w / 2}" y="168" text-anchor="middle" fill="currentColor" font-size="16" opacity="0.85">${escapeHtml(formatDiagDatePrecise(p.date))}</text>`
+      : "";
+    return `<div class="${plotClass}">
+      <svg class="${svgClass}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Single reading">
+        <text x="${w / 2}" y="${large ? 120 : 78}" text-anchor="middle" fill="${color}" font-size="${large ? 64 : 40}" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
+        ${dateLine}
+        ${statusBit}
         ${refLine}
       </svg>
     </div>`;
   }
 
-  const padL = 46;
-  const padR = 18;
-  const padTop = 28;
-  const padBottom = 28;
-  const w = 360;
-  const h = 150;
   const plotTop = padTop;
   const plotBottom = h - padBottom;
   const values = points.map((p) => p.value);
@@ -11909,12 +11930,12 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   let milestoneLayer = "";
   let milestoneLegend = "";
   if (inRange.length) {
-    const markers = inRange.slice(0, 6).map((ev) => ({
+    const markers = inRange.slice(0, large ? 10 : 6).map((ev) => ({
       ...ev,
       x: xFor(ev.date),
     }));
     markers.sort((a, b) => a.x - b.x || String(a.date).localeCompare(String(b.date)));
-    const minGap = 18;
+    const minGap = large ? 28 : 18;
     for (let i = 1; i < markers.length; i++) {
       if (markers[i].x - markers[i - 1].x < minGap) {
         markers[i].x = Math.min(w - padR, markers[i - 1].x + minGap);
@@ -11928,12 +11949,13 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
         const color = ev.color || "#0f766e";
         const top = padTop - 2;
         const bot = h - padBottom;
+        const tipW = large ? 7 : 5.5;
         return `<g class="diag-milestone-mark">
-          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${color}" stroke-width="2.6" stroke-dasharray="6 4" opacity="1">
+          <line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" stroke="${color}" stroke-width="${large ? 3 : 2.6}" stroke-dasharray="6 4" opacity="1">
             <title>${escapeHtml(ev.label)}</title>
           </line>
-          <polygon points="${(x - 5.5).toFixed(1)},${top} ${(x + 5.5).toFixed(1)},${top} ${x.toFixed(1)},${(top + 9).toFixed(1)}" fill="${color}" />
-          <circle cx="${x.toFixed(1)}" cy="${bot}" r="3.6" fill="${color}" stroke="#fff" stroke-width="1" />
+          <polygon points="${(x - tipW).toFixed(1)},${top} ${(x + tipW).toFixed(1)},${top} ${x.toFixed(1)},${(top + (large ? 12 : 9)).toFixed(1)}" fill="${color}" />
+          <circle cx="${x.toFixed(1)}" cy="${bot}" r="${large ? 4.5 : 3.6}" fill="${color}" stroke="#fff" stroke-width="1" />
         </g>`;
       })
       .join("");
@@ -11941,8 +11963,8 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       ${markers
         .map((ev) => {
           const short =
-            String(ev.label || "").length > 42
-              ? `${String(ev.label).slice(0, 41)}…`
+            String(ev.label || "").length > (large ? 72 : 42)
+              ? `${String(ev.label).slice(0, large ? 71 : 41)}…`
               : ev.label;
           const color = ev.color || "#0f766e";
           return `<span class="diag-milestone-badge" title="${escapeHtml(ev.label)}" style="border-color:${escapeHtml(color)};background:color-mix(in srgb, ${escapeHtml(color)} 16%, var(--surface));color:color-mix(in srgb, ${escapeHtml(color)} 82%, #0f172a)"><span class="diag-milestone-badge-dot" style="background:${escapeHtml(color)}" aria-hidden="true"></span>${escapeHtml(short)}</span>`;
@@ -11960,8 +11982,8 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       const color = isRef ? "#15803d" : "#64748b";
       const label = formatDiagValue(t.value);
       return `<g class="diag-y-tick">
-        <line x1="${padL}" y1="${y.toFixed(1)}" x2="${(w - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="${isRef ? 1.2 : 0.8}" stroke-dasharray="${isRef ? "4 3" : "2 4"}" opacity="${isRef ? 0.55 : 0.28}"></line>
-        <text x="${(padL - 5).toFixed(1)}" y="${(y + 3.2).toFixed(1)}" text-anchor="end" fill="${color}" font-size="10" font-weight="${isRef ? 700 : 500}" opacity="0.95">${escapeHtml(label)}</text>
+        <line x1="${padL}" y1="${y.toFixed(1)}" x2="${(w - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="${isRef ? (large ? 1.6 : 1.2) : 0.8}" stroke-dasharray="${isRef ? "4 3" : "2 4"}" opacity="${isRef ? 0.55 : 0.28}"></line>
+        <text x="${(padL - 6).toFixed(1)}" y="${(y + (large ? 4.5 : 3.2)).toFixed(1)}" text-anchor="end" fill="${color}" font-size="${fontY}" font-weight="${isRef ? 700 : 500}" opacity="0.95">${escapeHtml(label)}</text>
       </g>`;
     })
     .join("");
@@ -11972,7 +11994,6 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     if (band) {
       refLayer = `<rect x="${padL}" y="${band.top.toFixed(1)}" width="${(w - padL - padR).toFixed(1)}" height="${Math.max(2, band.bottom - band.top).toFixed(1)}" fill="#15803d" opacity="0.12"></rect>`;
     }
-    // Bound lines are drawn via y-axis ticks (green dashed) to avoid double stroke
   }
 
   // Color each segment by the worse of its endpoint statuses so the line tracks readings
@@ -11982,7 +12003,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       const b = coords[i + 1];
       const segStatus = worseStatus(a.status, b.status);
       const color = statusColor(segStatus) || lineStroke;
-      return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${color}" stroke-width="2.8" stroke-linecap="round" />`;
+      return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${color}" stroke-width="${strokeW}" stroke-linecap="round" />`;
     })
     .join("");
 
@@ -11990,30 +12011,30 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     .map((c) => {
       const label = formatDiagValue(c.value);
       const fill = statusColor(c.status);
-      const valueY = c.y - 12;
+      const valueY = c.y - valueLift;
       const tip = `${formatDiagDatePrecise(c.date)} · ${label}${
         c.status ? ` · ${statusLabel(c.status)}` : ""
       }`;
-      // Invisible hit circle makes hover reliable; title + data-tip for native + custom tooltip
       return `<g class="diag-chart-point" data-tip="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}">
-        <circle class="diag-chart-hit" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="12" fill="transparent" stroke="none"></circle>
-        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4.2" fill="${fill}" stroke="#fff" stroke-width="1.5" pointer-events="none"></circle>
-        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="13" font-weight="700" stroke="#fff" stroke-width="4" paint-order="stroke fill" pointer-events="none">${escapeHtml(label)}</text>
+        <circle class="diag-chart-hit" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${hitR}" fill="transparent" stroke="none"></circle>
+        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${dotR}" fill="${fill}" stroke="#fff" stroke-width="${large ? 2 : 1.5}" pointer-events="none"></circle>
+        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="${fontVal}" font-weight="700" stroke="#fff" stroke-width="${large ? 5 : 4}" paint-order="stroke fill" pointer-events="none">${escapeHtml(label)}</text>
         <title>${escapeHtml(tip)}</title>
       </g>`;
     })
     .join("");
 
-  // Axis labels from readings only — milestone dates use the badges below (avoids mash)
-  const dateLabels = pickNonOverlappingAxisDates(coords)
+  const dateLabels = pickNonOverlappingAxisDates(coords, {
+    formatLabel: large ? formatDiagDate : formatDiagDateAxis,
+    minGap: large ? 14 : 8,
+  })
     .map((c) => {
-      return `<text x="${c.x.toFixed(1)}" y="${(h - 8).toFixed(1)}" text-anchor="${c.anchor}" fill="currentColor" font-size="10" opacity="0.85" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(c.label)}</text>`;
+      return `<text x="${c.x.toFixed(1)}" y="${(h - (large ? 12 : 8)).toFixed(1)}" text-anchor="${c.anchor}" fill="currentColor" font-size="${fontDate}" opacity="0.85" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(c.label)}</text>`;
     })
     .join("");
 
-  // Draw order: ref band → y-axis → milestones → colored segments → dots/labels
-  return `<div class="diag-chart-plot">
-    <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
+  return `<div class="${plotClass}">
+    <svg class="${svgClass}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Trend">
       ${refLayer}
       ${yAxisLayer}
       ${milestoneLayer}
@@ -12068,6 +12089,7 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   if (!cards.length && !(gaps?.total_count > 0)) {
     renderDiagnosticsStatusFilter([], gaps);
     wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
+    state.diagExpandCache = {};
     return;
   }
 
@@ -12100,9 +12122,11 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
     const label =
       DIAG_STATUS_FILTERS.find((f) => f.id === filter)?.label || "this filter";
     wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No labs marked ${escapeHtml(label.toLowerCase())}. Choose All to see every chart.</p>`;
+    state.diagExpandCache = {};
     return;
   }
 
+  const expandCache = {};
   wrap.innerHTML = visible
     .map(({ s, status }) => {
       const unit = s.unit ? ` ${s.unit}` : "";
@@ -12132,12 +12156,22 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
         : meaning
           ? `<span class="diag-chart-info-link muted" title="${escapeHtml(meaning)}">What is this?</span>`
           : "";
+      const expandKey = `${s.category || "blood"}::${s.name || "metric"}`;
+      expandCache[expandKey] = { series: s, milestones, status };
       return `<article class="diag-chart-card diag-status-card-${status || "none"}" data-category="${escapeHtml(
         s.category || "blood"
-      )}" title="${escapeHtml(meaning || s.name)}">
+      )}" data-diag-expand-key="${escapeHtml(expandKey)}" title="${escapeHtml(meaning || s.name)}">
       <div class="diag-chart-head">
         <h4 class="diag-chart-title">${escapeHtml(s.name)}</h4>
-        <span class="diag-chart-latest" style="color:${stroke}">${escapeHtml(latestLabel)}</span>
+        <div class="diag-chart-head-actions">
+          <span class="diag-chart-latest" style="color:${stroke}">${escapeHtml(latestLabel)}</span>
+          <button type="button" class="btn ghost btn-sm diag-chart-expand-btn" data-diag-expand="${escapeHtml(
+            expandKey
+          )}" title="Expand chart" aria-label="Expand ${escapeHtml(s.name || "chart")}">
+            <svg class="diag-chart-expand-icon" viewBox="0 0 24 24" aria-hidden="true" width="16" height="16"><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 9l6-6M21 9l-6-6M3 15l6 6M21 15l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="diag-chart-expand-label">Expand</span>
+          </button>
+        </div>
       </div>
       ${buildSparklineSvg(s.readings || [], { stroke, reference: ref, milestones })}
       <p class="diag-chart-meta">${statusBit ? `${statusBit} ` : ""}${escapeHtml(cat)} · ${s.point_count} reading${
@@ -12154,6 +12188,125 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
     </article>`;
     })
     .join("");
+  state.diagExpandCache = expandCache;
+}
+
+function closeDiagChartExpand() {
+  hideModal("modal-diag-chart-expand");
+}
+
+function openDiagChartExpand(key) {
+  const entry = (state.diagExpandCache || {})[key];
+  if (!entry?.series) return;
+  const s = entry.series;
+  const milestones = entry.milestones || [];
+  const status = entry.status || diagSeriesStatus(s);
+  const ref = s.reference || null;
+  const unit = s.unit ? ` ${s.unit}` : "";
+  const unitOnly = s.unit || "";
+  const cat = s.category === "imaging" ? "Imaging" : s.category === "vital" ? "Vitals" : "Blood";
+  const titleEl = document.getElementById("diag-expand-title");
+  const subEl = document.getElementById("diag-expand-subtitle");
+  const statusEl = document.getElementById("diag-expand-status");
+  const chartEl = document.getElementById("diag-expand-chart");
+  const detailsEl = document.getElementById("diag-expand-details");
+  if (!titleEl || !chartEl || !detailsEl) return;
+
+  titleEl.textContent = s.name || "Lab trend";
+  if (subEl) {
+    const latest = s.latest;
+    const latestBit = latest
+      ? `Latest ${formatDiagValue(latest.value)}${unit} on ${formatDiagDatePrecise(latest.recorded_at)}`
+      : "";
+    subEl.textContent = [cat, `${s.point_count || 0} reading${(s.point_count || 0) === 1 ? "" : "s"}`, latestBit]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (statusEl) {
+    const pill = status
+      ? `<span class="diag-status-pill diag-status-${status}">${escapeHtml(statusLabel(status))}</span>`
+      : `<span class="diag-status-pill diag-status-none">No reference band</span>`;
+    const refBit = ref
+      ? `<span class="diag-expand-ref">Target: ${escapeHtml(ref.label || "")}${
+          ref.note ? ` · ${escapeHtml(ref.note)}` : ""
+        }</span>`
+      : "";
+    statusEl.innerHTML = `${pill}${refBit}`;
+  }
+
+  chartEl.innerHTML = buildSparklineSvg(s.readings || [], {
+    stroke: statusColor(status),
+    reference: ref,
+    milestones,
+    size: "large",
+  });
+
+  const readings = dedupeReadingsByDate(s.readings || [])
+    .map((r) => ({
+      date: String(r.recorded_at || "").slice(0, 10),
+      value: Number(r.value),
+      status: r.status || clientStatusForValue(r.value, ref),
+    }))
+    .filter((p) => p.date && Number.isFinite(p.value))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const rows = readings
+    .map((r) => {
+      const st = r.status
+        ? `<span class="diag-status-pill diag-status-${r.status}">${escapeHtml(statusLabel(r.status))}</span>`
+        : `<span class="muted">—</span>`;
+      return `<tr>
+        <td>${escapeHtml(formatDiagDatePrecise(r.date))}</td>
+        <td class="diag-expand-value" style="color:${statusColor(r.status)}">${escapeHtml(formatDiagValue(r.value))}${
+          unitOnly ? ` <span class="muted">${escapeHtml(unitOnly)}</span>` : ""
+        }</td>
+        <td>${st}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const meaning = ref?.meaning
+    ? `<p class="diag-expand-meaning">${escapeHtml(ref.meaning)}</p>`
+    : "";
+  const info =
+    ref?.info_url
+      ? `<p class="diag-expand-info"><a class="diag-chart-info-link" href="${escapeHtml(
+          ref.info_url
+        )}" target="_blank" rel="noopener noreferrer">What is this? · ${escapeHtml(
+          ref.info_source || "Learn more"
+        )}</a></p>`
+      : "";
+
+  const milestoneRows = (milestones || [])
+    .slice(0, 12)
+    .map((ev) => {
+      const color = ev.color || "#0f766e";
+      return `<li class="diag-expand-milestone-item">
+        <span class="diag-milestone-badge-dot" style="background:${escapeHtml(color)}" aria-hidden="true"></span>
+        <span>${escapeHtml(formatDiagDatePrecise(ev.date))} · ${escapeHtml(ev.label || "Milestone")}</span>
+      </li>`;
+    })
+    .join("");
+
+  detailsEl.innerHTML = `
+    ${meaning}
+    ${info}
+    <h4 class="diag-expand-section-title">Readings</h4>
+    <div class="diag-expand-table-wrap">
+      <table class="diag-expand-table">
+        <thead><tr><th>Collection date</th><th>Value</th><th>Status</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="3" class="muted">No readings</td></tr>`}</tbody>
+      </table>
+    </div>
+    ${
+      milestoneRows
+        ? `<h4 class="diag-expand-section-title">Timeline markers on this chart</h4>
+           <ul class="diag-expand-milestones">${milestoneRows}</ul>`
+        : ""
+    }
+  `;
+
+  showModal("modal-diag-chart-expand");
 }
 
 async function refreshActivePatientProfile() {
@@ -13951,8 +14104,25 @@ document.getElementById("diagnostics-status-filter")?.addEventListener("click", 
 });
 
 document.getElementById("diagnostics-charts")?.addEventListener("click", (e) => {
+  const expandBtn = e.target.closest?.("[data-diag-expand]");
+  if (expandBtn) {
+    e.preventDefault();
+    openDiagChartExpand(expandBtn.getAttribute("data-diag-expand") || "");
+    return;
+  }
   if (!e.target.closest("#btn-copy-diag-gaps")) return;
   copyDiagnosticGapsList().catch((err) => toast(err.message || "Copy failed", "error"));
+});
+
+document.getElementById("btn-close-diag-expand")?.addEventListener("click", () => closeDiagChartExpand());
+document.getElementById("btn-close-diag-expand-footer")?.addEventListener("click", () => closeDiagChartExpand());
+document.getElementById("modal-diag-chart-expand")?.addEventListener("click", (e) => {
+  if (e.target?.id === "modal-diag-chart-expand") closeDiagChartExpand();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const modal = document.getElementById("modal-diag-chart-expand");
+  if (modal && !modal.classList.contains("hidden")) closeDiagChartExpand();
 });
 
 (function setupDiagChartTooltips() {
@@ -13982,32 +14152,37 @@ document.getElementById("diagnostics-charts")?.addEventListener("click", (e) => 
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
   };
-  const charts = document.getElementById("diagnostics-charts");
-  if (!charts) return;
-  charts.addEventListener("pointerover", (e) => {
+  const roots = [
+    document.getElementById("diagnostics-charts"),
+    document.getElementById("diag-expand-chart"),
+  ].filter(Boolean);
+  if (!roots.length) return;
+  const onOver = (e) => {
     const point = e.target.closest?.(".diag-chart-point");
-    if (!point || !charts.contains(point)) return;
-    const text = point.getAttribute("data-tip") || point.getAttribute("aria-label") || "";
-    if (!text) return;
-    show(text, e.clientX, e.clientY);
-  });
-  charts.addEventListener("pointermove", (e) => {
+    if (!point) return;
+    const tip = point.getAttribute("data-tip") || point.getAttribute("aria-label") || "";
+    if (!tip) return;
+    show(tip, e.clientX, e.clientY);
+  };
+  const onMove = (e) => {
     const point = e.target.closest?.(".diag-chart-point");
-    if (!point || !charts.contains(point)) {
-      hide();
-      return;
-    }
-    const text = point.getAttribute("data-tip") || "";
-    if (!text) return;
-    show(text, e.clientX, e.clientY);
-  });
-  charts.addEventListener("pointerout", (e) => {
+    if (!point || !tipEl || tipEl.classList.contains("hidden")) return;
+    show(point.getAttribute("data-tip") || "", e.clientX, e.clientY);
+  };
+  const onOut = (e) => {
+    const point = e.target.closest?.(".diag-chart-point");
+    if (!point) return;
     const next = e.relatedTarget;
-    if (next && e.target.closest?.(".diag-chart-point")?.contains(next)) return;
+    if (next && point.contains(next)) return;
     if (next?.closest?.(".diag-chart-point")) return;
     hide();
-  });
-  charts.addEventListener("pointerleave", hide);
+  };
+  for (const root of roots) {
+    root.addEventListener("pointerover", onOver);
+    root.addEventListener("pointermove", onMove);
+    root.addEventListener("pointerout", onOut);
+    root.addEventListener("pointerleave", hide);
+  }
 })();
 
 document.getElementById("diag-milestones-all")?.addEventListener("click", () => {

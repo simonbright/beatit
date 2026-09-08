@@ -418,6 +418,24 @@
     </div>
   </div>
 
+  <div id="modal-diag-chart-expand" class="modal-overlay hidden">
+    <div class="modal-card modal-diag-chart-expand-card" role="dialog" aria-modal="true" aria-labelledby="diag-expand-title">
+      <div class="diag-expand-head">
+        <div class="diag-expand-head-text">
+          <h3 id="diag-expand-title">Lab trend</h3>
+          <p class="muted small" id="diag-expand-subtitle"></p>
+        </div>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-diag-expand" aria-label="Close">Close</button>
+      </div>
+      <div id="diag-expand-status" class="diag-expand-status"></div>
+      <div id="diag-expand-chart" class="diag-expand-chart"></div>
+      <div id="diag-expand-details" class="diag-expand-details"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btn-close-diag-expand-footer">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="switch-progress-overlay" class="switch-progress-overlay hidden" role="status" aria-live="assertive" aria-busy="true">
     <div class="switch-progress-card">
       <img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-lg" width="56" height="56" aria-hidden="true">
