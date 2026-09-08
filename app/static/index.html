@@ -1722,9 +1722,26 @@
               <input type="text" id="med-dose-unit-other" maxlength="24" placeholder="e.g. softgels" autocomplete="off">
             </label>
           </div>
-          <label for="med-frequency">Frequency
-            <input type="text" id="med-frequency" maxlength="80" placeholder="e.g. once daily" autocomplete="off">
-          </label>
+          <div class="med-frequency-fields med-span-2">
+            <label for="med-frequency">Frequency
+              <select id="med-frequency">
+                <option value="">—</option>
+                <option value="daily">Daily</option>
+                <option value="twice daily">Twice daily</option>
+                <option value="three times daily">Three times daily</option>
+                <option value="every other day">Every other day</option>
+                <option value="every 3 days">Every 3 days</option>
+                <option value="weekly">Weekly</option>
+                <option value="every 2 weeks">Every 2 weeks</option>
+                <option value="monthly">Monthly</option>
+                <option value="as needed">As needed</option>
+                <option value="other">Other…</option>
+              </select>
+            </label>
+            <label for="med-frequency-other" id="med-frequency-other-wrap" class="hidden">Custom frequency
+              <input type="text" id="med-frequency-other" maxlength="80" placeholder="e.g. every Monday and Thursday" autocomplete="off">
+            </label>
+          </div>
           <label for="med-started">Started
             <input type="date" id="med-started">
           </label>

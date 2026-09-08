@@ -9375,6 +9375,138 @@ function formatMedicationIdentityBadge(m) {
 
 const MED_DOSE_UNITS = ["mg", "mcg", "µg", "g", "mL", "IU", "units", "%", "mg/mL", "mcg/mL"];
 
+/** Canonical frequency values stored on medications (select option values). */
+const MED_FREQUENCIES = [
+  "daily",
+  "twice daily",
+  "three times daily",
+  "every other day",
+  "every 3 days",
+  "weekly",
+  "every 2 weeks",
+  "monthly",
+  "as needed",
+];
+
+const MED_FREQUENCY_ALIASES = {
+  daily: "daily",
+  "once daily": "daily",
+  "once a day": "daily",
+  "every day": "daily",
+  "each day": "daily",
+  qd: "daily",
+  "q.d": "daily",
+  "q.d.": "daily",
+  "twice daily": "twice daily",
+  "twice a day": "twice daily",
+  bid: "twice daily",
+  "b.i.d": "twice daily",
+  "b.i.d.": "twice daily",
+  "three times daily": "three times daily",
+  "three times a day": "three times daily",
+  tid: "three times daily",
+  "t.i.d": "three times daily",
+  "t.i.d.": "three times daily",
+  "every other day": "every other day",
+  "every 2 days": "every other day",
+  "every two days": "every other day",
+  "alternate days": "every other day",
+  qod: "every other day",
+  "q.o.d": "every other day",
+  "q.o.d.": "every other day",
+  "every 3 days": "every 3 days",
+  "every three days": "every 3 days",
+  weekly: "weekly",
+  "once a week": "weekly",
+  "once weekly": "weekly",
+  "every week": "weekly",
+  "every 2 weeks": "every 2 weeks",
+  "every two weeks": "every 2 weeks",
+  biweekly: "every 2 weeks",
+  "bi-weekly": "every 2 weeks",
+  fortnightly: "every 2 weeks",
+  monthly: "monthly",
+  "once a month": "monthly",
+  "once monthly": "monthly",
+  "every month": "monthly",
+  "as needed": "as needed",
+  "as required": "as needed",
+  prn: "as needed",
+  "p.r.n": "as needed",
+  "p.r.n.": "as needed",
+};
+
+function normalizeMedicationFrequency(raw) {
+  const f = String(raw || "").trim();
+  if (!f) return "";
+  const key = f.toLowerCase().replace(/\s+/g, " ");
+  if (MED_FREQUENCY_ALIASES[key]) return MED_FREQUENCY_ALIASES[key];
+  if (MED_FREQUENCIES.includes(key)) return key;
+  return f;
+}
+
+function syncMedFrequencyOtherVisibility() {
+  const sel = document.getElementById("med-frequency")?.value;
+  const wrap = document.getElementById("med-frequency-other-wrap");
+  wrap?.classList.toggle("hidden", sel !== "other");
+}
+
+function composeFrequencyFromForm() {
+  const sel = document.getElementById("med-frequency")?.value || "";
+  const other = document.getElementById("med-frequency-other")?.value.trim() || "";
+  if (sel === "other") return other || null;
+  return sel || null;
+}
+
+function setMedicationFrequencyFields(frequency) {
+  const selEl = document.getElementById("med-frequency");
+  const otherEl = document.getElementById("med-frequency-other");
+  if (!selEl) return;
+  const raw = String(frequency || "").trim();
+  if (!raw) {
+    selEl.value = "";
+    if (otherEl) otherEl.value = "";
+    syncMedFrequencyOtherVisibility();
+    return;
+  }
+  const canonical = normalizeMedicationFrequency(raw);
+  if (MED_FREQUENCIES.includes(canonical)) {
+    selEl.value = canonical;
+    if (otherEl) otherEl.value = "";
+  } else {
+    selEl.value = "other";
+    if (otherEl) otherEl.value = raw;
+  }
+  syncMedFrequencyOtherVisibility();
+}
+
+const MED_FREQUENCY_LABELS = {
+  daily: "Daily",
+  "twice daily": "Twice daily",
+  "three times daily": "Three times daily",
+  "every other day": "Every other day",
+  "every 3 days": "Every 3 days",
+  weekly: "Weekly",
+  "every 2 weeks": "Every 2 weeks",
+  monthly: "Monthly",
+  "as needed": "As needed",
+};
+
+function medFrequencySelectHtml(selected) {
+  const canonical = normalizeMedicationFrequency(selected);
+  const known = MED_FREQUENCIES.includes(canonical);
+  const cur = known ? canonical : selected ? "other" : "";
+  const opts = [
+    `<option value="">—</option>`,
+    ...MED_FREQUENCIES.map((v) => {
+      const label = MED_FREQUENCY_LABELS[v] || v;
+      return `<option value="${escapeHtml(v)}" ${cur === v ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }),
+    `<option value="other" ${cur === "other" ? "selected" : ""}>Other…</option>`,
+  ];
+  return opts.join("");
+}
+
 function parseDosageParts(raw) {
   const text = String(raw || "").trim();
   if (!text) return { amount: "", unit: "", other: "" };
@@ -9725,13 +9857,14 @@ function renderFoodDrinksSettings(profile) {
 function clearMedicationForm() {
   const idEl = document.getElementById("med-edit-id");
   if (idEl) idEl.value = "";
-  ["med-official-name", "med-name", "med-dose-amount", "med-dose-unit-other", "med-frequency", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
+  ["med-official-name", "med-name", "med-dose-amount", "med-dose-unit-other", "med-frequency-other", "med-conditions", "med-notes", "med-history-note"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
   const unitEl = document.getElementById("med-dose-unit");
   if (unitEl) unitEl.value = "";
   syncMedDoseUnitOtherVisibility();
+  setMedicationFrequencyFields("");
   updateMedIdentityHint(null);
   const started = document.getElementById("med-started");
   if (started) started.value = "";
@@ -9755,7 +9888,7 @@ function fillMedicationForm(m) {
   document.getElementById("med-official-name").value = official || preferred;
   document.getElementById("med-name").value = preferred;
   setMedicationDosageFields(m.dosage || "");
-  document.getElementById("med-frequency").value = m.frequency || "";
+  setMedicationFrequencyFields(m.frequency || "");
   const catEl = document.getElementById("med-category");
   if (catEl) catEl.value = m.category || "prescription";
   document.getElementById("med-conditions").value = (m.conditions || []).join(", ");
@@ -10045,6 +10178,8 @@ function renderMedImportReview(data) {
   list.innerHTML = proposed
     .map((m, i) => {
       const conditions = Array.isArray(m.conditions) ? m.conditions.join(", ") : m.conditions || "";
+      const freqCanon = normalizeMedicationFrequency(m.frequency || "");
+      const freqIsCustom = Boolean(m.frequency) && !MED_FREQUENCIES.includes(freqCanon);
       return `<div class="med-import-row" data-idx="${i}">
         <label class="med-import-check">
           <input type="checkbox" class="med-import-select" checked aria-label="Include ${escapeHtml(m.name || "medication")}">
@@ -10052,7 +10187,12 @@ function renderMedImportReview(data) {
         <div class="med-import-row-fields">
           <label>Name<input type="text" class="med-import-name" maxlength="120" value="${escapeHtml(m.name || "")}"></label>
           <label>Dosage<input type="text" class="med-import-dosage" maxlength="80" value="${escapeHtml(m.dosage || "")}"></label>
-          <label>Frequency<input type="text" class="med-import-frequency" maxlength="80" value="${escapeHtml(m.frequency || "")}"></label>
+          <label>Frequency
+            <select class="med-import-frequency">${medFrequencySelectHtml(m.frequency || "")}</select>
+          </label>
+          <label class="med-import-frequency-other-wrap${freqIsCustom ? "" : " hidden"}">Custom
+            <input type="text" class="med-import-frequency-other" maxlength="80" value="${escapeHtml(freqIsCustom ? m.frequency || "" : "")}">
+          </label>
           <label>Started<input type="date" class="med-import-started" value="${escapeHtml(m.started_at ? String(m.started_at).slice(0, 10) : "")}"></label>
           <label>Ended<input type="date" class="med-import-ended" value="${escapeHtml(m.ended_at ? String(m.ended_at).slice(0, 10) : "")}"></label>
           <label class="med-import-span-2">Conditions<input type="text" class="med-import-conditions" maxlength="240" value="${escapeHtml(conditions)}"></label>
@@ -10073,10 +10213,13 @@ function collectMedImportSelected() {
     if (!checked) return;
     const name = row.querySelector(".med-import-name")?.value.trim();
     if (!name) return;
+    const freqSel = row.querySelector(".med-import-frequency")?.value || "";
+    const freqOther = row.querySelector(".med-import-frequency-other")?.value.trim() || "";
+    const frequency = freqSel === "other" ? freqOther || null : freqSel || null;
     out.push({
       name,
       dosage: row.querySelector(".med-import-dosage")?.value.trim() || null,
-      frequency: row.querySelector(".med-import-frequency")?.value.trim() || null,
+      frequency,
       conditions: parseConditionsInput(row.querySelector(".med-import-conditions")?.value),
       notes: row.querySelector(".med-import-notes")?.value.trim() || null,
       started_at: row.querySelector(".med-import-started")?.value || null,
@@ -13661,7 +13804,7 @@ document.getElementById("btn-save-medication")?.addEventListener("click", async 
     name: preferred || official,
     official_name: official || null,
     dosage: composeDosageFromForm(),
-    frequency: document.getElementById("med-frequency")?.value.trim() || null,
+    frequency: composeFrequencyFromForm(),
     category: document.getElementById("med-category")?.value || "prescription",
     conditions: parseConditionsInput(document.getElementById("med-conditions")?.value),
     notes: document.getElementById("med-notes")?.value.trim() || null,
@@ -13788,7 +13931,19 @@ document.getElementById("patient-medications-list")?.addEventListener("change", 
 });
 
 document.getElementById("med-category")?.addEventListener("change", () => syncMedShowOnLogDefault());
-document.getElementById("med-frequency")?.addEventListener("input", () => syncMedShowOnLogDefault());
+document.getElementById("med-frequency")?.addEventListener("change", () => {
+  syncMedFrequencyOtherVisibility();
+  syncMedShowOnLogDefault();
+});
+document.getElementById("med-frequency-other")?.addEventListener("input", () => syncMedShowOnLogDefault());
+
+document.getElementById("med-import-review-list")?.addEventListener("change", (event) => {
+  const sel = event.target.closest(".med-import-frequency");
+  if (!sel) return;
+  const row = sel.closest(".med-import-row");
+  const wrap = row?.querySelector(".med-import-frequency-other-wrap");
+  wrap?.classList.toggle("hidden", sel.value !== "other");
+});
 
 document.getElementById("btn-save-food-drink")?.addEventListener("click", async () => {
   if (!state.activePatientId) return toast("Select a patient first", "error");
