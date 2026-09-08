@@ -528,7 +528,8 @@ def _format_diag_date_label(iso: str | None, *, compact: bool = False) -> str:
     if not dt:
         return raw or "-"
     if compact:
-        return f"{dt.strftime('%b')} '{str(dt.year)[2:]}"
+        # Keep day so nearby same-month points stay distinguishable (Jun 10 vs Jun 27)
+        return f"{dt.strftime('%b')} {dt.day} '{str(dt.year)[2:]}"
     return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
 
 
@@ -1043,37 +1044,39 @@ def _sparkline_png_bytes(
         candidates.append((i, x, date_label, left, right, anchor))
 
     kept: list[tuple[int, float, str, float, float, str, int]] = []
-    # Always keep first and last; pack middles without overlap; stagger to second row if needed
+
+    def _row_for(left: float, right: float) -> int | None:
+        for row in (0, 1):
+            collide = False
+            for _ki, _kx, _kl, kleft, kright, _ka, krow in kept:
+                if krow != row:
+                    continue
+                if left < kright + 10 and right > kleft - 10:
+                    collide = True
+                    break
+            if not collide:
+                return row
+        return None
+
+    # First pass: middles that fit; then force first/last (stagger if needed)
     for cand in candidates:
         i, x, date_label, left, right, anchor = cand
         if i in (0, n_pts - 1):
-            kept.append((*cand, 0))
             continue
-        collide = False
-        for _ki, kx, _kl, kleft, kright, _ka, krow in kept:
-            if left < kright + 8 and right > kleft - 8 and krow == 0:
-                collide = True
-                break
-        if not collide:
-            kept.append((*cand, 0))
-            continue
-        # Try second row
-        collide2 = False
-        for _ki, kx, _kl, kleft, kright, _ka, krow in kept:
-            if krow != 1:
-                continue
-            if left < kright + 8 and right > kleft - 8:
-                collide2 = True
-                break
-        if not collide2:
-            kept.append((*cand, 1))
+        row = _row_for(left, right)
+        if row is not None:
+            kept.append((*cand, row))
 
-    # Ensure first/last still present after packing
-    kept_ids = {k[0] for k in kept}
     for cand in candidates:
-        if cand[0] in (0, n_pts - 1) and cand[0] not in kept_ids:
-            kept.append((*cand, 0))
-    kept.sort(key=lambda t: t[0])
+        i, x, date_label, left, right, anchor = cand
+        if i not in (0, n_pts - 1):
+            continue
+        row = _row_for(left, right)
+        if row is None:
+            # Nudge last/first onto free row even if slightly tight
+            row = 1 if any(k[6] == 0 for k in kept) else 0
+        kept.append((*cand, row))
+    kept.sort(key=lambda t: (t[6], t[0]))
 
     for i, x, date_label, _left, _right, anchor, row in kept:
         axis_y = axis_y_top if row == 0 else axis_y_bot
