@@ -431,7 +431,7 @@ function renderBackgroundStatusBar() {
           : `<button type="button" class="btn ghost bg-status-cancel" data-cancel-task="${escapeHtml(task.id)}">Cancel</button>`;
       return `
         <div class="bg-status-item" data-task-id="${escapeHtml(task.id)}">
-          <span class="bg-status-spinner" aria-hidden="true"></span>
+          <span class="bg-status-spinner" aria-hidden="true"><img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm" width="16" height="16"></span>
           <div class="bg-status-body">
             <span class="bg-status-label">${escapeHtml(task.label)}</span>
             <span class="bg-status-meta muted">Started ${escapeHtml(started)} · ${escapeHtml(elapsed)}</span>
@@ -7562,7 +7562,13 @@ function clearImagingSelection() {
 function setImagingUploadProgress(message, visible) {
   const el = $("#imaging-upload-progress");
   if (!el) return;
-  el.textContent = message;
+  if (visible && message) {
+    el.classList.add("duck-loading");
+    el.innerHTML = `<img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm" width="16" height="16" aria-hidden="true"><span>${escapeHtml(message)}</span>`;
+  } else {
+    el.textContent = "";
+    el.classList.remove("duck-loading");
+  }
   el.classList.toggle("hidden", !visible);
 }
 
@@ -8476,14 +8482,18 @@ function setSwitchBusyState(btn, message) {
   if (btn) {
     btn.classList.add("switching");
     if (!btn.querySelector(".switch-case-btn-spinner")) {
-      const spin = document.createElement("span");
-      spin.className = "switch-case-btn-spinner";
+      const spin = document.createElement("img");
+      spin.src = "/static/favicon.svg";
+      spin.alt = "";
+      spin.width = 16;
+      spin.height = 16;
+      spin.className = "duck-spinner duck-spinner-sm switch-case-btn-spinner";
       spin.setAttribute("aria-hidden", "true");
       btn.appendChild(spin);
     }
   }
   if (status) {
-    status.innerHTML = `<span class="switch-case-btn-spinner" aria-hidden="true"></span><span>${escapeHtml(message || "Switching…")}</span>`;
+    status.innerHTML = `<img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm switch-case-btn-spinner" width="16" height="16" aria-hidden="true"><span>${escapeHtml(message || "Switching…")}</span>`;
     status.classList.remove("hidden");
   }
   if (closeBtn) closeBtn.disabled = true;
@@ -11483,11 +11493,64 @@ function statusColor(status) {
   return "#334155";
 }
 
+function statusSeverity(status) {
+  if (status === "red") return 3;
+  if (status === "yellow") return 2;
+  if (status === "green") return 1;
+  return 0;
+}
+
+function worseStatus(a, b) {
+  return statusSeverity(a) >= statusSeverity(b) ? a || b : b || a;
+}
+
 function statusLabel(status) {
   if (status === "green") return "On target";
   if (status === "yellow") return "Near target (±10%)";
   if (status === "red") return "Off target";
   return "";
+}
+
+/** Screen Y span for the green target zone (SVG y increases downward). */
+function referenceTargetBandYs(reference, yFor, plotTop, plotBottom) {
+  if (!reference) return null;
+  const low =
+    reference.low != null && Number.isFinite(Number(reference.low))
+      ? Number(reference.low)
+      : null;
+  const high =
+    reference.high != null && Number.isFinite(Number(reference.high))
+      ? Number(reference.high)
+      : null;
+  const direction = reference.direction || "range";
+  let y1 = null;
+  let y2 = null;
+  if (direction === "lower_better" && high != null) {
+    // On-target is at/below high → lower half of the plot
+    y1 = yFor(high);
+    y2 = plotBottom;
+  } else if (direction === "higher_better" && low != null) {
+    // On-target is at/above low → upper half of the plot
+    y1 = plotTop;
+    y2 = yFor(low);
+  } else if (low != null && high != null) {
+    y1 = yFor(high);
+    y2 = yFor(low);
+  } else if (high != null) {
+    y1 = yFor(high);
+    y2 = plotBottom;
+  } else if (low != null) {
+    y1 = plotTop;
+    y2 = yFor(low);
+  } else {
+    return null;
+  }
+  const top = Math.min(y1, y2);
+  const bot = Math.max(y1, y2);
+  const clippedTop = Math.max(plotTop, Math.min(plotBottom, top));
+  const clippedBot = Math.max(plotTop, Math.min(plotBottom, bot));
+  if (clippedBot - clippedTop < 1.5) return null;
+  return { top: clippedTop, bottom: clippedBot, low, high };
 }
 
 const DIAG_STATUS_FILTERS = [
@@ -11717,6 +11780,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   const refLow = reference && Number.isFinite(Number(reference.low)) ? Number(reference.low) : null;
   const refHigh = reference && Number.isFinite(Number(reference.high)) ? Number(reference.high) : null;
   const hasRef = refLow != null || refHigh != null;
+  const direction = (reference && reference.direction) || "range";
   const latestStatus = points[points.length - 1]?.status;
   const lineStroke = latestStatus ? statusColor(latestStatus) : stroke;
 
@@ -11740,11 +11804,20 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
   const padBottom = 28;
   const w = 360;
   const h = 150;
+  const plotTop = padTop;
+  const plotBottom = h - padBottom;
   const values = points.map((p) => p.value);
   let min = Math.min(...values);
   let max = Math.max(...values);
   if (refLow != null) min = Math.min(min, refLow);
   if (refHigh != null) max = Math.max(max, refHigh);
+  // Give one-sided targets a visible green band
+  if (direction === "lower_better" && refHigh != null) {
+    min = Math.min(min, refHigh - Math.max(Math.abs(refHigh) * 0.25, 0.2));
+  }
+  if (direction === "higher_better" && refLow != null) {
+    max = Math.max(max, refLow + Math.max(Math.abs(refLow) * 0.25, 0.2));
+  }
   const pad = (max - min) * 0.08 || Math.abs(max) * 0.05 || 0.2;
   min -= pad;
   max += pad;
@@ -11833,22 +11906,31 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
 
   let refLayer = "";
   if (hasRef) {
-    const bandTop = yFor(refHigh != null ? refHigh : max);
-    const bandBottom = yFor(refLow != null ? refLow : min);
-    const y1 = Math.min(bandTop, bandBottom);
-    const y2 = Math.max(bandTop, bandBottom);
-    refLayer = `<rect x="${padX}" y="${y1.toFixed(1)}" width="${(w - padX * 2).toFixed(1)}" height="${Math.max(2, y2 - y1).toFixed(1)}" fill="${lineStroke}" opacity="0.10"></rect>`;
+    const band = referenceTargetBandYs(reference, yFor, plotTop, plotBottom);
+    if (band) {
+      refLayer = `<rect x="${padX}" y="${band.top.toFixed(1)}" width="${(w - padX * 2).toFixed(1)}" height="${Math.max(2, band.bottom - band.top).toFixed(1)}" fill="#15803d" opacity="0.12"></rect>`;
+    }
     if (refHigh != null) {
       const y = yFor(refHigh);
-      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="${lineStroke}" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.55"></line>`;
+      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="#15803d" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.65"></line>`;
     }
     if (refLow != null) {
       const y = yFor(refLow);
-      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="${lineStroke}" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.55"></line>`;
+      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="#15803d" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.65"></line>`;
     }
   }
 
-  const poly = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
+  // Color each segment by the worse of its endpoint statuses so the line tracks readings
+  const segments = coords
+    .slice(0, -1)
+    .map((a, i) => {
+      const b = coords[i + 1];
+      const segStatus = worseStatus(a.status, b.status);
+      const color = statusColor(segStatus) || lineStroke;
+      return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${color}" stroke-width="2.8" stroke-linecap="round" />`;
+    })
+    .join("");
+
   const dots = coords
     .map((c) => {
       const label = formatDiagValue(c.value);
@@ -11874,12 +11956,12 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     })
     .join("");
 
-  // Draw order: ref band → milestones (behind) → series → value/date labels (on top)
+  // Draw order: ref band → milestones (behind) → colored segments → dots/labels
   return `<div class="diag-chart-plot">
     <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
       ${refLayer}
       ${milestoneLayer}
-      <polyline fill="none" stroke="${lineStroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
+      ${segments}
       ${dots}
       ${dateLabels}
     </svg>

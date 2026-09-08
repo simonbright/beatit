@@ -586,6 +586,23 @@ def _status_rgb(status: str | None, fallback: tuple[int, int, int] = (14, 116, 1
     return _STATUS_RGB.get(str(status).lower(), fallback)
 
 
+def _status_severity(status: str | None) -> int:
+    key = str(status or "").lower()
+    if key == "red":
+        return 3
+    if key == "yellow":
+        return 2
+    if key == "green":
+        return 1
+    return 0
+
+
+def _worse_status(a: str | None, b: str | None) -> str | None:
+    if _status_severity(a) >= _status_severity(b):
+        return a or b
+    return b or a
+
+
 _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 
@@ -699,6 +716,7 @@ def _sparkline_png_bytes(
 
     ref_low = None
     ref_high = None
+    direction = "range"
     if reference:
         try:
             if reference.get("low") is not None:
@@ -710,6 +728,7 @@ def _sparkline_png_bytes(
                 ref_high = float(reference["high"])
         except (TypeError, ValueError):
             ref_high = None
+        direction = str(reference.get("direction") or "range").lower()
 
     values = [p[1] for p in points]
     vmin, vmax = min(values), max(values)
@@ -717,6 +736,11 @@ def _sparkline_png_bytes(
         vmin = min(vmin, ref_low)
     if ref_high is not None:
         vmax = max(vmax, ref_high)
+    # Expand axis so one-sided targets get a visible green zone (not just a bound line)
+    if direction == "lower_better" and ref_high is not None:
+        vmin = min(vmin, ref_high - max(abs(ref_high) * 0.25, 0.2))
+    if direction == "higher_better" and ref_low is not None:
+        vmax = max(vmax, ref_low + max(abs(ref_low) * 0.25, 0.2))
     # Fit the chart to the data (+ reference bounds) with modest padding so the
     # trend fills the plot — never force a 0 baseline that collapses the line.
     y_pad = (vmax - vmin) * 0.18 or max(abs(vmax) * 0.08, 0.15)
@@ -818,13 +842,32 @@ def _sparkline_png_bytes(
             yy += dash * 2
         # No axis date for milestones — colored dashes + page legend are enough.
 
+    plot_top = float(pad_t)
+    plot_bottom = float(pad_t + chart_h)
     if ref_low is not None or ref_high is not None:
-        if ref_low is not None and ref_high is not None:
-            top = y_for(ref_high)
-            bottom = y_for(ref_low)
-            y1, y2 = min(top, bottom), max(top, bottom)
-            band = tuple(min(255, int(c * 0.18 + 230)) for c in (21, 128, 61))
-            draw.rectangle((pad_l + 2, y1, pad_l + chart_w - 2, y2), fill=band)
+        band_y1: float | None = None
+        band_y2: float | None = None
+        if direction == "lower_better" and ref_high is not None:
+            band_y1 = y_for(ref_high)
+            band_y2 = plot_bottom
+        elif direction == "higher_better" and ref_low is not None:
+            band_y1 = plot_top
+            band_y2 = y_for(ref_low)
+        elif ref_low is not None and ref_high is not None:
+            band_y1 = y_for(ref_high)
+            band_y2 = y_for(ref_low)
+        elif ref_high is not None:
+            band_y1 = y_for(ref_high)
+            band_y2 = plot_bottom
+        elif ref_low is not None:
+            band_y1 = plot_top
+            band_y2 = y_for(ref_low)
+        if band_y1 is not None and band_y2 is not None:
+            y1 = max(plot_top, min(plot_bottom, min(band_y1, band_y2)))
+            y2 = max(plot_top, min(plot_bottom, max(band_y1, band_y2)))
+            if y2 - y1 >= 2:
+                band = tuple(min(255, int(c * 0.18 + 230)) for c in (21, 128, 61))
+                draw.rectangle((pad_l + 2, y1, pad_l + chart_w - 2, y2), fill=band)
         if ref_high is not None:
             y = y_for(ref_high)
             draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=2)
@@ -847,15 +890,20 @@ def _sparkline_png_bytes(
             )
 
     n = len(points)
-    coords: list[tuple[float, float]] = []
-    for i, (date, value, _status) in enumerate(points):
+    coords: list[tuple[float, float, str | None]] = []
+    for date, value, status in points:
         x = x_for_day(_day(date))
         y = y_for(value)
-        coords.append((x, y))
-    draw.line(coords, fill=line_stroke, width=5)
+        coords.append((x, y, status))
+    # Segment color tracks readings (worse of the two endpoint statuses)
+    for i in range(len(coords) - 1):
+        x0, y0, s0 = coords[i]
+        x1, y1, s1 = coords[i + 1]
+        seg_color = _status_rgb(_worse_status(s0, s1), line_stroke)
+        draw.line((x0, y0, x1, y1), fill=seg_color, width=5)
 
     label_every = 1 if n <= 5 else 2
-    for i, ((x, y), (_date, value, status)) in enumerate(zip(coords, points)):
+    for i, ((x, y, _st), (_date, value, status)) in enumerate(zip(coords, points)):
         color = _status_rgb(status, line_stroke)
         r = 8
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color, outline=(255, 255, 255), width=2)
@@ -882,7 +930,7 @@ def _sparkline_png_bytes(
     prev_right = -1e9
     n_pts = len(coords)
     use_compact = n_pts > 4
-    for i, ((x, _y), (date, _value, _status)) in enumerate(zip(coords, points)):
+    for i, ((x, _y, _st), (date, _value, _status)) in enumerate(zip(coords, points)):
         date_label = _safe_text(
             _format_diag_date_label(date, compact=use_compact)
             if use_compact
@@ -1040,8 +1088,8 @@ def _write_diagnostics_charts(
         pdf,
         _safe_text(
             "Blood-test trends use collection / date of service. "
-            "Shaded band shows age- and gender-aware reference targets. "
-            "Green = on target; yellow = within 10% beyond bound; red = farther. "
+            "Green shaded zone = on-target range (or the safe side of a one-sided bound). "
+            "Trend line segments follow reading status: green / yellow / red. "
             "Dashed vertical markers show medication starts, dose changes, and stops."
         ),
         h=4,
@@ -1318,9 +1366,9 @@ def build_diagnostics_pdf(
 
     pdf.set_font("Helvetica", "", 8)
     legend = (
-        "Green / yellow / red = target status. Gray = no reference band yet. "
-        "Dashed markers = medication or lifestyle milestones (not lab results). "
-        "Each trend lists exact collection dates (YYYY-MM-DD) under the chart. "
+        "Green shaded zone = target. Line segments follow each reading (green / yellow / red). "
+        "Gray = no reference yet. Dashed markers = med or lifestyle milestones. "
+        "Exact collection dates (YYYY-MM-DD) are listed under each trend. "
         "Trend charts first; single readings in the compact table below."
     )
     if milestones:

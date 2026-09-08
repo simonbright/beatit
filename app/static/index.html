@@ -420,7 +420,7 @@
 
   <div id="switch-progress-overlay" class="switch-progress-overlay hidden" role="status" aria-live="assertive" aria-busy="true">
     <div class="switch-progress-card">
-      <div class="switch-progress-spinner" aria-hidden="true"></div>
+      <img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-lg" width="56" height="56" aria-hidden="true">
       <p class="switch-progress-title" id="switch-progress-title">Switching…</p>
       <p class="switch-progress-hint muted small">Loading patient workspace</p>
     </div>
@@ -578,7 +578,7 @@
         </div>
         <div id="home-assessment-loading" class="card home-pane-empty home-assessment-loading" role="status" aria-live="polite">
           <div class="home-assessment-loading-inner">
-            <span class="home-assessment-spinner" aria-hidden="true"></span>
+            <img src="/static/favicon.svg" alt="" class="duck-spinner" width="36" height="36" aria-hidden="true">
             <div>
               <h3>Loading assessment…</h3>
               <p class="muted">Fetching the latest summary for this case.</p>
@@ -627,7 +627,7 @@
           <div class="row-between wrap">
             <div>
               <h3>Key diagnostics</h3>
-              <p class="muted small">Blood-test trends with collection dates. Green / yellow / red = target status. Gray values have no reference band yet. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones.</p>
+              <p class="muted small">Blood-test trends with collection dates. Green shaded zone = on-target range (or the safe side of a one-sided bound). Trend line segments follow each reading (green / yellow / red). Gray values have no reference yet. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones.</p>
             </div>
             <div class="diagnostics-actions">
               <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with date and time stamp">Export PDF</button>
@@ -760,7 +760,10 @@
                 <textarea id="open-item-guidance" rows="4" placeholder="e.g. Focus on CT and pathology only. What staging data is still missing?"></textarea>
               </label>
               <button type="button" class="btn primary" id="btn-investigate-item">Run investigation</button>
-              <div id="open-item-loading" class="loading hidden">Running focused investigation…</div>
+              <div id="open-item-loading" class="loading duck-loading hidden">
+                <img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm" width="16" height="16" aria-hidden="true">
+                <span>Running focused investigation…</span>
+              </div>
             </div>
 
             <div id="open-item-draft-review" class="open-item-draft-review hidden">
@@ -855,7 +858,10 @@
             <div id="analyze-running-banner" class="analysis-running-banner hidden" role="status" aria-live="polite">
               Analysis in progress — results will appear above when finished.
             </div>
-            <div id="analyze-loading" class="loading hidden">Running analysis in the background… this may take several minutes.</div>
+            <div id="analyze-loading" class="loading duck-loading hidden">
+              <img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm" width="16" height="16" aria-hidden="true">
+              <span>Running analysis in the background… this may take several minutes.</span>
+            </div>
           </div>
 
           <details class="analysis-more-options">

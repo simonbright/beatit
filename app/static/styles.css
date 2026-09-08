@@ -5063,15 +5063,44 @@ textarea { resize: vertical; min-height: 100px; }
   gap: 0.85rem;
 }
 
-.home-assessment-spinner {
-  width: 1.35rem;
-  height: 1.35rem;
-  margin-top: 0.2rem;
-  border: 2.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
-  border-radius: 50%;
+.duck-spinner {
+  display: inline-block;
+  width: 2rem;
+  height: 2rem;
   flex-shrink: 0;
-  animation: switch-spin 0.75s linear infinite;
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: duck-spinner-spin 0.85s linear infinite;
+  transform-origin: 50% 55%;
+}
+
+.duck-spinner-sm {
+  width: 1rem;
+  height: 1rem;
+}
+
+.duck-spinner-lg {
+  width: 3.5rem;
+  height: 3.5rem;
+  margin-bottom: 0.15rem;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+@keyframes duck-spinner-spin {
+  to { transform: rotate(360deg); }
+}
+
+.duck-loading,
+.loading.duck-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duck-spinner {
+    animation: none;
+  }
 }
 
 .home-assessment-loading h3 {
@@ -5115,16 +5144,11 @@ textarea { resize: vertical; min-height: 100px; }
 
 .bg-status-spinner {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(14, 165, 233, 0.25);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: bg-status-spin 0.75s linear infinite;
-}
-
-@keyframes bg-status-spin {
-  to { transform: rotate(360deg); }
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
 }
 
 .bg-status-body {
@@ -7282,13 +7306,7 @@ textarea { resize: vertical; min-height: 100px; }
   overflow-wrap: anywhere;
 }
 .switch-case-btn-spinner {
-  width: 1rem;
-  height: 1rem;
-  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-top-color: var(--accent);
-  border-radius: 50%;
   flex-shrink: 0;
-  animation: switch-spin 0.7s linear infinite;
 }
 .switch-case-status {
   margin: 0.65rem 0 0;
@@ -7324,14 +7342,6 @@ textarea { resize: vertical; min-height: 100px; }
   box-shadow: var(--shadow);
   min-width: min(16rem, calc(100vw - 2rem));
   text-align: center;
-}
-.switch-progress-spinner {
-  width: 1.75rem;
-  height: 1.75rem;
-  border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: switch-spin 0.75s linear infinite;
 }
 .switch-progress-title {
   margin: 0;
