@@ -1,3 +1,4 @@
+import math
 import re
 from datetime import datetime, timezone
 from io import BytesIO
@@ -573,6 +574,59 @@ def _format_diag_value_label(value: Any) -> str:
     return text or "0"
 
 
+def _pick_y_axis_ticks(
+    vmin: float,
+    vmax: float,
+    ref_low: float | None = None,
+    ref_high: float | None = None,
+) -> list[tuple[float, str]]:
+    """Return (value, kind) ticks for the chart Y axis; kind is 'axis' or 'ref'."""
+    span = max(vmax - vmin, abs(vmax) * 1e-6, 1e-6)
+    rough = span / 3.0
+    mag = 10 ** math.floor(math.log10(rough)) if rough > 0 else 1.0
+    norm = rough / mag
+    if norm > 7:
+        step = 10 * mag
+    elif norm > 3:
+        step = 5 * mag
+    elif norm > 1.5:
+        step = 2 * mag
+    else:
+        step = mag
+    start = math.ceil((vmin - step * 1e-9) / step) * step
+    ticks: list[tuple[float, str]] = []
+
+    def add(value: float | None, kind: str) -> None:
+        if value is None:
+            return
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return
+        if n != n or n < vmin - span * 0.02 or n > vmax + span * 0.02:
+            return
+        for i, (existing, ekind) in enumerate(ticks):
+            if abs(existing - n) < span * 0.06:
+                if kind == "ref" and ekind != "ref":
+                    ticks[i] = (existing if ekind == "ref" else n, "ref")
+                return
+        ticks.append((n, kind))
+
+    v = start
+    guard = 0
+    while v <= vmax + step * 1e-9 and guard < 24:
+        add(v, "axis")
+        v += step
+        guard += 1
+    add(ref_low, "ref")
+    add(ref_high, "ref")
+    if not ticks:
+        add(vmin, "axis")
+        add(vmax, "axis")
+    ticks.sort(key=lambda t: t[0])
+    return ticks
+
+
 _STATUS_RGB = {
     "green": (21, 128, 61),
     "yellow": (202, 138, 4),
@@ -705,8 +759,8 @@ def _sparkline_png_bytes(
     img = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    # Reduce bottom padding now that we don't draw a second milestone date row
-    pad_l, pad_r, pad_t, pad_b = 48, 72, 20, 48
+    # Room on the left for Y-axis value labels
+    pad_l, pad_r, pad_t, pad_b = 78, 56, 20, 48
     if title:
         draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42), font=font_title, anchor="lt")
         pad_t = 44
@@ -868,26 +922,30 @@ def _sparkline_png_bytes(
             if y2 - y1 >= 2:
                 band = tuple(min(255, int(c * 0.18 + 230)) for c in (21, 128, 61))
                 draw.rectangle((pad_l + 2, y1, pad_l + chart_w - 2, y2), fill=band)
-        if ref_high is not None:
-            y = y_for(ref_high)
-            draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=2)
-            draw.text(
-                (pad_l + chart_w - 8, y - 4),
-                _safe_text(_format_diag_value_label(ref_high)),
-                fill=(21, 128, 61),
-                font=font_small,
-                anchor="rb",
-            )
-        if ref_low is not None:
-            y = y_for(ref_low)
-            draw.line((pad_l, y, pad_l + chart_w, y), fill=(21, 128, 61), width=2)
-            draw.text(
-                (pad_l + chart_w - 8, y + 4),
-                _safe_text(_format_diag_value_label(ref_low)),
-                fill=(21, 128, 61),
-                font=font_small,
-                anchor="rt",
-            )
+
+    # Y-axis scale (+ reference bounds in green) so readings can be judged against the band
+    y_ticks = _pick_y_axis_ticks(vmin, vmax, ref_low, ref_high)
+    for tick_val, tick_kind in y_ticks:
+        y = y_for(tick_val)
+        if y < plot_top - 2 or y > plot_bottom + 2:
+            continue
+        is_ref = tick_kind == "ref"
+        color = (21, 128, 61) if is_ref else (100, 116, 139)
+        if is_ref:
+            draw.line((pad_l, y, pad_l + chart_w, y), fill=color, width=2)
+        else:
+            dash = 8
+            xx = pad_l + 2
+            while xx < pad_l + chart_w - 2:
+                draw.line((xx, y, min(xx + dash, pad_l + chart_w - 2), y), fill=(203, 213, 225), width=1)
+                xx += dash * 2
+        draw.text(
+            (pad_l - 8, y),
+            _safe_text(_format_diag_value_label(tick_val)),
+            fill=color,
+            font=font_small,
+            anchor="rm",
+        )
 
     n = len(points)
     coords: list[tuple[float, float, str | None]] = []

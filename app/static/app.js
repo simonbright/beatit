@@ -11478,6 +11478,52 @@ function formatDiagValue(value) {
   return String(parseFloat(n.toFixed(2)));
 }
 
+/** Nice round Y-axis ticks within [vmin, vmax], plus reference bounds when present. */
+function pickDiagYTicks(vmin, vmax, refLow = null, refHigh = null) {
+  const lo = Number(vmin);
+  const hi = Number(vmax);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [];
+  const span = Math.max(hi - lo, Math.abs(hi) * 1e-6, 1e-6);
+  const rough = span / 3;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  let step = mag;
+  if (norm > 7) step = 10 * mag;
+  else if (norm > 3) step = 5 * mag;
+  else if (norm > 1.5) step = 2 * mag;
+  const start = Math.ceil((lo - step * 1e-9) / step) * step;
+  const ticks = [];
+  const seen = new Set();
+  const add = (value, kind) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < lo - span * 0.02 || n > hi + span * 0.02) return;
+    const key = n.toFixed(6);
+    if (seen.has(key)) {
+      const existing = ticks.find((t) => t.key === key);
+      if (existing && kind === "ref") existing.kind = "ref";
+      return;
+    }
+    // Drop axis ticks that sit almost on a reference bound
+    for (const t of ticks) {
+      if (Math.abs(t.value - n) < span * 0.06) {
+        if (kind === "ref") t.kind = "ref";
+        return;
+      }
+    }
+    seen.add(key);
+    ticks.push({ value: n, kind, key });
+  };
+  for (let v = start; v <= hi + step * 1e-9; v += step) add(v, "axis");
+  if (refLow != null) add(refLow, "ref");
+  if (refHigh != null) add(refHigh, "ref");
+  if (!ticks.length) {
+    add(lo, "axis");
+    add(hi, "axis");
+  }
+  ticks.sort((a, b) => a.value - b.value);
+  return ticks;
+}
+
 function formatReferenceMeta(ref) {
   if (!ref) return "";
   const bits = [ref.label].filter(Boolean);
@@ -11799,7 +11845,8 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     </div>`;
   }
 
-  const padX = 32;
+  const padL = 46;
+  const padR = 18;
   const padTop = 28;
   const padBottom = 28;
   const w = 360;
@@ -11856,7 +11903,7 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     tMax = Math.max(latest, readMax + minHead);
   }
   const tSpan = tMax - tMin || 1;
-  const xFor = (iso) => padX + ((toDay(iso) - tMin) / tSpan) * (w - padX * 2);
+  const xFor = (iso) => padL + ((toDay(iso) - tMin) / tSpan) * (w - padL - padR);
   const coords = points.map((p) => ({ ...p, x: xFor(p.date), y: yFor(p.value) }));
 
   let milestoneLayer = "";
@@ -11870,14 +11917,14 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     const minGap = 18;
     for (let i = 1; i < markers.length; i++) {
       if (markers[i].x - markers[i - 1].x < minGap) {
-        markers[i].x = Math.min(w - padX, markers[i - 1].x + minGap);
+        markers[i].x = Math.min(w - padR, markers[i - 1].x + minGap);
       }
     }
     milestoneLayer = markers
       .map((ev) => {
         let x = ev.x;
         if (!Number.isFinite(x)) return "";
-        x = Math.min(w - padX, Math.max(padX, x));
+        x = Math.min(w - padR, Math.max(padL, x));
         const color = ev.color || "#0f766e";
         const top = padTop - 2;
         const bot = h - padBottom;
@@ -11904,20 +11951,28 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     </div>`;
   }
 
+  const yTicks = pickDiagYTicks(min, max, refLow, refHigh);
+  const yAxisLayer = yTicks
+    .map((t) => {
+      const y = yFor(t.value);
+      if (y < plotTop - 2 || y > plotBottom + 2) return "";
+      const isRef = t.kind === "ref";
+      const color = isRef ? "#15803d" : "#64748b";
+      const label = formatDiagValue(t.value);
+      return `<g class="diag-y-tick">
+        <line x1="${padL}" y1="${y.toFixed(1)}" x2="${(w - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="${isRef ? 1.2 : 0.8}" stroke-dasharray="${isRef ? "4 3" : "2 4"}" opacity="${isRef ? 0.55 : 0.28}"></line>
+        <text x="${(padL - 5).toFixed(1)}" y="${(y + 3.2).toFixed(1)}" text-anchor="end" fill="${color}" font-size="10" font-weight="${isRef ? 700 : 500}" opacity="0.95">${escapeHtml(label)}</text>
+      </g>`;
+    })
+    .join("");
+
   let refLayer = "";
   if (hasRef) {
     const band = referenceTargetBandYs(reference, yFor, plotTop, plotBottom);
     if (band) {
-      refLayer = `<rect x="${padX}" y="${band.top.toFixed(1)}" width="${(w - padX * 2).toFixed(1)}" height="${Math.max(2, band.bottom - band.top).toFixed(1)}" fill="#15803d" opacity="0.12"></rect>`;
+      refLayer = `<rect x="${padL}" y="${band.top.toFixed(1)}" width="${(w - padL - padR).toFixed(1)}" height="${Math.max(2, band.bottom - band.top).toFixed(1)}" fill="#15803d" opacity="0.12"></rect>`;
     }
-    if (refHigh != null) {
-      const y = yFor(refHigh);
-      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="#15803d" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.65"></line>`;
-    }
-    if (refLow != null) {
-      const y = yFor(refLow);
-      refLayer += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="#15803d" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.65"></line>`;
-    }
+    // Bound lines are drawn via y-axis ticks (green dashed) to avoid double stroke
   }
 
   // Color each segment by the worse of its endpoint statuses so the line tracks readings
@@ -11956,10 +12011,11 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
     })
     .join("");
 
-  // Draw order: ref band → milestones (behind) → colored segments → dots/labels
+  // Draw order: ref band → y-axis → milestones → colored segments → dots/labels
   return `<div class="diag-chart-plot">
     <svg class="diag-chart-svg" viewBox="0 0 360 150" role="img" aria-label="Trend">
       ${refLayer}
+      ${yAxisLayer}
       ${milestoneLayer}
       ${segments}
       ${dots}
