@@ -2185,7 +2185,7 @@ function renderMobileLogTiles(profile = state.patientProfile) {
     return;
   }
   if (!state.patientProfileId || state.patientProfileId !== state.activePatientId) {
-    grid.innerHTML = `<p class="muted small">Loading…</p>`;
+    grid.innerHTML = logLoadingHtml("Loading log options…");
     return;
   }
   const order = resolveLogTileOrder(profile);
@@ -2219,7 +2219,7 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
     return;
   }
   if (!state.patientProfileId || state.patientProfileId !== state.activePatientId) {
-    el.innerHTML = `<p class="muted small">Loading…</p>`;
+    el.innerHTML = logLoadingHtml("Loading log tiles…");
     return;
   }
   const who = state.activePatientLabel ? ` for ${state.activePatientLabel}` : " for this person";
@@ -8640,9 +8640,9 @@ async function loadCaseContext() {
       syncMobileLogRangeControl();
       // Clear tiles until this patient's profile loads — never reuse prior person's order.
       const grid = document.getElementById("mobile-log-grid");
-      if (grid) grid.innerHTML = `<p class="muted small">Loading…</p>`;
+      if (grid) grid.innerHTML = logLoadingHtml("Loading log options…");
       const orderEl = document.getElementById("log-tiles-order-list");
-      if (orderEl) orderEl.innerHTML = `<p class="muted small">Loading…</p>`;
+      if (orderEl) orderEl.innerHTML = logLoadingHtml("Loading log tiles…");
       await refreshActivePatientProfile();
     } else {
       syncPatientSpecificLogTiles();
@@ -10779,9 +10779,11 @@ function syncMobileLogForLabel() {
   const name = state.activePatientLabel || "this person";
   const ready =
     state.patientProfileId && state.patientProfileId === state.activePatientId;
-  el.textContent = ready
-    ? `Logging for ${name} only · tap once to save · sign-in does not change who this saves to`
-    : `Loading ${name}’s log…`;
+  if (ready) {
+    el.textContent = `Logging for ${name} only · tap once to save · sign-in does not change who this saves to`;
+    return;
+  }
+  el.innerHTML = `<span class="duck-loading"><img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm" width="16" height="16" aria-hidden="true"><span>Loading ${escapeHtml(name)}’s log…</span></span>`;
 }
 
 function syncMobileLogRangeControl() {
@@ -10816,7 +10818,7 @@ function clearPatientScopedLogState({ keepPatientId = false } = {}) {
   const recentEl = document.getElementById("journal-recent");
   if (recentEl) {
     recentEl.innerHTML = state.activePatientId
-      ? `<p class="muted small">Loading logs…</p>`
+      ? logLoadingHtml("Loading logs…")
       : `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to log how you feel."))}</p>`;
   }
 }
@@ -10907,6 +10909,10 @@ function journalEmptyRangeMessage() {
   return `Nothing in the last ${state.mobileLogDays} days.`;
 }
 
+function logLoadingHtml(message = "Loading logs…") {
+  return `<p class="muted small duck-loading" role="status" aria-live="polite"><img src="/static/favicon.svg" alt="" class="duck-spinner duck-spinner-sm" width="16" height="16" aria-hidden="true"><span>${escapeHtml(message)}</span></p>`;
+}
+
 function renderMobileLogListRows(entries) {
   return entries
     .map((j) => {
@@ -10968,11 +10974,13 @@ function renderMobileLogRecent() {
     return;
   }
   if (state.patientProfileId && state.patientProfileId !== state.activePatientId) {
-    el.innerHTML = `<p class="muted small">Loading logs…</p>`;
+    el.classList.remove("is-timeline");
+    el.innerHTML = logLoadingHtml("Loading logs…");
     return;
   }
   if (!state.patientProfile) {
-    el.innerHTML = `<p class="muted small">Loading logs…</p>`;
+    el.classList.remove("is-timeline");
+    el.innerHTML = logLoadingHtml("Loading logs…");
     return;
   }
   const entries = filterJournalByDayRange(journalEntriesForActivePatient(), state.mobileLogDays);
@@ -11019,6 +11027,8 @@ async function refreshLogObservations() {
   const patientId = state.activePatientId;
   const days = normalizeMobileLogDays(state.mobileLogDays);
   const reqId = ++state.logObservationsRequest;
+  el.classList.remove("hidden");
+  el.innerHTML = logLoadingHtml("Loading observations…");
   try {
     const res = await fetch(
       `/api/patients/${patientId}/log-observations?days=${encodeURIComponent(String(days))}`,
