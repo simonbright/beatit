@@ -1719,6 +1719,17 @@ body {
   color: var(--danger, #b42318);
 }
 
+.diag-import-mismatch {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #b91c1c 40%, var(--border));
+  background: color-mix(in srgb, #ef4444 12%, var(--surface));
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .diagnostics-card {
   margin-bottom: 1rem;
 }

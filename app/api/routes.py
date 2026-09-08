@@ -2983,6 +2983,11 @@ class PatientDiagnosticImportFromDocRequest(BaseModel):
     document_id: str = Field(min_length=1, max_length=120)
 
 
+class PatientDiagnosticConfirmDocumentRequest(BaseModel):
+    document_id: str = Field(min_length=1, max_length=120)
+    acknowledge_patient_mismatch: bool = False
+
+
 @router.post("/patients/{patient_id}/diagnostics/import")
 async def api_import_patient_diagnostics(
     patient_id: str,
@@ -3048,6 +3053,50 @@ async def api_import_patient_diagnostics_from_document(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
+
+
+@router.post("/patients/{patient_id}/diagnostics/import/confirm-document")
+async def api_confirm_patient_diagnostics_from_document(
+    patient_id: str,
+    body: PatientDiagnosticConfirmDocumentRequest,
+):
+    """Auto-import lab readings from a library document after optional mismatch ack."""
+    from app.services.clinical_report_handling import (
+        open_store_for_patient_document,
+        refresh_document_handling,
+    )
+
+    patients = list_patients()
+    if not any(p["id"] == patient_id for p in patients):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    doc_id = body.document_id.strip()
+    opened = await open_store_for_patient_document(patient_id, doc_id)
+    if not opened:
+        raise HTTPException(status_code=404, detail="Document not found")
+    target_store, doc = opened
+    text = await target_store.read_extracted_text(doc)
+    try:
+        lab_import = await auto_confirm_lab_readings_from_document(
+            patient_id,
+            doc,
+            extracted_text=text,
+            acknowledge_patient_mismatch=bool(body.acknowledge_patient_mismatch),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    profile = lab_import.get("profile") or get_patient_profile(patient_id)
+    updated = await refresh_document_handling(
+        target_store,
+        doc,
+        profile=profile,
+        lab_import=lab_import,
+        extracted_text=text,
+    )
+    if updated.get("handling"):
+        lab_import["handling"] = updated["handling"]
+        lab_import["flagged"] = updated["handling"].get("status") == "flagged"
+    return lab_import
 
 
 @router.post("/patients/{patient_id}/diagnostics/import/confirm")

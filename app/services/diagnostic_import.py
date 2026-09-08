@@ -21,6 +21,10 @@ from app.services.case_manager import (
     group_diagnostics_for_charts,
     group_journal_for_charts,
 )
+from app.services.lab_patient_identity import (
+    compare_lab_patient_identity,
+    extract_lab_patient_identity,
+)
 from app.services.llm import LLMClient
 
 DIAG_IMPORT_SYSTEM = (
@@ -377,6 +381,9 @@ def _empty_lab_import_result(
     skipped_duplicate: int = 0,
     proposed_count: int = 0,
     warnings: list[str] | None = None,
+    patient_identity: dict[str, Any] | None = None,
+    patient_mismatch: bool = False,
+    blocked_for_patient_mismatch: bool = False,
 ) -> dict[str, Any]:
     profile = get_patient_profile(patient_id)
     return {
@@ -393,6 +400,9 @@ def _empty_lab_import_result(
         "journal_series": group_journal_for_charts(profile),
         "offer_manual_import": False,
         "already_on_profile": skipped_duplicate > 0,
+        "patient_identity": patient_identity,
+        "patient_mismatch": patient_mismatch,
+        "blocked_for_patient_mismatch": blocked_for_patient_mismatch,
     }
 
 
@@ -438,12 +448,21 @@ async def _propose_from_text(
     if not proposed:
         warnings.append("No lab readings detected in the document")
 
+    extracted_id = extract_lab_patient_identity(text)
+    identity = compare_lab_patient_identity(patient_id, extracted_id)
+    if identity.get("soft_warnings"):
+        warnings.extend(identity["soft_warnings"])
+    if identity.get("issues"):
+        warnings.extend(identity["issues"])
+
     return {
         "proposed": proposed,
         "extraction_meta": meta or {},
         "warnings": warnings,
         "extracted_preview": clipped[:800],
         "duplicate_count": sum(1 for p in proposed if p.get("already_on_profile")),
+        "patient_identity": identity,
+        "patient_mismatch": bool(identity.get("mismatch")),
     }
 
 
@@ -542,12 +561,17 @@ async def auto_confirm_lab_readings_from_document(
     *,
     extracted_text: str | None = None,
     llm: LLMClient | None = None,
+    acknowledge_patient_mismatch: bool = False,
 ) -> dict[str, Any]:
     """Propose lab rows and auto-add complete, non-duplicate readings.
 
     Only rows with name + value + recorded_at are confirmed. Same normalized
     name + collection date already on the profile are skipped (including
     within-batch duplicates). Manual Import to Labs remains the fallback.
+
+    If the report name or DOB conflicts with the active patient and
+    ``acknowledge_patient_mismatch`` is false, readings are not written and the
+    result includes ``blocked_for_patient_mismatch`` so the UI can ask the user.
     """
     meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
     doc_id = str(doc.get("id") or "").strip() or None
@@ -574,6 +598,14 @@ async def auto_confirm_lab_readings_from_document(
             ],
         )
 
+    # Identity check before LLM parse when text is already available (cheap)
+    text_for_id = (extracted_text or "").strip()
+    identity_preview = None
+    if text_for_id:
+        identity_preview = compare_lab_patient_identity(
+            patient_id, extract_lab_patient_identity(text_for_id)
+        )
+
     proposal = await propose_diagnostics_from_document(
         patient_id,
         doc,
@@ -581,6 +613,32 @@ async def auto_confirm_lab_readings_from_document(
         llm=llm,
     )
     proposed = proposal.get("proposed") or []
+    identity = proposal.get("patient_identity") or identity_preview
+    patient_mismatch = bool(
+        (identity and identity.get("mismatch")) or proposal.get("patient_mismatch")
+    )
+
+    if patient_mismatch and not acknowledge_patient_mismatch:
+        issues = list((identity or {}).get("issues") or [])
+        warnings = list(proposal.get("warnings") or [])
+        warnings.append(
+            "Import blocked — lab report name/DOB does not match the active patient. "
+            "Confirm to import anyway, or switch patients first."
+        )
+        return _empty_lab_import_result(
+            patient_id,
+            doc,
+            proposed_count=len(proposed),
+            warnings=warnings,
+            patient_identity=identity,
+            patient_mismatch=True,
+            blocked_for_patient_mismatch=True,
+        ) | {
+            "proposed": proposed,
+            "offer_manual_import": True,
+            "mismatch_issues": issues,
+        }
+
     existing = existing_diagnostic_index(patient_id)
     added: list[dict[str, Any]] = []
     skipped_duplicate = 0
@@ -626,6 +684,8 @@ async def auto_confirm_lab_readings_from_document(
 
     profile = get_patient_profile(patient_id)
     warnings = list(proposal.get("warnings") or [])
+    if acknowledge_patient_mismatch and patient_mismatch:
+        warnings.append("Imported after user confirmed a patient name/DOB mismatch")
     # Drop soft-overlap warning text if we already counted skips in this pass
     if skipped_duplicate:
         warnings = [
@@ -660,4 +720,8 @@ async def auto_confirm_lab_readings_from_document(
         "already_on_profile": len(added) == 0
         and skipped_duplicate > 0
         and skipped_incomplete == 0,
+        "patient_identity": identity,
+        "patient_mismatch": patient_mismatch,
+        "blocked_for_patient_mismatch": False,
+        "mismatch_issues": list((identity or {}).get("issues") or []) if patient_mismatch else [],
     }

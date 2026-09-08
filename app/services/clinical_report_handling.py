@@ -18,6 +18,7 @@ REASON_LAB_CHARTS_PENDING = "lab_charts_pending"
 REASON_LAB_PARTIAL = "lab_partial"
 REASON_UNCLASSIFIED = "unclassified"
 REASON_IMPORT_FAILED = "lab_import_failed"
+REASON_PATIENT_MISMATCH = "patient_identity_mismatch"
 
 HANDLING_OK = "ok"
 HANDLING_FLAGGED = "flagged"
@@ -29,6 +30,7 @@ REASON_LABELS: dict[str, str] = {
     REASON_LAB_PARTIAL: "Some lab readings still need review",
     REASON_UNCLASSIFIED: "Clinical report type unclear",
     REASON_IMPORT_FAILED: "Automatic lab import failed",
+    REASON_PATIENT_MISMATCH: "Lab report name/DOB does not match patient",
 }
 
 
@@ -184,6 +186,15 @@ def evaluate_document_handling(
             proposed = int(lab_import.get("proposed_count") or 0)
             incomplete = int(lab_import.get("skipped_incomplete") or 0)
             skipped_duplicate = int(lab_import.get("skipped_duplicate") or 0)
+            if lab_import.get("blocked_for_patient_mismatch"):
+                reasons.append(REASON_PATIENT_MISMATCH)
+                issues = lab_import.get("mismatch_issues") or []
+                if issues:
+                    messages.append(str(issues[0]))
+                else:
+                    messages.append(
+                        "Lab report name or date of birth does not match the active patient — confirm before importing"
+                    )
             import_failed = bool(
                 lab_import.get("offer_manual_import")
                 or any("failed" in str(w).lower() for w in (lab_import.get("warnings") or []))
@@ -197,6 +208,11 @@ def evaluate_document_handling(
             import_failed = stored in {"failed", "needs_review"} and added == 0
             if stored in {"imported", "already_on_profile"}:
                 added = max(added, 1)
+            if stored == "patient_mismatch" or meta.get("patient_identity_mismatch"):
+                reasons.append(REASON_PATIENT_MISMATCH)
+                messages.append(
+                    "Lab report name or date of birth does not match the active patient — confirm before importing"
+                )
 
         charted = max(added, linked)
         # Readings already on Home Labs for this panel count as handled.
@@ -367,13 +383,22 @@ def apply_handling_to_metadata(
         meta["lab_charts_proposed"] = proposed
         meta["lab_charts_incomplete"] = incomplete
         meta["lab_charts_duplicates"] = duplicates
-        if status == HANDLING_OK and duplicates > 0 and added == 0:
+        if lab_import.get("blocked_for_patient_mismatch"):
+            meta["lab_charts_status"] = "patient_mismatch"
+            meta["patient_identity_mismatch"] = True
+            identity = lab_import.get("patient_identity") or {}
+            meta["lab_report_patient_name"] = identity.get("report_name")
+            meta["lab_report_patient_dob"] = identity.get("report_date_of_birth")
+        elif status == HANDLING_OK and duplicates > 0 and added == 0:
             meta["lab_charts_status"] = "already_on_profile"
             meta["lab_charts_added"] = max(added, duplicates)
+            meta.pop("patient_identity_mismatch", None)
         elif added > 0 and incomplete == 0:
             meta["lab_charts_status"] = "imported"
+            meta.pop("patient_identity_mismatch", None)
         elif added > 0:
             meta["lab_charts_status"] = "partial"
+            meta.pop("patient_identity_mismatch", None)
         elif proposed > 0 and incomplete > 0:
             meta["lab_charts_status"] = "needs_review"
         elif proposed > 0:

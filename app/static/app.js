@@ -7,6 +7,8 @@ const state = {
   libraryCounts: {},
   libraryView: "documents",
   diagImportSourceDocumentId: null,
+  diagImportPatientMismatch: false,
+  diagImportPatientIdentity: null,
   handlingFlags: { items: [], count: 0, critical_count: 0 },
   homeSection: "log",
   settingsSection: "patients",
@@ -1521,6 +1523,45 @@ function labReportLabel(labImport, fallback = "lab report") {
   return original || title || fallback;
 }
 
+function formatPatientIdentityLine(name, dob) {
+  const n = String(name || "").trim() || "unknown name";
+  const d = String(dob || "").trim().slice(0, 10) || "no DOB";
+  return `${n} · ${d}`;
+}
+
+function promptLabPatientMismatch(labImport) {
+  const id = labImport?.patient_identity || {};
+  const issues = (labImport?.mismatch_issues || id.issues || []).filter(Boolean);
+  const reportLine = formatPatientIdentityLine(id.report_name, id.report_date_of_birth);
+  const profileLine = formatPatientIdentityLine(id.profile_name, id.profile_date_of_birth);
+  const title = labReportLabel(labImport, "this lab report");
+  const detail = issues.length ? `\n\n${issues.join("\n")}` : "";
+  return confirm(
+    `Patient mismatch on ${title}.\n\n` +
+      `Report: ${reportLine}\n` +
+      `Active patient: ${profileLine}` +
+      `${detail}\n\n` +
+      `Import these readings into the active patient anyway?\n` +
+      `(Cancel leaves them off the charts — switch patient first if this report belongs to someone else.)`
+  );
+}
+
+async function acknowledgeLabPatientMismatchImport(labImport) {
+  const patientId = state.activePatientId;
+  const docId = labImport?.document_id;
+  if (!patientId || !docId) {
+    toast("Cannot confirm import — missing patient or document", "error");
+    return null;
+  }
+  return api(`/api/patients/${encodeURIComponent(patientId)}/diagnostics/import/confirm-document`, {
+    method: "POST",
+    body: JSON.stringify({
+      document_id: docId,
+      acknowledge_patient_mismatch: true,
+    }),
+  });
+}
+
 function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
   const flagged =
     labImport?.flagged ||
@@ -1535,6 +1576,27 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
     if (fallbackToast) toast(fallbackToast);
     return;
   }
+
+  if (labImport.blocked_for_patient_mismatch || (labImport.patient_mismatch && !(labImport.added_count > 0))) {
+    const title = labReportLabel(labImport);
+    const proceed = promptLabPatientMismatch(labImport);
+    if (!proceed) {
+      toast(`Import skipped — patient mismatch on ${title}`, "error");
+      refreshHandlingFlags({ rescan: true }).then(() => {
+        switchTab("analyze");
+        setHomeSection("flagged", { scroll: true });
+      });
+      return;
+    }
+    acknowledgeLabPatientMismatchImport(labImport)
+      .then((result) => {
+        if (!result) return;
+        notifyLabImportResult(result, { fallbackToast: "Lab readings imported after mismatch confirmation" });
+      })
+      .catch((err) => toast(err.message || "Import failed", "error"));
+    return;
+  }
+
   const n = labImport.added_count || 0;
   const skipped = labImport.skipped_duplicate || 0;
   const title = labReportLabel(labImport);
@@ -1548,7 +1610,8 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
   }
   if (n > 0 && !flagged) {
     const skipBit = skipped ? ` · skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}` : "";
-    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}${skipBit}`);
+    const mismatchBit = labImport.patient_mismatch ? " · imported despite name/DOB mismatch" : "";
+    toast(`Added ${n} lab reading${n === 1 ? "" : "s"} from ${title}${skipBit}${mismatchBit}`);
     if (typeof applyProfileResponse === "function") {
       try {
         applyProfileResponse(labImport);
@@ -9793,6 +9856,8 @@ function clearDiagImportReview() {
   const file = document.getElementById("diag-import-file");
   if (file) file.value = "";
   state.diagImportSourceDocumentId = null;
+  state.diagImportPatientMismatch = false;
+  state.diagImportPatientIdentity = null;
   setDiagImportStatus("");
 }
 
@@ -9805,14 +9870,22 @@ function renderDiagImportReview(data) {
   const proposed = data.proposed || [];
   const meta = data.extraction_meta || {};
   state.diagImportSourceDocumentId = meta.document_id || null;
+  state.diagImportPatientMismatch = Boolean(data.patient_mismatch);
+  state.diagImportPatientIdentity = data.patient_identity || null;
   const warnings = data.warnings || [];
   const method = meta.extraction_method || meta.source || "unknown";
   const chars = meta.extracted_chars != null ? `${meta.extracted_chars} chars` : "";
   const bits = [`Extracted via ${method}${chars ? ` · ${chars}` : ""}`];
   if (meta.original_filename) bits.push(`File: ${meta.original_filename}`);
   else if (meta.title) bits.push(String(meta.title));
+  if (data.patient_mismatch) {
+    const id = data.patient_identity || {};
+    bits.push(
+      `⚠ Patient mismatch — report ${formatPatientIdentityLine(id.report_name, id.report_date_of_birth)} vs active ${formatPatientIdentityLine(id.profile_name, id.profile_date_of_birth)}`
+    );
+  }
   if (warnings.length) bits.push(warnings.join(" · "));
-  setDiagImportStatus(bits.join(" — "));
+  setDiagImportStatus(bits.join(" — "), { error: Boolean(data.patient_mismatch) });
 
   if (!proposed.length) {
     list.innerHTML = `<p class="muted small">No lab readings detected. Try Re-extract / OCR on the document, or a clearer PDF.</p>`;
@@ -9820,7 +9893,16 @@ function renderDiagImportReview(data) {
     return;
   }
 
-  list.innerHTML = proposed
+  const mismatchBanner = data.patient_mismatch
+    ? `<div class="diag-import-mismatch" role="alert">
+        <strong>Patient name/DOB mismatch.</strong>
+        Confirm carefully before adding — this report may belong to another person.
+      </div>`
+    : "";
+
+  list.innerHTML =
+    mismatchBanner +
+    proposed
     .map((d, i) => {
       const dateVal = d.recorded_at ? String(d.recorded_at).slice(0, 10) : "";
       const already = Boolean(d.already_on_profile);
@@ -9877,6 +9959,17 @@ async function confirmDiagImportAndShowCharts() {
   const diagnostics = collectDiagImportSelected();
   if (!diagnostics.length) {
     return toast("Select readings with name, value, and collection date", "error");
+  }
+  if (state.diagImportPatientMismatch) {
+    const ok = promptLabPatientMismatch({
+      document_title: "selected lab report",
+      patient_identity: state.diagImportPatientIdentity,
+      mismatch_issues: state.diagImportPatientIdentity?.issues || [],
+    });
+    if (!ok) {
+      toast("Import cancelled — switch patient if this report belongs to someone else", "error");
+      return;
+    }
   }
   const btn = document.getElementById("btn-diag-import-confirm");
   if (btn) btn.disabled = true;
