@@ -1060,40 +1060,36 @@ def _sparkline_png_bytes(
 
     kept: list[tuple[int, float, str, float, float, str, int]] = []
 
-    def _row_for(left: float, right: float) -> int | None:
-        for row in (0, 1):
-            collide = False
-            for _ki, _kx, _kl, kleft, kright, _ka, krow in kept:
-                if krow != row:
-                    continue
-                if left < kright + 10 and right > kleft - 10:
-                    collide = True
-                    break
-            if not collide:
-                return row
-        return None
+    def _fits(left: float, right: float, row: int) -> bool:
+        for _ki, _kx, _kl, kleft, kright, _ka, krow in kept:
+            if krow != row:
+                continue
+            if left < kright + 12 and right > kleft - 12:
+                return False
+        return True
 
-    # Prefer alternating rows when points are dense; always keep first + last
+    # Mandatory first + last (stagger if needed), then pack middles that fit — drop the rest
     for cand in candidates:
         i, x, date_label, left, right, anchor = cand
-        preferred = i % 2
-        # Try preferred row first, then the other
-        row = None
-        for try_row in (preferred, 1 - preferred):
-            collide = False
-            for _ki, _kx, _kl, kleft, kright, _ka, krow in kept:
-                if krow != try_row:
-                    continue
-                if left < kright + 10 and right > kleft - 10:
-                    collide = True
-                    break
-            if not collide:
-                row = try_row
+        if i not in (0, n_pts - 1):
+            continue
+        placed = False
+        for try_row in (0, 1):
+            if _fits(left, right, try_row):
+                kept.append((*cand, try_row))
+                placed = True
                 break
-        if row is None and i in (0, n_pts - 1):
-            row = preferred
-        if row is not None:
-            kept.append((*cand, row))
+        if not placed:
+            kept.append((*cand, 1 if any(k[6] == 0 for k in kept) else 0))
+
+    for cand in candidates:
+        i, x, date_label, left, right, anchor = cand
+        if i in (0, n_pts - 1):
+            continue
+        for try_row in (i % 2, 1 - (i % 2)):
+            if _fits(left, right, try_row):
+                kept.append((*cand, try_row))
+                break
     kept.sort(key=lambda t: (t[6], t[0]))
 
     for i, x, date_label, _left, _right, anchor, row in kept:
