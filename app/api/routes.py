@@ -66,6 +66,7 @@ from app.services.vision_jobs import (
 from app.services.pdf_ingest_jobs import (
     enqueue_pdf_ingest_job,
     get_job_payload as get_pdf_ingest_job_payload,
+    pending_or_running_count,
 )
 from app.ingest.imaging import reindex_all_imaging_metadata
 from app.services.pdf_export import (
@@ -1563,6 +1564,12 @@ async def ingest_pdf_route(
         raise HTTPException(
             status_code=400,
             detail="Select a patient and case before uploading documents",
+        )
+    # Keep the in-process queue short on small Render instances
+    if pending_or_running_count() >= 3:
+        raise HTTPException(
+            status_code=429,
+            detail="Lab processing is busy — wait for the current file to finish, then retry",
         )
     job = enqueue_pdf_ingest_job(
         document_id=doc["id"],

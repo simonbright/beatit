@@ -187,7 +187,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses = [502, 503, 504] } = {}) {
+async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses = [502, 503, 504, 429] } = {}) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -197,19 +197,86 @@ async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses =
       const status = err?.status;
       const retriable = retryStatuses.includes(status);
       if (!retriable || attempt === retries) throw err;
-      await sleep(800 * (attempt + 1));
+      const backoff = status === 429 ? 4000 * (attempt + 1) : 1200 * (attempt + 1);
+      await sleep(backoff);
     }
   }
   throw lastErr;
 }
 
-async function pollPdfIngestJob(jobId, { setDetail, isCancelled, filename } = {}) {
-  const deadline = Date.now() + 20 * 60 * 1000;
-  const label = filename ? ` ${filename}` : "";
+async function waitForApiHealthy({ isCancelled, setDetail, label = "" } = {}) {
+  const deadline = Date.now() + 3 * 60 * 1000;
+  let attempt = 0;
   while (Date.now() < deadline) {
     if (isCancelled?.()) throw new Error("Cancelled");
-    const data = await api(`/api/ingest/jobs/${encodeURIComponent(jobId)}`);
-    const job = data.job || data;
+    try {
+      await api("/api/version", { timeoutMs: 15000 });
+      return;
+    } catch (err) {
+      attempt += 1;
+      if (setDetail) {
+        setDetail(
+          `Server busy${label ? ` (${label})` : ""} — waiting to reconnect… (${attempt})`
+        );
+      }
+      await sleep(Math.min(15000, 2000 * attempt));
+    }
+  }
+  throw new Error("Server stayed unavailable — try again in a minute");
+}
+
+async function pollPdfIngestJob(jobId, { setDetail, isCancelled, filename, documentId } = {}) {
+  const deadline = Date.now() + 25 * 60 * 1000;
+  const label = filename ? ` ${filename}` : "";
+  let consecutiveGatewayErrors = 0;
+  while (Date.now() < deadline) {
+    if (isCancelled?.()) throw new Error("Cancelled");
+    let job;
+    try {
+      const data = await apiWithRetries(
+        `/api/ingest/jobs/${encodeURIComponent(jobId)}`,
+        { timeoutMs: 30000 },
+        { retries: 5, retryStatuses: [502, 503, 504] }
+      );
+      job = data.job || data;
+      consecutiveGatewayErrors = 0;
+    } catch (err) {
+      consecutiveGatewayErrors += 1;
+      if (setDetail) {
+        setDetail(`Processing${label}: server busy, retrying…`);
+      }
+      // Fall back to document metadata if the job endpoint is unreachable
+      if (documentId && consecutiveGatewayErrors >= 2) {
+        try {
+          const docData = await apiWithRetries(`/api/documents/${encodeURIComponent(documentId)}`, {
+            timeoutMs: 30000,
+          }, { retries: 2 });
+          const doc = docData.document || docData;
+          const meta = doc?.metadata || {};
+          if (meta.ingest_processing === false && !meta.ingest_error) {
+            return {
+              document: doc,
+              handling: doc.handling,
+              lab_import: null,
+              job_id: jobId,
+              processing: false,
+            };
+          }
+          if (meta.ingest_error) {
+            throw new Error(meta.ingest_error);
+          }
+          if (meta.ingest_stage && setDetail) {
+            setDetail(`Processing${label}: ${meta.ingest_stage}…`);
+          }
+        } catch (inner) {
+          if (inner?.message && !String(inner.message).includes("Request failed")) {
+            throw inner;
+          }
+        }
+      }
+      await waitForApiHealthy({ isCancelled, setDetail, label: filename || "" });
+      continue;
+    }
     const stage = job.progress?.stage;
     if (setDetail && stage) {
       const stageLabel =
@@ -241,24 +308,54 @@ async function pollPdfIngestJob(jobId, { setDetail, isCancelled, filename } = {}
       throw new Error("Cancelled");
     }
     if (job.status === "not_found") {
+      // Process may have restarted — wait and check document before giving up
+      if (documentId) {
+        try {
+          const docData = await api(`/api/documents/${encodeURIComponent(documentId)}`);
+          const doc = docData.document || docData;
+          const meta = doc?.metadata || {};
+          if (meta.ingest_processing) {
+            if (setDetail) setDetail(`Processing${label}: still working after reconnect…`);
+            await sleep(3000);
+            continue;
+          }
+          if (meta.ingest_error) throw new Error(meta.ingest_error);
+          return {
+            document: doc,
+            handling: doc.handling,
+            lab_import: null,
+            job_id: jobId,
+            processing: false,
+          };
+        } catch (err) {
+          if (err?.status === 404) {
+            throw new Error("Ingest job not found — try uploading again");
+          }
+        }
+      }
       throw new Error("Ingest job not found — try uploading again");
     }
-    await sleep(2000);
+    await sleep(2500);
   }
   throw new Error(`Timed out waiting for processing${label}`);
 }
 
 async function ingestPdfUpload(file, { title, clinicalReportKind, setDetail, isCancelled } = {}) {
+  await waitForApiHealthy({ isCancelled, setDetail, label: file.name });
   const fd = new FormData();
   fd.append("file", file);
   if (title) fd.append("title", title);
   if (clinicalReportKind) fd.append("clinical_report_kind", clinicalReportKind);
   if (setDetail) setDetail(`Uploading ${file.name}…`);
-  const data = await apiWithRetries("/api/ingest/pdf", {
-    method: "POST",
-    body: fd,
-    timeoutMs: 120000,
-  });
+  const data = await apiWithRetries(
+    "/api/ingest/pdf",
+    {
+      method: "POST",
+      body: fd,
+      timeoutMs: 120000,
+    },
+    { retries: 5, retryStatuses: [502, 503, 504, 429] }
+  );
   if (isCancelled?.()) throw new Error("Cancelled");
   if (data.processing && data.job_id) {
     if (setDetail) setDetail(`Uploaded ${file.name} — processing on server…`);
@@ -266,6 +363,7 @@ async function ingestPdfUpload(file, { title, clinicalReportKind, setDetail, isC
       setDetail,
       isCancelled,
       filename: file.name,
+      documentId: data.document?.id,
     });
   }
   return data;

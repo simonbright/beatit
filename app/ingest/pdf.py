@@ -100,10 +100,12 @@ def ocr_runtime_status() -> dict[str, Any]:
 
 
 def _render_pdf_pages_pdftoppm(
-    content: bytes, *, max_pages: int, dpi: int
+    content: bytes, *, max_pages: int, dpi: int, first_page: int = 1
 ) -> list[bytes]:
     if not _pdftoppm_available():
         return []
+    first = max(1, int(first_page))
+    last = first + max(0, int(max_pages) - 1)
     with tempfile.TemporaryDirectory(prefix="beatit-ocr-") as tmp:
         pdf_path = Path(tmp) / "doc.pdf"
         pdf_path.write_bytes(content)
@@ -116,15 +118,15 @@ def _render_pdf_pages_pdftoppm(
                     "-r",
                     str(dpi),
                     "-f",
-                    "1",
+                    str(first),
                     "-l",
-                    str(max_pages),
+                    str(last),
                     str(pdf_path),
                     str(prefix),
                 ],
                 check=True,
                 capture_output=True,
-                timeout=300,
+                timeout=120,
             )
         except (subprocess.SubprocessError, OSError):
             return []
@@ -132,7 +134,7 @@ def _render_pdf_pages_pdftoppm(
 
 
 def _render_pdf_pages_pymupdf(
-    content: bytes, *, max_pages: int, dpi: int
+    content: bytes, *, max_pages: int, dpi: int, first_page: int = 1
 ) -> list[bytes]:
     try:
         try:
@@ -148,11 +150,10 @@ def _render_pdf_pages_pymupdf(
     zoom = dpi / 72.0
     matrix = fitz.Matrix(zoom, zoom)
     pages: list[bytes] = []
+    start = max(0, int(first_page) - 1)
     try:
-        for i, page in enumerate(doc):
-            if i >= max_pages:
-                break
-            pix = page.get_pixmap(matrix=matrix, alpha=False)
+        for i in range(start, min(len(doc), start + max_pages)):
+            pix = doc[i].get_pixmap(matrix=matrix, alpha=False)
             pages.append(pix.tobytes("png"))
     finally:
         doc.close()
@@ -164,12 +165,17 @@ def render_pdf_page_pngs(
     *,
     max_pages: int = OCR_PAGE_LIMIT,
     dpi: int = OCR_RENDER_DPI,
+    first_page: int = 1,
 ) -> tuple[list[bytes], str]:
     """Return (png_pages, renderer_name). Prefers pdftoppm, falls back to PyMuPDF."""
-    pages = _render_pdf_pages_pdftoppm(content, max_pages=max_pages, dpi=dpi)
+    pages = _render_pdf_pages_pdftoppm(
+        content, max_pages=max_pages, dpi=dpi, first_page=first_page
+    )
     if pages:
         return pages, "pdftoppm"
-    pages = _render_pdf_pages_pymupdf(content, max_pages=max_pages, dpi=dpi)
+    pages = _render_pdf_pages_pymupdf(
+        content, max_pages=max_pages, dpi=dpi, first_page=first_page
+    )
     if pages:
         return pages, "pymupdf"
     return [], "none"
@@ -197,14 +203,16 @@ def _tesseract_png_bytes(png: bytes) -> str:
 def _ocr_with_tesseract(content: bytes, *, max_pages: int = OCR_PAGE_LIMIT) -> str:
     if not _tesseract_available():
         return ""
-    pages, _renderer = render_pdf_page_pngs(content, max_pages=max_pages)
-    if not pages:
-        return ""
     pages_out: list[str] = []
-    for i, png in enumerate(pages, start=1):
-        text = _tesseract_png_bytes(png)
+    for page_num in range(1, max_pages + 1):
+        pages, _renderer = render_pdf_page_pngs(
+            content, max_pages=1, dpi=150, first_page=page_num
+        )
+        if not pages:
+            break
+        text = _tesseract_png_bytes(pages[0])
         if text:
-            pages_out.append(f"--- Page {i} (OCR) ---\n{text}")
+            pages_out.append(f"--- Page {page_num} (OCR) ---\n{text}")
     return "\n\n".join(pages_out)
 
 
@@ -316,7 +324,7 @@ async def _ocr_pdf_direct_with_vision(content: bytes) -> tuple[str, dict[str, An
 async def _ocr_pages_with_vision(
     content: bytes, *, max_pages: int = OCR_VISION_PAGE_LIMIT
 ) -> tuple[str, dict[str, Any]]:
-    """Render PDF pages and OCR via OpenRouter vision."""
+    """Render PDF pages one at a time and OCR via OpenRouter vision (low memory)."""
     from app.config import settings
     from app.services.openrouter_client import OpenRouterClient
 
@@ -325,22 +333,32 @@ async def _ocr_pages_with_vision(
         meta["vision_error"] = "OPENROUTER_API_KEY not set"
         return "", meta
 
-    pages, renderer = render_pdf_page_pngs(
-        content, max_pages=max_pages, dpi=150
-    )
-    meta["renderer"] = renderer
-    if not pages:
-        meta["vision_error"] = "Could not render PDF pages for vision OCR"
-        return "", meta
-
+    dpi = 110 if settings.render else 150
     model = _vision_ocr_model()
     client = OpenRouterClient(model=model)
     meta["vision_model"] = model
+    meta["renderer"] = "page_at_a_time"
     pages_out: list[str] = []
-    for i, png in enumerate(pages, start=1):
-        jpeg = _png_to_jpeg_bytes(png)
+
+    for page_num in range(1, max_pages + 1):
+        # Render a single page so we never hold many high-DPI PNGs in RAM.
+        pages, renderer = await asyncio.to_thread(
+            render_pdf_page_pngs,
+            content,
+            max_pages=1,
+            dpi=dpi,
+            first_page=page_num,
+        )
+        meta["renderer"] = renderer
+        if not pages:
+            break
+        png = pages[0]
+        pages = None
+        jpeg = await asyncio.to_thread(_png_to_jpeg_bytes, png, max_side=1200, quality=70)
+        png = None
         b64 = base64.b64encode(jpeg).decode("ascii")
         mime = "image/jpeg" if jpeg[:3] == b"\xff\xd8\xff" else "image/png"
+        jpeg = None
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": OCR_VISION_SYSTEM},
             {
@@ -349,7 +367,7 @@ async def _ocr_pages_with_vision(
                     {
                         "type": "text",
                         "text": (
-                            f"Transcribe page {i} of {len(pages)} from this clinical PDF. "
+                            f"Transcribe page {page_num} from this clinical PDF. "
                             "Return only the transcribed text."
                         ),
                     },
@@ -366,7 +384,12 @@ async def _ocr_pages_with_vision(
             meta["vision_error"] = str(exc)
             break
         if text:
-            pages_out.append(f"--- Page {i} (Vision OCR) ---\n{text}")
+            pages_out.append(f"--- Page {page_num} (Vision OCR) ---\n{text}")
+        # Let HTTP handlers run between pages
+        await asyncio.sleep(0.05)
+
+    if not pages_out and not meta.get("vision_error"):
+        meta["vision_error"] = "Could not render PDF pages for vision OCR"
     return "\n\n".join(pages_out), meta
 
 
@@ -467,15 +490,45 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
     return fallback, meta
 
 
-async def extract_pdf_text_async(content: bytes) -> tuple[str, dict[str, Any]]:
-    """Like extract_pdf_text, then OpenRouter vision OCR if local OCR failed."""
-    text, meta = extract_pdf_text(content)
+async def extract_pdf_text_async(
+    content: bytes,
+    *,
+    skip_local_ocr: bool | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Quick extract, optional Tesseract in a worker thread, then vision OCR.
+
+    On Render (low memory), local Tesseract is skipped by default — rendering
+    20 pages of PNGs OOMs the starter dyno and 502s every request.
+    """
+    from app.config import settings
+
+    if skip_local_ocr is None:
+        skip_local_ocr = bool(settings.render)
+
+    # Never run Tesseract/pdftoppm on the event loop.
+    text, meta = await asyncio.to_thread(extract_pdf_text_quick, content)
     if not meta.get("needs_ocr"):
         return text, meta
     if len((text or "").strip()) >= MIN_NATIVE_CHARS and text != EMPTY_PDF_PLACEHOLDER:
         return text, meta
 
-    vision_text, vision_meta = await _ocr_with_openrouter_vision(content)
+    if not skip_local_ocr:
+        ocr = (
+            await asyncio.to_thread(
+                lambda: _ocr_with_tesseract(content, max_pages=6)
+            )
+        ).strip()
+        if ocr:
+            meta["extraction_method"] = "ocr"
+            meta["extracted_chars"] = len(ocr)
+            meta["needs_ocr"] = False
+            meta["deferred_ocr"] = False
+            meta.pop("ocr_hint", None)
+            return ocr, meta
+
+    vision_text, vision_meta = await _ocr_with_openrouter_vision(
+        content, max_pages=4 if settings.render else OCR_VISION_PAGE_LIMIT
+    )
     meta.update(vision_meta)
     if vision_text and len(vision_text.strip()) >= MIN_NATIVE_CHARS:
         meta["extraction_method"] = "vision_ocr"
