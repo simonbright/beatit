@@ -11386,6 +11386,15 @@ function formatDiagDate(iso) {
   return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
+/** Human date + ISO for hover / doctor reference (e.g. Jun 10, 2026 · 2026-06-10). */
+function formatDiagDatePrecise(iso) {
+  const raw = String(iso || "").slice(0, 10);
+  const pretty = formatDiagDate(raw);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return pretty;
+  if (pretty === raw) return raw;
+  return `${pretty} · ${raw}`;
+}
+
 function formatDiagDateAxis(iso) {
   const raw = String(iso || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || "—";
@@ -11845,12 +11854,15 @@ function buildSparklineSvg(readings, { stroke = "var(--accent)", reference = nul
       const label = formatDiagValue(c.value);
       const fill = statusColor(c.status);
       const valueY = c.y - 12;
-      // White stroke halo keeps values readable when a milestone dash crosses them
-      return `<g>
-        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4.2" fill="${fill}" stroke="#fff" stroke-width="1.5">
-          <title>${escapeHtml(formatDiagDate(c.date))}: ${escapeHtml(label)}${c.status ? ` (${statusLabel(c.status)})` : ""}</title>
-        </circle>
-        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="13" font-weight="700" stroke="#fff" stroke-width="4" paint-order="stroke fill">${escapeHtml(label)}</text>
+      const tip = `${formatDiagDatePrecise(c.date)} · ${label}${
+        c.status ? ` · ${statusLabel(c.status)}` : ""
+      }`;
+      // Invisible hit circle makes hover reliable; title + data-tip for native + custom tooltip
+      return `<g class="diag-chart-point" data-tip="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}">
+        <circle class="diag-chart-hit" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="12" fill="transparent" stroke="none"></circle>
+        <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4.2" fill="${fill}" stroke="#fff" stroke-width="1.5" pointer-events="none"></circle>
+        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="13" font-weight="700" stroke="#fff" stroke-width="4" paint-order="stroke fill" pointer-events="none">${escapeHtml(label)}</text>
+        <title>${escapeHtml(tip)}</title>
       </g>`;
     })
     .join("");
@@ -13804,6 +13816,61 @@ document.getElementById("diagnostics-charts")?.addEventListener("click", (e) => 
   if (!e.target.closest("#btn-copy-diag-gaps")) return;
   copyDiagnosticGapsList().catch((err) => toast(err.message || "Copy failed", "error"));
 });
+
+(function setupDiagChartTooltips() {
+  let tipEl = null;
+  const ensureTip = () => {
+    if (tipEl) return tipEl;
+    tipEl = document.createElement("div");
+    tipEl.className = "diag-chart-tooltip hidden";
+    tipEl.setAttribute("role", "tooltip");
+    document.body.appendChild(tipEl);
+    return tipEl;
+  };
+  const hide = () => {
+    if (tipEl) tipEl.classList.add("hidden");
+  };
+  const show = (text, clientX, clientY) => {
+    const el = ensureTip();
+    el.textContent = text;
+    el.classList.remove("hidden");
+    const pad = 12;
+    const tw = el.offsetWidth || 160;
+    const th = el.offsetHeight || 32;
+    let left = clientX;
+    let top = clientY;
+    left = Math.min(window.innerWidth - tw / 2 - pad, Math.max(tw / 2 + pad, left));
+    top = Math.max(th + pad, top);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  };
+  const charts = document.getElementById("diagnostics-charts");
+  if (!charts) return;
+  charts.addEventListener("pointerover", (e) => {
+    const point = e.target.closest?.(".diag-chart-point");
+    if (!point || !charts.contains(point)) return;
+    const text = point.getAttribute("data-tip") || point.getAttribute("aria-label") || "";
+    if (!text) return;
+    show(text, e.clientX, e.clientY);
+  });
+  charts.addEventListener("pointermove", (e) => {
+    const point = e.target.closest?.(".diag-chart-point");
+    if (!point || !charts.contains(point)) {
+      hide();
+      return;
+    }
+    const text = point.getAttribute("data-tip") || "";
+    if (!text) return;
+    show(text, e.clientX, e.clientY);
+  });
+  charts.addEventListener("pointerout", (e) => {
+    const next = e.relatedTarget;
+    if (next && e.target.closest?.(".diag-chart-point")?.contains(next)) return;
+    if (next?.closest?.(".diag-chart-point")) return;
+    hide();
+  });
+  charts.addEventListener("pointerleave", hide);
+})();
 
 document.getElementById("diag-milestones-all")?.addEventListener("click", () => {
   const profile = state.patientProfile || null;

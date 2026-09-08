@@ -531,6 +531,30 @@ def _format_diag_date_label(iso: str | None, *, compact: bool = False) -> str:
     return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
 
 
+def _format_diag_date_precise(iso: str | None) -> str:
+    """Human date + ISO for doctor reference points (e.g. Jun 10, 2026 · 2026-06-10)."""
+    raw = str(iso or "")[:10]
+    pretty = _format_diag_date_label(raw, compact=False)
+    if not raw or pretty == raw:
+        return pretty or "-"
+    return f"{pretty} · {raw}"
+
+
+def _format_diag_points_reference(readings: list[dict[str, Any]] | None) -> str:
+    """Compact precise value@date list for PDF under each trend chart."""
+    by_day: dict[str, tuple[str, Any]] = {}
+    for row in readings or []:
+        date = str(row.get("recorded_at") or "")[:10]
+        if not date:
+            continue
+        by_day[date] = (date, row.get("value"))
+    bits: list[str] = []
+    for date in sorted(by_day):
+        _d, value = by_day[date]
+        bits.append(f"{date}={_format_diag_value_label(value)}")
+    return " · ".join(bits)
+
+
 def _format_diag_value_label(value: Any) -> str:
     try:
         n = float(value)
@@ -853,16 +877,21 @@ def _sparkline_png_bytes(
                 y_off = -12
             draw.text((x + x_off, y + y_off), val_label, fill=(15, 23, 42), font=font_label, anchor=anchor)
 
-    # Reading dates only (milestones are dashed lines — no second date row)
+    # Reading dates — prefer full labels when few points so export stays precise
     axis_y_readings = height - 22
     prev_right = -1e9
     n_pts = len(coords)
+    use_compact = n_pts > 4
     for i, ((x, _y), (date, _value, _status)) in enumerate(zip(coords, points)):
-        date_label = _safe_text(_format_diag_date_label(date, compact=True))
+        date_label = _safe_text(
+            _format_diag_date_label(date, compact=use_compact)
+            if use_compact
+            else _format_diag_date_precise(date)
+        )
         if not date_label:
             continue
         # Estimate label width (~6px/char for the compact font)
-        est_w = max(28, len(date_label) * 6)
+        est_w = max(28, len(date_label) * (5.2 if use_compact else 4.6))
         if i == 0:
             anchor = "lt"
             left, right = x, x + est_w
@@ -875,9 +904,6 @@ def _sparkline_png_bytes(
         # Always keep first and last; skip middles that collide
         if i not in (0, n_pts - 1) and left < prev_right + 6:
             continue
-        if i == n_pts - 1 and left < prev_right + 4 and n_pts > 2:
-            # Prefer last date over a crowded middle that slipped through
-            pass
         draw.text((x, axis_y_readings), date_label, fill=(51, 65, 85), font=font_small, anchor=anchor)
         prev_right = right
 
@@ -902,8 +928,8 @@ def _write_single_reading_rows(
     right_x = pdf.l_margin + col_w + col_gap
     # Fixed columns so dates stay vertically aligned regardless of value length.
     tick_w = 2.8
-    date_w = 14.0
-    value_w = 26.0
+    date_w = 18.0
+    value_w = 24.0
 
     for i in range(0, len(items), 2):
         pair = items[i : i + 2]
@@ -924,7 +950,9 @@ def _write_single_reading_rows(
             latest = item.get("latest") or {}
             status = item.get("status") or latest.get("status")
             val = _format_diag_value_label(latest.get("value"))
-            date = _format_diag_date_label(latest.get("recorded_at"), compact=True)
+            date = str(latest.get("recorded_at") or "")[:10] or _format_diag_date_label(
+                latest.get("recorded_at"), compact=True
+            )
             unit_bit = f" {unit}" if unit else ""
             value_text = f"{val}{unit_bit}"
 
@@ -1292,6 +1320,7 @@ def build_diagnostics_pdf(
     legend = (
         "Green / yellow / red = target status. Gray = no reference band yet. "
         "Dashed markers = medication or lifestyle milestones (not lab results). "
+        "Each trend lists exact collection dates (YYYY-MM-DD) under the chart. "
         "Trend charts first; single readings in the compact table below."
     )
     if milestones:
@@ -1337,8 +1366,10 @@ def build_diagnostics_pdf(
 
         chart_h_mm = 52
         for index, item in enumerate(trends):
-            # title + pre-gap + chart + post-gap — keep estimate tight so pages fill
-            block_h = chart_h_mm + 13
+            points_line = _format_diag_points_reference(item.get("readings") or [])
+            # title + pre-gap + chart + points line + post-gap
+            points_h = 7.0 if points_line else 0.0
+            block_h = chart_h_mm + 13 + points_h
             if pdf.get_y() + block_h > pdf.h - pdf.b_margin:
                 pdf.add_page()
                 pdf.set_font("Helvetica", "B", 11)
@@ -1352,7 +1383,7 @@ def build_diagnostics_pdf(
             latest = item.get("latest") or {}
             status = item.get("status") or latest.get("status")
             latest_val = _format_diag_value_label(latest.get("value"))
-            latest_date = _format_diag_date_label(latest.get("recorded_at"), compact=True)
+            latest_date = _format_diag_date_precise(latest.get("recorded_at"))
             unit_bit = f" {unit}" if unit else ""
             status_bit = f" | {str(status).capitalize()}" if status in _STATUS_RGB else ""
             ref = item.get("reference") or {}
@@ -1379,7 +1410,18 @@ def build_diagnostics_pdf(
             )
             if png:
                 pdf.image(BytesIO(png), x=x, y=y_chart, w=usable_w, h=chart_h_mm)
-            pdf.set_y(y_chart + chart_h_mm + 6.0)
+            pdf.set_y(y_chart + chart_h_mm + 1.5)
+            if points_line:
+                pdf.set_font("Helvetica", "", 6.5)
+                pdf.set_text_color(71, 85, 105)
+                _pdf_multiline(
+                    pdf,
+                    _safe_text(f"Points (collection date=value): {points_line}"),
+                    h=3.2,
+                )
+                pdf.ln(1.5)
+            else:
+                pdf.ln(3.5)
 
         if singles:
             if pdf.get_y() + 20 > pdf.h - pdf.b_margin:
