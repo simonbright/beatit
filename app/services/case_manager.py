@@ -434,13 +434,29 @@ DIAGNOSTIC_PRESETS = [
     {"name": "ALT", "unit": "U/L", "category": "blood"},
     {"name": "AST", "unit": "U/L", "category": "blood"},
     {"name": "Bilirubin total", "unit": "µmol/L", "category": "blood"},
+    {"name": "Alkaline Phosphatase", "unit": "U/L", "category": "blood"},
+    {"name": "Albumin", "unit": "g/L", "category": "blood"},
     {"name": "Hemoglobin", "unit": "g/L", "category": "blood"},
-    {"name": "Platelets", "unit": "xE9/L", "category": "blood"},
+    {"name": "Hematocrit", "unit": "L/L", "category": "blood"},
+    {"name": "WBC", "unit": "x E9/L", "category": "blood"},
+    {"name": "RBC", "unit": "x E12/L", "category": "blood"},
+    {"name": "Platelets", "unit": "x E9/L", "category": "blood"},
+    {"name": "MCV", "unit": "fL", "category": "blood"},
+    {"name": "Neutrophils", "unit": "x E9/L", "category": "blood"},
+    {"name": "Lymphocytes", "unit": "x E9/L", "category": "blood"},
+    {"name": "Sodium", "unit": "mmol/L", "category": "blood"},
+    {"name": "Potassium", "unit": "mmol/L", "category": "blood"},
+    {"name": "Magnesium", "unit": "mmol/L", "category": "blood"},
     {"name": "CRP", "unit": "mg/L", "category": "blood"},
     {"name": "TSH", "unit": "mIU/L", "category": "blood"},
     {"name": "Vitamin D 25-OH", "unit": "nmol/L", "category": "blood"},
     {"name": "Vitamin B12", "unit": "pmol/L", "category": "blood"},
     {"name": "Ferritin", "unit": "µg/L", "category": "blood"},
+    {"name": "Iron", "unit": "µmol/L", "category": "blood"},
+    {"name": "TIBC", "unit": "µmol/L", "category": "blood"},
+    {"name": "Transferrin Saturation", "unit": "", "category": "blood"},
+    {"name": "Total PSA", "unit": "µg/L", "category": "blood"},
+    {"name": "Testosterone", "unit": "nmol/L", "category": "blood"},
     {"name": "CA19-9", "unit": "U/mL", "category": "blood"},
     {"name": "CEA", "unit": "ng/mL", "category": "blood"},
     # Imaging / other
@@ -1675,6 +1691,20 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
     return attach_references_to_series(
         series,
         date_of_birth=(profile or {}).get("date_of_birth"),
+        gender=(profile or {}).get("gender"),
+    )
+
+
+def diagnostic_gaps_for_profile(
+    profile: dict[str, Any] | None,
+    series: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Core-panel gaps: never recorded or older than suggested review window."""
+    from app.services.diagnostic_references import compute_diagnostic_gaps
+
+    rows = series if series is not None else group_diagnostics_for_charts(profile)
+    return compute_diagnostic_gaps(
+        series=rows,
         gender=(profile or {}).get("gender"),
     )
 

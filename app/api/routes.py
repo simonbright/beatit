@@ -164,6 +164,7 @@ from app.services.case_manager import (
     add_patient_diagnostic,
     delete_patient_diagnostic,
     group_diagnostics_for_charts,
+    diagnostic_gaps_for_profile,
     add_patient_journal_entry,
     delete_patient_journal_entry,
     update_patient_journal_entry,
@@ -2705,11 +2706,13 @@ async def api_get_patient_profile(patient_id: str):
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     profile = get_patient_profile(patient_id)
+    series = group_diagnostics_for_charts(profile)
     return {
         "patient_id": patient_id,
         "profile": profile,
         "patient": {"id": patient["id"], "label": patient["label"]},
-        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "diagnostic_series": series,
+        "diagnostic_gaps": diagnostic_gaps_for_profile(profile, series=series),
         "diagnostic_presets": DIAGNOSTIC_PRESETS,
         "journal_series": group_journal_for_charts(profile),
         "journal_presets": JOURNAL_PRESETS,

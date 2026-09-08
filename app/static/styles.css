@@ -2060,10 +2060,104 @@ body {
   color: #14532d;
 }
 
+.diag-status-filter-btn.diag-filter-gaps.is-active {
+  border-color: color-mix(in srgb, #0369a1 55%, var(--border));
+  background: color-mix(in srgb, #0369a1 12%, var(--surface));
+  color: #0c4a6e;
+}
+
 .diag-status-filter-count {
   font-weight: 700;
   opacity: 0.72;
   margin-left: 0.15rem;
+}
+
+.diag-gaps-panel {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.diag-gaps-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.diag-gaps-intro {
+  flex: 1 1 16rem;
+  margin: 0;
+  max-width: 42rem;
+}
+
+.diag-gaps-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.85rem 1rem 0.95rem;
+}
+
+.diag-gaps-heading {
+  margin: 0 0 0.55rem;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.diag-gaps-count {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.diag-gaps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.diag-gaps-group {
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #64748b);
+}
+
+.diag-gaps-group:first-child {
+  margin-top: 0;
+}
+
+.diag-gaps-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.diag-gaps-item.diag-gaps-missing {
+  border-left: 3px solid #b45309;
+}
+
+.diag-gaps-item.diag-gaps-overdue {
+  border-left: 3px solid #0369a1;
+}
+
+.diag-gaps-detail {
+  font-size: 0.82rem;
+  color: var(--muted, #64748b);
 }
 
 .diag-milestone-controls {

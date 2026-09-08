@@ -55,6 +55,8 @@ const state = {
   },
   diagMilestonePrefs: { enabled: true, selected: null },
   diagStatusFilter: "all",
+  diagnosticGaps: null,
+  diagnosticSeriesCache: null,
   coverageReport: null,
   coverageView: "all",
   analysisJobId: null,
@@ -8721,6 +8723,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   state.patientProfile = profile || null;
   state.patientProfileId = patientId || null;
   state.diagnosticSeriesCache = extras.diagnostic_series || series;
+  if (extras.diagnostic_gaps) state.diagnosticGaps = extras.diagnostic_gaps;
   renderDiagnosticsCharts(profile, series);
   const journalSeries = extras.journal_series || groupJournalClient(profile);
   renderJournalHome(profile, journalSeries);
@@ -11247,6 +11250,7 @@ function applyProfileResponse(data, { expectedPatientId = null } = {}) {
   }
   renderPatientProfile(data.profile || {}, profilePatientId, {
     diagnostic_series: data.diagnostic_series,
+    diagnostic_gaps: data.diagnostic_gaps,
     diagnostic_presets: data.diagnostic_presets,
     journal_series: data.journal_series,
     journal_presets: data.journal_presets,
@@ -11482,6 +11486,7 @@ const DIAG_STATUS_FILTERS = [
   { id: "red", label: "Off target" },
   { id: "yellow", label: "Near target" },
   { id: "green", label: "On target" },
+  { id: "gaps", label: "Gaps" },
 ];
 
 function diagSeriesStatus(s) {
@@ -11501,15 +11506,136 @@ function diagStatusSortRank(status) {
   return 3;
 }
 
-function renderDiagnosticsStatusFilter(cards) {
+function formatGapAge(days) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 0) return "";
+  if (n < 45) return `${n} day${n === 1 ? "" : "s"} ago`;
+  if (n < 370) {
+    const mo = Math.max(1, Math.round(n / 30.44));
+    return `${mo} month${mo === 1 ? "" : "s"} ago`;
+  }
+  const yr = Math.round((n / 365.25) * 10) / 10;
+  return `${yr} year${yr === 1 ? "" : "s"} ago`;
+}
+
+function buildDiagnosticGapsShareText(gaps, { patientLabel = "" } = {}) {
+  const asOf = gaps?.as_of || new Date().toISOString().slice(0, 10);
+  const lines = [
+    `Lab gaps to discuss${patientLabel ? ` — ${patientLabel}` : ""}`,
+    `As of ${formatDiagDate(asOf)}`,
+    "",
+    "Suggested intervals are for conversation only — not a prescription.",
+    "",
+  ];
+  const missing = gaps?.missing || [];
+  const overdue = gaps?.overdue || [];
+  if (missing.length) {
+    lines.push("Never recorded on this chart");
+    let group = "";
+    for (const row of missing) {
+      if (row.group && row.group !== group) {
+        group = row.group;
+        lines.push(`  ${group}`);
+      }
+      const unit = row.unit ? ` (${row.unit})` : "";
+      lines.push(`  • ${row.name}${unit} — review ${row.interval_label || "periodically"}`);
+    }
+    lines.push("");
+  }
+  if (overdue.length) {
+    lines.push("Due for update (last reading older than suggested interval)");
+    let group = "";
+    for (const row of overdue) {
+      if (row.group && row.group !== group) {
+        group = row.group;
+        lines.push(`  ${group}`);
+      }
+      const unit = row.unit ? ` ${row.unit}` : "";
+      const val =
+        row.last_value != null && row.last_value !== ""
+          ? `${formatDiagValue(row.last_value)}${unit} · `
+          : "";
+      lines.push(
+        `  • ${row.name} — last ${val}${formatDiagDate(row.last_date)} (${formatGapAge(row.age_days)}; suggested ${row.interval_label || "update"})`
+      );
+    }
+    lines.push("");
+  }
+  if (!missing.length && !overdue.length) {
+    lines.push("No gaps on the core monitoring panel right now.");
+  }
+  return lines.join("\n").trim() + "\n";
+}
+
+async function copyDiagnosticGapsList() {
+  const text = buildDiagnosticGapsShareText(state.diagnosticGaps, {
+    patientLabel: state.activePatientLabel || "",
+  });
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Gaps list copied — paste into a message or note for your doctor");
+  } catch {
+    toast("Could not copy — select the list and copy manually", "error");
+  }
+}
+
+function renderDiagnosticGapsPanel(gaps) {
+  const missing = gaps?.missing || [];
+  const overdue = gaps?.overdue || [];
+  if (!missing.length && !overdue.length) {
+    return `<div class="diag-gaps-panel" id="diag-gaps-panel">
+      <p class="muted small">Core monitoring panel looks current — nothing missing or overdue by the suggested intervals.</p>
+    </div>`;
+  }
+  const section = (title, rows, kind) => {
+    if (!rows.length) return "";
+    let group = "";
+    const items = rows
+      .map((row) => {
+        let head = "";
+        if (row.group && row.group !== group) {
+          group = row.group;
+          head = `<li class="diag-gaps-group">${escapeHtml(group)}</li>`;
+        }
+        const unit = row.unit ? ` <span class="muted">${escapeHtml(row.unit)}</span>` : "";
+        let detail = "";
+        if (kind === "missing") {
+          detail = `<span class="diag-gaps-detail">Never recorded · suggested ${escapeHtml(row.interval_label || "review")}</span>`;
+        } else {
+          const val =
+            row.last_value != null && row.last_value !== ""
+              ? `${escapeHtml(formatDiagValue(row.last_value))}${row.unit ? ` ${escapeHtml(row.unit)}` : ""} · `
+              : "";
+          detail = `<span class="diag-gaps-detail">Last ${val}${escapeHtml(formatDiagDate(row.last_date))} (${escapeHtml(formatGapAge(row.age_days))}) · suggested ${escapeHtml(row.interval_label || "update")}</span>`;
+        }
+        return `${head}<li class="diag-gaps-item diag-gaps-${kind}"><strong>${escapeHtml(row.name)}</strong>${unit}${detail}</li>`;
+      })
+      .join("");
+    return `<section class="diag-gaps-section">
+      <h4 class="diag-gaps-heading">${escapeHtml(title)} <span class="diag-gaps-count">${rows.length}</span></h4>
+      <ul class="diag-gaps-list">${items}</ul>
+    </section>`;
+  };
+  return `<div class="diag-gaps-panel" id="diag-gaps-panel">
+    <div class="diag-gaps-toolbar">
+      <p class="muted small diag-gaps-intro">Core labs that are missing entirely or past a suggested review window — copy to share with a clinician. Intervals are orientation only, not orders.</p>
+      <button type="button" class="btn secondary btn-sm" id="btn-copy-diag-gaps">Copy list</button>
+    </div>
+    ${section("Never recorded", missing, "missing")}
+    ${section("Due for update", overdue, "overdue")}
+  </div>`;
+}
+
+function renderDiagnosticsStatusFilter(cards, gaps = null) {
   const bar = document.getElementById("diagnostics-status-filter");
   if (!bar) return;
-  if (!cards.length) {
+  const gapTotal = Number(gaps?.total_count || 0);
+  if (!cards.length && !gapTotal) {
     bar.classList.add("hidden");
     bar.innerHTML = "";
     return;
   }
-  const counts = { all: cards.length, red: 0, yellow: 0, green: 0, none: 0 };
+  const counts = { all: cards.length, red: 0, yellow: 0, green: 0, none: 0, gaps: gapTotal };
   for (const s of cards) {
     const st = diagSeriesStatus(s);
     if (st === "red" || st === "yellow" || st === "green") counts[st] += 1;
@@ -11784,12 +11910,13 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   }
 
   const cards = [...bloodFirst, ...extras];
+  const gaps = state.diagnosticGaps;
   const allEvents = allChartMilestones(profile);
   if (!opts.skipControls) {
     renderDiagnosticsMilestoneControls(profile, allEvents, cards);
   }
-  if (!cards.length) {
-    renderDiagnosticsStatusFilter([]);
+  if (!cards.length && !(gaps?.total_count > 0)) {
+    renderDiagnosticsStatusFilter([], gaps);
     wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
     return;
   }
@@ -11801,10 +11928,16 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
       if (byStatus) return byStatus;
       return a.i - b.i;
     });
-  renderDiagnosticsStatusFilter(ranked.map((r) => r.s));
+  renderDiagnosticsStatusFilter(ranked.map((r) => r.s), gaps);
   const filter = DIAG_STATUS_FILTERS.some((f) => f.id === state.diagStatusFilter)
     ? state.diagStatusFilter
     : "all";
+
+  if (filter === "gaps") {
+    wrap.innerHTML = renderDiagnosticGapsPanel(gaps || { missing: [], overdue: [], total_count: 0 });
+    return;
+  }
+
   const visible =
     filter === "all" ? ranked : ranked.filter((r) => r.status === filter);
 
@@ -13665,6 +13798,11 @@ document.getElementById("diagnostics-status-filter")?.addEventListener("click", 
     diagnostic_series: state.diagnosticSeriesCache,
   });
   renderDiagnosticsCharts(profile, series, { skipControls: true });
+});
+
+document.getElementById("diagnostics-charts")?.addEventListener("click", (e) => {
+  if (!e.target.closest("#btn-copy-diag-gaps")) return;
+  copyDiagnosticGapsList().catch((err) => toast(err.message || "Copy failed", "error"));
 });
 
 document.getElementById("diag-milestones-all")?.addEventListener("click", () => {

@@ -893,3 +893,170 @@ def attach_references_to_series(
             row["readings"] = readings
         out.append(row)
     return out
+
+
+# Core panel for “what's missing / overdue” — orientation for care conversations,
+# not a prescribing protocol. Intervals are suggested review windows.
+CORE_MONITORING_METRICS: list[dict[str, Any]] = [
+    # Lipids / metabolic
+    {"name": "LDL cholesterol", "unit": "mmol/L", "group": "Lipids", "max_age_days": 365},
+    {"name": "Non-HDL cholesterol", "unit": "mmol/L", "group": "Lipids", "max_age_days": 365},
+    {"name": "Total cholesterol", "unit": "mmol/L", "group": "Lipids", "max_age_days": 365},
+    {"name": "HDL cholesterol", "unit": "mmol/L", "group": "Lipids", "max_age_days": 365},
+    {"name": "Triglyceride", "unit": "mmol/L", "group": "Lipids", "max_age_days": 365},
+    {"name": "Cholesterol/HDL ratio", "unit": "", "group": "Lipids", "max_age_days": 365},
+    {"name": "HbA1c", "unit": "%", "group": "Glucose", "max_age_days": 180},
+    {"name": "Glucose fasting", "unit": "mmol/L", "group": "Glucose", "max_age_days": 365, "aliases": ["glucose", "fasting glucose"]},
+    # Kidney / liver
+    {"name": "Creatinine", "unit": "µmol/L", "group": "Kidney", "max_age_days": 365},
+    {"name": "eGFR", "unit": "mL/min/1.73m²", "group": "Kidney", "max_age_days": 365},
+    {"name": "ALT", "unit": "U/L", "group": "Liver", "max_age_days": 365},
+    {"name": "AST", "unit": "U/L", "group": "Liver", "max_age_days": 365},
+    {"name": "Bilirubin total", "unit": "µmol/L", "group": "Liver", "max_age_days": 365},
+    {"name": "Alkaline Phosphatase", "unit": "U/L", "group": "Liver", "max_age_days": 365, "aliases": ["alp"]},
+    {"name": "Albumin", "unit": "g/L", "group": "Liver", "max_age_days": 365},
+    # CBC
+    {"name": "Hemoglobin", "unit": "g/L", "group": "CBC", "max_age_days": 365},
+    {"name": "Hematocrit", "unit": "L/L", "group": "CBC", "max_age_days": 365, "aliases": ["hct"]},
+    {"name": "WBC", "unit": "x E9/L", "group": "CBC", "max_age_days": 365},
+    {"name": "RBC", "unit": "x E12/L", "group": "CBC", "max_age_days": 365},
+    {"name": "Platelets", "unit": "x E9/L", "group": "CBC", "max_age_days": 365},
+    {"name": "MCV", "unit": "fL", "group": "CBC", "max_age_days": 365},
+    {"name": "Neutrophils", "unit": "x E9/L", "group": "CBC", "max_age_days": 365},
+    {"name": "Lymphocytes", "unit": "x E9/L", "group": "CBC", "max_age_days": 365},
+    # Electrolytes
+    {"name": "Sodium", "unit": "mmol/L", "group": "Electrolytes", "max_age_days": 365},
+    {"name": "Potassium", "unit": "mmol/L", "group": "Electrolytes", "max_age_days": 365},
+    {"name": "Magnesium", "unit": "mmol/L", "group": "Electrolytes", "max_age_days": 365},
+    # Iron / vitamins / thyroid / inflammation
+    {"name": "Ferritin", "unit": "µg/L", "group": "Iron & vitamins", "max_age_days": 365},
+    {"name": "Iron", "unit": "µmol/L", "group": "Iron & vitamins", "max_age_days": 365},
+    {"name": "TIBC", "unit": "µmol/L", "group": "Iron & vitamins", "max_age_days": 365},
+    {"name": "Transferrin Saturation", "unit": "", "group": "Iron & vitamins", "max_age_days": 365, "aliases": ["tsat", "iron saturation"]},
+    {"name": "Vitamin B12", "unit": "pmol/L", "group": "Iron & vitamins", "max_age_days": 365},
+    {"name": "Vitamin D 25-OH", "unit": "nmol/L", "group": "Iron & vitamins", "max_age_days": 365, "aliases": ["vitamin d", "25-oh vitamin d", "25 hydroxy vitamin d"]},
+    {"name": "TSH", "unit": "mIU/L", "group": "Thyroid", "max_age_days": 365},
+    {"name": "CRP", "unit": "mg/L", "group": "Inflammation", "max_age_days": 365},
+    # Sex-specific / vitals
+    {"name": "Total PSA", "unit": "µg/L", "group": "Prostate", "max_age_days": 365, "sex": "male", "aliases": ["psa"]},
+    {"name": "Testosterone", "unit": "nmol/L", "group": "Hormones", "max_age_days": 365, "sex": "male"},
+    {"name": "Systolic BP", "unit": "mmHg", "group": "Vitals", "max_age_days": 90, "aliases": ["systolic", "systolic blood pressure"]},
+    {"name": "Diastolic BP", "unit": "mmHg", "group": "Vitals", "max_age_days": 90, "aliases": ["diastolic", "diastolic blood pressure"]},
+]
+
+
+def _norm_metric_key(name: str) -> str:
+    return " ".join((name or "").strip().lower().split())
+
+
+def _series_match_index(series: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Map normalized names (+ simple aliases) to series rows."""
+    index: dict[str, dict[str, Any]] = {}
+    for row in series or []:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        key = _norm_metric_key(name)
+        index[key] = row
+        compact = key.replace("-", " ").replace("/", " ")
+        index.setdefault(compact, row)
+    return index
+
+
+def _find_series_for_metric(
+    metric: dict[str, Any], index: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    keys = [_norm_metric_key(str(metric.get("name") or ""))]
+    for alias in metric.get("aliases") or []:
+        keys.append(_norm_metric_key(str(alias)))
+    for key in keys:
+        if not key:
+            continue
+        if key in index:
+            return index[key]
+        for skey, row in index.items():
+            if key in skey or skey in key:
+                return row
+    return None
+
+
+def _interval_label(days: int) -> str:
+    if days <= 45:
+        return "about monthly"
+    if days <= 100:
+        return "about every 3 months"
+    if days <= 200:
+        return "about every 6 months"
+    if days <= 400:
+        return "about yearly"
+    return f"every {max(1, round(days / 30))} months"
+
+
+def compute_diagnostic_gaps(
+    *,
+    series: list[dict[str, Any]] | None,
+    gender: str | None = None,
+    as_of: date | None = None,
+    metrics: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return never-recorded and overdue core metrics for a shareable care list."""
+    today = as_of or date.today()
+    sex = _norm_gender(gender)
+    index = _series_match_index(series or [])
+    missing: list[dict[str, Any]] = []
+    overdue: list[dict[str, Any]] = []
+
+    for metric in metrics or CORE_MONITORING_METRICS:
+        want_sex = metric.get("sex")
+        if want_sex and sex and want_sex != sex:
+            continue
+        name = str(metric.get("name") or "").strip()
+        if not name:
+            continue
+        max_age = int(metric.get("max_age_days") or 365)
+        group = str(metric.get("group") or "Other")
+        unit = str(metric.get("unit") or "")
+        matched = _find_series_for_metric(metric, index)
+        base = {
+            "name": name,
+            "unit": unit or None,
+            "group": group,
+            "max_age_days": max_age,
+            "interval_label": _interval_label(max_age),
+        }
+        if not matched:
+            missing.append({**base, "kind": "missing", "last_date": None, "age_days": None})
+            continue
+        latest = matched.get("latest") or {}
+        last_raw = str(latest.get("recorded_at") or "")[:10]
+        try:
+            last_dt = date.fromisoformat(last_raw)
+        except ValueError:
+            missing.append({**base, "kind": "missing", "last_date": None, "age_days": None})
+            continue
+        age_days = (today - last_dt).days
+        if age_days > max_age:
+            overdue.append(
+                {
+                    **base,
+                    "kind": "overdue",
+                    "last_date": last_dt.isoformat(),
+                    "age_days": age_days,
+                    "last_value": latest.get("value"),
+                    "matched_name": matched.get("name"),
+                }
+            )
+
+    missing.sort(key=lambda r: (r.get("group") or "", r.get("name") or ""))
+    overdue.sort(
+        key=lambda r: (-(r.get("age_days") or 0), r.get("group") or "", r.get("name") or "")
+    )
+    return {
+        "as_of": today.isoformat(),
+        "missing_count": len(missing),
+        "overdue_count": len(overdue),
+        "total_count": len(missing) + len(overdue),
+        "missing": missing,
+        "overdue": overdue,
+        "items": missing + overdue,
+    }
