@@ -874,6 +874,13 @@
           <div class="analysis-run-step analysis-run-primary">
             <h4 class="analysis-run-step-title">3. Run</h4>
             <button class="btn primary btn-analysis-primary" id="btn-baseline">Run analysis</button>
+            <div class="analysis-ask-presets" role="group" aria-label="Quick questions">
+              <p class="muted small analysis-ask-presets-label">Or ask</p>
+              <div class="analysis-ask-presets-buttons">
+                <button type="button" class="btn secondary analysis-ask-preset" data-ask="missing">What am I missing?</button>
+                <button type="button" class="btn secondary analysis-ask-preset" data-ask="wrong">What's wrong with me?</button>
+              </div>
+            </div>
             <div id="analyze-running-banner" class="analysis-running-banner hidden" role="status" aria-live="polite">
               Analysis in progress — results will appear above when finished.
             </div>
@@ -975,6 +982,10 @@
         <div class="card custom-task-compose">
           <h4>New custom task</h4>
           <p class="muted small">Ask a focused question — e.g. list clinical trials, compare regimens, or investigate a specific gap. Results stay as drafts until you promote them.</p>
+          <div class="analysis-ask-presets custom-task-ask-presets" role="group" aria-label="Quick questions">
+            <button type="button" class="btn secondary analysis-ask-preset" data-ask="missing">What am I missing?</button>
+            <button type="button" class="btn secondary analysis-ask-preset" data-ask="wrong">What's wrong with me?</button>
+          </div>
           <label>Your question
             <textarea id="custom-task-query" rows="4" placeholder="e.g. List clinical trials and investigational therapeutics for metastatic pancreatic cancer relevant to this patient…"></textarea>
           </label>

@@ -3662,6 +3662,29 @@ textarea { resize: vertical; min-height: 100px; }
   padding: 0.65rem 1.25rem;
 }
 
+.analysis-ask-presets {
+  margin-top: 0.75rem;
+}
+
+.analysis-ask-presets-label {
+  margin: 0 0 0.4rem;
+}
+
+.analysis-ask-presets-buttons,
+.custom-task-ask-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.custom-task-ask-presets {
+  margin: 0.65rem 0 0.15rem;
+}
+
+.analysis-ask-preset {
+  text-align: left;
+}
+
 .analysis-guidance-details > summary {
   cursor: pointer;
   list-style: none;

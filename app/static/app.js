@@ -868,11 +868,12 @@ function setAnalysisRunning(running, jobId = null, jobType = null) {
   if (running) {
     $("#analyze-actions-card")?.setAttribute("open", "");
   }
-  ["#btn-baseline", "#btn-summarize", "#btn-analyze", "#btn-library-baseline"].forEach((sel) => {
-    const btn = $(sel);
-    if (!btn) return;
-    btn.disabled = running;
-    btn.setAttribute("aria-disabled", running ? "true" : "false");
+  ["#btn-baseline", "#btn-summarize", "#btn-analyze", "#btn-library-baseline",
+   "#btn-run-custom-task", ".analysis-ask-preset"].forEach((sel) => {
+    document.querySelectorAll(sel).forEach((btn) => {
+      btn.disabled = running;
+      btn.setAttribute("aria-disabled", running ? "true" : "false");
+    });
   });
   ["#btn-scope-select-all", "#btn-scope-clear", "#btn-scope-match-last", "#btn-scope-library",
    "#btn-scope-main-sources", "#btn-scope-type-text", "#btn-scope-type-pdf", "#btn-scope-new-uploads",
@@ -4074,6 +4075,48 @@ const ASSESSMENT_GUIDANCE_PRESETS = [
   "Focus on the report from ABC and related follow-up documents",
 ];
 
+/** One-tap patient questions → custom analysis drafts. */
+const PATIENT_ASK_PRESETS = {
+  missing: {
+    label: "What am I missing?",
+    query:
+      "What am I missing?\n\n" +
+      "Using only the documents and patient context in this library, identify important gaps: " +
+      "missing tests, incomplete workup, unresolved findings, follow-ups that appear overdue, " +
+      "and documentation that seems absent or incomplete. Distinguish clearly between " +
+      "(1) things not in the chart at all, (2) things mentioned but not completed, and (3) uncertainties. " +
+      "Cite sources. Do not invent findings.",
+  },
+  wrong: {
+    label: "What's wrong with me?",
+    query:
+      "What's wrong with me?\n\n" +
+      "Using only the documents and patient context in this library, explain in clear plain language " +
+      "what appears to be going on clinically — the main problems, how they relate, what is supported " +
+      "vs uncertain, and what still needs clarifying. Cite sources. Do not invent diagnoses beyond " +
+      "what the records support.",
+  },
+};
+
+function runPatientAskPreset(askKey) {
+  const preset = PATIENT_ASK_PRESETS[askKey];
+  if (!preset) return;
+  if (state.analysisRunning) return toast("An analysis is already running", "error");
+  const queryEl = $("#custom-task-query");
+  const analyzeEl = $("#analyze-query");
+  if (queryEl) queryEl.value = preset.query;
+  if (analyzeEl) analyzeEl.value = preset.query;
+  runAnalysis({ query: preset.query });
+}
+
+function initPatientAskPresets() {
+  document.querySelectorAll(".analysis-ask-preset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      runPatientAskPreset(btn.dataset.ask);
+    });
+  });
+}
+
 function getAssessmentGuidanceInput() {
   return $("#assessment-guidance")?.value.trim() || "";
 }
@@ -7098,6 +7141,7 @@ function bootstrapUi() {
   initImagingFilterPanel();
   initInvestigationGuidancePresets();
   initAssessmentGuidancePresets();
+  initPatientAskPresets();
   initUploadResultBanner();
   initHowToNavigation();
   updateNativeShareButton();
