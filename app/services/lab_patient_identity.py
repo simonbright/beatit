@@ -68,15 +68,81 @@ def names_match(a: str | None, b: str | None) -> bool:
     return short.issubset(long)
 
 
-def parse_dob_to_iso(raw: str | None) -> str | None:
+def _plausible_dob_year(year: int) -> bool:
+    return 1900 <= year <= datetime.now().year
+
+
+def _expand_two_digit_year(year: int) -> int:
+    """Match datetime.strptime %y: 0–68 → 2000s, 69–99 → 1900s."""
+    if year >= 100:
+        return year
+    return 2000 + year if year <= 68 else 1900 + year
+
+
+def parse_dob_candidates(raw: str | None) -> list[str]:
+    """Return plausible ISO DOB values for a raw date string.
+
+    Ambiguous numeric dates (both parts ≤ 12) yield *both* DMY and MDY
+    interpretations so Canada (DD/MM) vs USA (MM/DD) labs can match the
+    profile when either reading is correct.
+    """
     text = str(raw or "").strip()
     if not text:
-        return None
+        return []
     text = text.replace(",", " ").strip()
     text = re.sub(r"\s+", " ", text)
-    candidates = [
+
+    unambiguous = [
         "%Y-%m-%d",
         "%Y/%m/%d",
+        "%b %d %Y",
+        "%B %d %Y",
+        "%d %b %Y",
+        "%d %B %Y",
+    ]
+    for fmt in unambiguous:
+        try:
+            dt = datetime.strptime(text, fmt)
+            if _plausible_dob_year(dt.year):
+                return [dt.date().isoformat()]
+        except ValueError:
+            continue
+
+    m = re.fullmatch(r"(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})", text)
+    if m:
+        a, _sep, b, y_raw = m.groups()
+        day_or_month_a = int(a)
+        day_or_month_b = int(b)
+        year = _expand_two_digit_year(int(y_raw))
+        if not _plausible_dob_year(year):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+
+        def add(month: int, day: int) -> None:
+            try:
+                iso = datetime(year, month, day).date().isoformat()
+            except ValueError:
+                return
+            if iso not in seen:
+                seen.add(iso)
+                out.append(iso)
+
+        # DD/MM (Canada / most of world)
+        if 1 <= day_or_month_a <= 31 and 1 <= day_or_month_b <= 12:
+            add(day_or_month_b, day_or_month_a)
+        # MM/DD (USA)
+        if 1 <= day_or_month_a <= 12 and 1 <= day_or_month_b <= 31:
+            add(day_or_month_a, day_or_month_b)
+        return out
+
+    # Last resort: single best parse from remaining formats
+    single = parse_dob_to_iso_legacy(text)
+    return [single] if single else []
+
+
+def parse_dob_to_iso_legacy(text: str) -> str | None:
+    candidates = [
         "%d/%m/%Y",
         "%m/%d/%Y",
         "%d-%m-%Y",
@@ -87,17 +153,41 @@ def parse_dob_to_iso(raw: str | None) -> str | None:
         "%B %d %Y",
         "%d %b %Y",
         "%d %B %Y",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
     ]
     for fmt in candidates:
         try:
             dt = datetime.strptime(text, fmt)
-            # 2-digit years: strptime maps 0–68 → 2000s, 69–99 → 1900s — OK for DOB
-            if dt.year < 1900 or dt.year > datetime.now().year:
+            if not _plausible_dob_year(dt.year):
                 continue
             return dt.date().isoformat()
         except ValueError:
             continue
     return None
+
+
+def parse_dob_to_iso(raw: str | None) -> str | None:
+    """Best-effort single ISO DOB. Prefer unambiguous; else first candidate."""
+    cands = parse_dob_candidates(raw)
+    return cands[0] if cands else None
+
+
+def dobs_match(report_dob: str | None, profile_dob: str | None, *, raw_dob: str | None = None) -> bool:
+    """True when profile DOB matches the report ISO or any Canada/USA reading of raw_dob."""
+    profile = str(profile_dob or "").strip()[:10] or None
+    if not profile:
+        return False
+    candidates: list[str] = []
+    if raw_dob:
+        candidates.extend(parse_dob_candidates(raw_dob))
+    report = str(report_dob or "").strip()[:10] or None
+    if report and report not in candidates:
+        # Also expand report ISO via raw-less path (already ISO → one cand)
+        candidates.extend(parse_dob_candidates(report))
+    if report and report not in candidates:
+        candidates.append(report)
+    return profile in candidates
 
 
 def _patient_label(patient_id: str) -> str | None:
@@ -157,6 +247,7 @@ def extract_lab_patient_identity(text: str | None) -> dict[str, Any]:
     return {
         "name": normalize_person_name(raw_name).title() if raw_name else None,
         "date_of_birth": parse_dob_to_iso(raw_dob) if raw_dob else None,
+        "date_of_birth_candidates": parse_dob_candidates(raw_dob) if raw_dob else [],
         "raw_name": raw_name,
         "raw_dob": raw_dob,
     }
@@ -172,6 +263,7 @@ def compare_lab_patient_identity(
     profile_dob = str(profile.get("date_of_birth") or "").strip()[:10] or None
     report_name = (extracted or {}).get("name") or (extracted or {}).get("raw_name")
     report_dob = (extracted or {}).get("date_of_birth")
+    raw_dob = (extracted or {}).get("raw_dob")
 
     name_ok: bool | None = None
     dob_ok: bool | None = None
@@ -189,18 +281,27 @@ def compare_lab_patient_identity(
     elif label and not report_name:
         name_ok = None
 
-    if report_dob and profile_dob:
-        dob_ok = report_dob == profile_dob
+    dob_candidates = parse_dob_candidates(raw_dob) if raw_dob else []
+    if report_dob and report_dob not in dob_candidates:
+        dob_candidates = [*dob_candidates, str(report_dob)[:10]]
+
+    if (report_dob or raw_dob) and profile_dob:
+        dob_ok = dobs_match(report_dob, profile_dob, raw_dob=raw_dob)
         if not dob_ok:
+            shown = report_dob or (raw_dob or "?")
+            alt = ""
+            if len(dob_candidates) > 1:
+                alt = f" (also read as {', '.join(c for c in dob_candidates if c != shown)})"
             issues.append(
-                f"Report DOB {report_dob} does not match profile DOB {profile_dob}"
+                f"Report DOB {shown}{alt} does not match profile DOB {profile_dob}"
             )
-    elif report_dob and not profile_dob:
+    elif (report_dob or raw_dob) and not profile_dob:
         dob_ok = None
+        shown = report_dob or raw_dob
         issues.append(
-            f"Report DOB is {report_dob} but this patient’s profile has no date of birth set"
+            f"Report DOB is {shown} but this patient’s profile has no date of birth set"
         )
-    elif profile_dob and not report_dob:
+    elif profile_dob and not report_dob and not raw_dob:
         dob_ok = None
 
     mismatch = bool(issues) and (
@@ -215,6 +316,7 @@ def compare_lab_patient_identity(
         "profile_date_of_birth": profile_dob,
         "report_name": report_name,
         "report_date_of_birth": report_dob,
+        "report_dob_candidates": dob_candidates,
         "name_match": name_ok,
         "dob_match": dob_ok,
         "mismatch": hard_mismatch,
