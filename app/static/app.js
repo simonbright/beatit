@@ -202,7 +202,12 @@ async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses =
     } catch (err) {
       lastErr = err;
       const status = err?.status;
-      const retriable = retryStatuses.includes(status);
+      const network =
+        !status &&
+        /Failed to fetch|NetworkError|Load failed|timed out|Bad Gateway/i.test(
+          String(err?.message || err || "")
+        );
+      const retriable = retryStatuses.includes(status) || network;
       if (!retriable || attempt === retries) throw err;
       const backoff = status === 429 ? 4000 * (attempt + 1) : 1200 * (attempt + 1);
       await sleep(backoff);
@@ -886,18 +891,63 @@ function setAnalysisRunning(running, jobId = null, jobType = null) {
 
 async function pollAnalysisJob(jobId, { isCustomQuery = false, taskId = null } = {}) {
   const deadline = Date.now() + 30 * 60 * 1000;
+  let transientFails = 0;
   while (Date.now() < deadline) {
-    const data = await api(`/api/analyze/jobs/${jobId}`);
+    let data;
+    try {
+      // Render free/starter can briefly 502 while the worker is busy or restarting.
+      data = await apiWithRetries(
+        `/api/analyze/jobs/${jobId}`,
+        { timeoutMs: 45000 },
+        { retries: 6, retryStatuses: [502, 503, 504] }
+      );
+      transientFails = 0;
+    } catch (err) {
+      const status = err?.status;
+      const network =
+        !status &&
+        /Failed to fetch|NetworkError|Load failed|timed out|Bad Gateway/i.test(
+          String(err?.message || err || "")
+        );
+      if (status === 502 || status === 503 || status === 504 || network) {
+        transientFails += 1;
+        if (taskId) {
+          updateAnalysisBackgroundTask(taskId, {
+            id: jobId,
+            status: "running",
+            query: isCustomQuery ? "Still running — reconnecting…" : "",
+          });
+        }
+        if (isCustomQuery) {
+          updateCustomTasksRunningBanner(true, "Still running — server briefly unavailable, retrying…");
+        }
+        await sleep(Math.min(20000, 2500 * transientFails));
+        continue;
+      }
+      throw err;
+    }
     const job = data.job;
+    if (!job) {
+      await sleep(2000);
+      continue;
+    }
     if (taskId) updateAnalysisBackgroundTask(taskId, job);
     if (job.status === "completed") {
       if (job.analysis) return job.analysis;
       if (job.analysis_id) {
-        const byId = await api(`/api/analyses/${job.analysis_id}`);
+        const byId = await apiWithRetries(
+          `/api/analyses/${job.analysis_id}`,
+          { timeoutMs: 45000 },
+          { retries: 4, retryStatuses: [502, 503, 504] }
+        );
         if (byId.analysis) return byId.analysis;
       }
       if (!isCustomQuery) {
-        const latest = await api("/api/analyses/latest");
+        const latest = await apiWithRetries(
+          "/api/analyses/latest",
+          { timeoutMs: 45000 },
+          { retries: 4, retryStatuses: [502, 503, 504] }
+        );
         if (latest.analysis) return latest.analysis;
       }
       throw new Error("Analysis finished but results could not be loaded. Check Custom Tasks.");
@@ -916,7 +966,11 @@ async function pollAnalysisJob(jobId, { isCustomQuery = false, taskId = null } =
   if (isCustomQuery) {
     throw new Error("Custom task is still running. Check Custom Tasks for status.");
   }
-  const latest = await api("/api/analyses/latest");
+  const latest = await apiWithRetries(
+    "/api/analyses/latest",
+    { timeoutMs: 45000 },
+    { retries: 4, retryStatuses: [502, 503, 504] }
+  );
   if (latest.analysis) return latest.analysis;
   throw new Error("Analysis is taking longer than expected. Refresh the page to check status.");
 }
