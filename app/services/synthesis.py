@@ -14,6 +14,7 @@ from app.services.source_policy import (
     COMPREHENSIVE_SYNTHESIS_RULES,
     CUSTOM_QUERY_RESPONSE_STRUCTURE,
     LIST_ITEM_SOURCE_RULES,
+    PATIENT_ASK_RESPONSE_STRUCTURE,
     SOURCE_ATTRIBUTION_RULES,
     TRIAL_SEARCH_QUERY_INSTRUCTIONS,
     infer_assessment_specialty,
@@ -28,7 +29,7 @@ from app.services.case_manager import format_profile_for_prompt, get_active_cont
 
 MEDICAL_SYSTEM_TEMPLATE = """{reviewer_context}
 
-Patient demographics and vitals:
+Patient demographics, labs, logs, and medications:
 {patient_demographics}
 
 Patient and case context (baseline — update as new evidence arrives):
@@ -301,6 +302,20 @@ def _is_trial_search_query(query: str) -> bool:
     return any(keyword in lower for keyword in keywords)
 
 
+def _is_patient_ask_query(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    markers = (
+        "what am i missing",
+        "what's wrong with me",
+        "whats wrong with me",
+        "what is wrong with me",
+    )
+    head = q[:240]
+    return any(m in head for m in markers)
+
+
 def _response_structure_for_analysis(
     *,
     analysis_type: str,
@@ -308,6 +323,8 @@ def _response_structure_for_analysis(
     specialty: dict[str, str] | None = None,
 ) -> str:
     if analysis_type == "query":
+        if _is_patient_ask_query(query):
+            return f"{PATIENT_ASK_RESPONSE_STRUCTURE}\n\n{LIST_ITEM_SOURCE_RULES}"
         structure = f"{CUSTOM_QUERY_RESPONSE_STRUCTURE}\n\n{LIST_ITEM_SOURCE_RULES}"
         if _is_trial_search_query(query):
             structure = f"{structure}\n\n{TRIAL_SEARCH_QUERY_INSTRUCTIONS}"
@@ -437,6 +454,17 @@ class SynthesisService:
             patient_context=patient_setting,
         )
 
+        tracked = format_profile_for_prompt(
+            pinned_patient_id, pinned_patient_label, rich=True
+        )
+        tracked_section = ""
+        if tracked.strip():
+            tracked_section = (
+                "\n=== PATIENT TRACKED DATA "
+                "(labs, logs, medications, measurements — cite [SOURCE: Patient profile]) ===\n"
+                f"{tracked}\n"
+            )
+
         if include_baseline_assessment and not query.strip():
             analysis_type = "baseline"
             query = specialty["baseline_query"]
@@ -474,6 +502,13 @@ class SynthesisService:
             f"do not default to oncology.\n"
         )
 
+        ask_hint = ""
+        if analysis_type == "query" and _is_patient_ask_query(query):
+            ask_hint = (
+                "\nFor this patient ask: weigh the most recent labs and recent logs first, "
+                "then historical trends; end with concrete Suggested responses.\n"
+            )
+
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
 {inventory_section}{coverage_section}
@@ -482,13 +517,13 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 {chat_titles_block}
 === STORED DOCUMENTS ===
 {corpus_text}
-{chat_section}{prior_section}{guidance_section}
+{tracked_section}{chat_section}{prior_section}{guidance_section}
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
-{case_focus_line}{gap_rules}
+{case_focus_line}{ask_hint}{gap_rules}
 {_response_structure_for_analysis(analysis_type=analysis_type, query=query, specialty=specialty)}
 
-CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."] or another SOURCE tag.
+CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."], [SOURCE: Patient profile], or another SOURCE tag.
 Do NOT write parenthetical citations like (CT Report). Use [SOURCE: Document "exact title"] only.
 Do NOT mention palliative care, hospice, or comfort care anywhere in the response.
 Do NOT substitute a generic case summary when the user asked for a specific deliverable (e.g. a trial list).

@@ -224,7 +224,7 @@ class SourceCatalog:
         label = (raw_label or "").strip()
         lower = label.casefold()
 
-        if lower.startswith("patient context"):
+        if lower.startswith("patient context") or lower.startswith("patient profile"):
             return self._build_entry("patient_context", label, display_label=self.type_info("patient_context")["display"])
 
         if "inference" in lower and "not verified" in lower:

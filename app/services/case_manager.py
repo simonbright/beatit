@@ -1746,7 +1746,17 @@ def age_years_from_dob(date_of_birth: str | None, on_date: str | None = None) ->
     return max(0, years)
 
 
-def format_profile_for_prompt(patient_id: str | None, patient_label: str | None = None) -> str:
+def format_profile_for_prompt(
+    patient_id: str | None,
+    patient_label: str | None = None,
+    *,
+    rich: bool = True,
+) -> str:
+    """Format demographics, labs, logs, and meds for LLM prompts.
+
+    ``rich=True`` (default for analysis) includes longer lab trends, journal
+    history, symptom series, and milestones so asks can use accumulated data.
+    """
     if not patient_id:
         return ""
     profile = get_patient_profile(patient_id)
@@ -1780,7 +1790,7 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
         history = profile.get("measurements") or []
         if len(history) > 1:
             hist_lines = []
-            for m in history[:8]:
+            for m in history[: (12 if rich else 8)]:
                 parts = [str(m.get("recorded_at") or "?")]
                 if m.get("height_cm") is not None:
                     parts.append(f"{m['height_cm']} cm")
@@ -1788,22 +1798,40 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
                     parts.append(f"{m['weight_kg']} kg")
                 hist_lines.append(" / ".join(parts))
             lines.append("Measurement history: " + "; ".join(hist_lines))
-    for series in group_diagnostics_for_charts(profile)[:10]:
-        latest = series.get("latest") or {}
+
+    diag_series = group_diagnostics_for_charts(profile)
+    diag_limit = 30 if rich else 10
+    trend_n = 8 if rich else 5
+    if diag_series:
+        lines.append(
+            "Lab / diagnostic readings (most recent first within each metric; cite as Patient profile):"
+        )
+    for series in diag_series[:diag_limit]:
+        latest_row = series.get("latest") or {}
         unit = f" {series['unit']}" if series.get("unit") else ""
-        if latest.get("value") is None:
+        if latest_row.get("value") is None:
             continue
-        line = f"{series['name']}: {latest['value']}{unit} ({latest.get('recorded_at') or '?'})"
+        line = (
+            f"{series['name']}: {latest_row['value']}{unit} "
+            f"({latest_row.get('recorded_at') or '?'})"
+        )
         if series["point_count"] > 1:
             trend = ", ".join(
                 f"{r.get('recorded_at')}: {r.get('value')}"
-                for r in (series.get("readings") or [])[-5:]
+                for r in (series.get("readings") or [])[-trend_n:]
             )
-            line += f" · trend {trend}"
+            line += f" · history {trend}"
         lines.append(line)
-    journal_rows = recent_journal_for_prompt(profile)
+
+    journal_days = 90 if rich else 14
+    journal_limit = 80 if rich else 20
+    journal_rows = recent_journal_for_prompt(
+        profile, days=journal_days, limit=journal_limit
+    )
     if journal_rows:
-        lines.append("Recent self-reports (last 14 days):")
+        lines.append(
+            f"Self-reports / logs (last {journal_days} days; cite as Patient profile):"
+        )
         for row in journal_rows:
             bits = [
                 str(row.get("recorded_at") or "?")[:16],
@@ -1815,6 +1843,22 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
             if row.get("text"):
                 bits.append(str(row["text"])[:120])
             lines.append("  · " + " · ".join(b for b in bits if b))
+
+    if rich:
+        for series in group_journal_for_charts(profile)[:12]:
+            readings = series.get("readings") or []
+            if len(readings) < 2:
+                continue
+            trend = ", ".join(
+                f"{r.get('recorded_at')}: {r.get('value')}"
+                for r in readings[-8:]
+            )
+            unit = series.get("unit") or ""
+            lines.append(
+                f"Log trend · {series.get('label') or series.get('name')}"
+                f"{f' ({unit})' if unit else ''}: {trend}"
+            )
+
     meds = profile.get("medications") or []
     active_meds = [m for m in meds if (m.get("status") or "active") == "active"]
     stopped_meds = [m for m in meds if (m.get("status") or "") == "stopped"]
@@ -1851,6 +1895,17 @@ def format_profile_for_prompt(patient_id: str | None, patient_label: str | None 
             if m.get("stopped_at"):
                 bits.append(f"stopped {m['stopped_at']}")
             lines.append("  · " + " · ".join(b for b in bits if b))
+
+    milestones = profile.get("milestones") or []
+    if rich and milestones:
+        lines.append("Timeline milestones:")
+        for m in milestones[:15]:
+            if not isinstance(m, dict):
+                continue
+            label = str(m.get("label") or m.get("kind") or "milestone").strip()
+            when = str(m.get("recorded_at") or m.get("date") or "?")[:10]
+            lines.append(f"  · {when}: {label}")
+
     if not lines:
         return ""
     return "\n".join(f"- {line}" for line in lines)

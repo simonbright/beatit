@@ -4075,26 +4075,29 @@ const ASSESSMENT_GUIDANCE_PRESETS = [
   "Focus on the report from ABC and related follow-up documents",
 ];
 
-/** One-tap patient questions → custom analysis drafts. */
+/** One-tap patient questions → custom analysis drafts over labs, logs, and history. */
 const PATIENT_ASK_PRESETS = {
   missing: {
     label: "What am I missing?",
     query:
       "What am I missing?\n\n" +
-      "Using only the documents and patient context in this library, identify important gaps: " +
-      "missing tests, incomplete workup, unresolved findings, follow-ups that appear overdue, " +
-      "and documentation that seems absent or incomplete. Distinguish clearly between " +
-      "(1) things not in the chart at all, (2) things mentioned but not completed, and (3) uncertainties. " +
-      "Cite sources. Do not invent findings.",
+      "Synthesize the accumulated BeatIt record for this person: most recent labs (with trends), " +
+      "recent and historical logs/self-reports, medications, measurements, milestones, and library documents.\n\n" +
+      "Identify important gaps: missing tests, incomplete workup, unresolved findings, overdue follow-ups, " +
+      "and documentation that seems absent. Distinguish (1) not in the chart, (2) mentioned but not done, " +
+      "(3) uncertain. Then give concrete Suggested responses — questions to ask the clinician, records to request, " +
+      "and what to track next in the Log. Cite [SOURCE: Patient profile] for labs/logs/meds and documents by title. " +
+      "Do not invent findings.",
   },
   wrong: {
     label: "What's wrong with me?",
     query:
       "What's wrong with me?\n\n" +
-      "Using only the documents and patient context in this library, explain in clear plain language " +
-      "what appears to be going on clinically — the main problems, how they relate, what is supported " +
-      "vs uncertain, and what still needs clarifying. Cite sources. Do not invent diagnoses beyond " +
-      "what the records support.",
+      "Using the full accumulated record — latest labs and their history, logs/symptoms over time, medications, " +
+      "measurements, milestones, and library documents — explain in clear plain language what appears to be going on. " +
+      "Relate symptoms to lab trends and meds where the data support it. Separate supported findings from uncertainty.\n\n" +
+      "End with Suggested responses: practical next steps and questions for the care team grounded in this record. " +
+      "Cite [SOURCE: Patient profile] for tracked data and Document sources for files. Do not invent diagnoses.",
   },
 };
 

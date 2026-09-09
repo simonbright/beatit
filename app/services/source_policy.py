@@ -7,6 +7,7 @@ SOURCE ATTRIBUTION (mandatory — every clinical claim must be tagged):
 - [SOURCE: Web — https://example.org/page] — external web page where you found the fact (ClinicalTrials.gov, NCI, journal, guideline site). Use the full https URL.
 - [SOURCE: Web — NCT01234567] — clinical trial by NCT ID (links to ClinicalTrials.gov automatically)
 - [SOURCE: Patient context] — from configured patient context only (not verified clinical record)
+- [SOURCE: Patient profile] — labs, logs, measurements, medications, or milestones from the patient's BeatIt profile
 - [SOURCE: AI inference — not verified] — your interpretation; NOT hard data
 - [SOURCE: Unknown] — gap not supported by stored documents; do NOT present as established fact
 
@@ -259,6 +260,35 @@ Tag gaps with [SOURCE: Unknown].
 Do NOT include baseline-only sections such as "What we know", "Staging & workup", "Clinical status & workup", or "Questions for the … team" unless the user explicitly asked for them.
 """
 
+PATIENT_ASK_RESPONSE_STRUCTURE = """
+This is a PATIENT ASK — synthesize the FULL accumulated record for this person.
+
+You MUST use:
+1. PATIENT TRACKED DATA below (labs with history, logs/self-reports, medications, measurements, milestones)
+2. STORED DOCUMENTS in the library
+3. Prior assessment only when it clarifies trends
+
+Emphasize the most recent labs and recent logs, then place them in historical context (trends over time).
+Do not invent values. If a metric or symptom is absent, say so.
+
+Structure your response with these sections:
+### Executive summary
+2–4 plain-language sentences answering the question. Tag sources.
+
+### What the record shows
+Synthesize labs (latest + trend), logs/symptoms, medications, and key documents.
+Call out what is new vs longstanding. Tag [SOURCE: Patient profile] for tracked data and [SOURCE: Document "…"] for files.
+
+### Suggested responses
+Concrete, actionable suggestions the patient or caregiver can use next — e.g. questions to ask the clinician, tests or records to request, lifestyle/medication follow-ups that the data support, and what to monitor in the Log.
+Each suggestion should be specific and grounded in the evidence above (or tagged [SOURCE: Unknown] / [SOURCE: AI inference — not verified] when interpretive).
+
+### Gaps & uncertainty
+What is still missing or unclear, and why it matters.
+
+### Disclaimer
+"""
+
 LIST_ITEM_SOURCE_RULES = """
 LIST & TABLE SOURCE RULES (mandatory for numbered lists of trials, drugs, regimens, tests, or options):
 
@@ -269,6 +299,7 @@ Each numbered list item MUST include exactly ONE "- Sources:" sub-bullet at the 
   Use this when the item comes from general specialty knowledge and there is NO matching document or URL in the library.
 - Sources: [SOURCE: Web — https://clinicaltrials.gov/study/NCT…] when you cite a specific trial page or external guideline URL.
 - Sources: [SOURCE: Patient context] — only when the list item is purely about a patient fact from settings (e.g. a biomarker), not for therapies/trials.
+- Sources: [SOURCE: Patient profile] — when the item is from tracked labs, logs, measurements, or medications.
 
 Do NOT put [SOURCE: AI inference — not verified] on every mechanism or relevance sub-bullet. Put source attribution once on the "- Sources:" line.
 Sub-bullets (mechanism, relevance, verification) may omit SOURCE tags unless they cite a specific document or patient fact.
