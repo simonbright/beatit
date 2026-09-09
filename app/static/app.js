@@ -7,6 +7,8 @@ const state = {
   libraryCounts: {},
   libraryView: "documents",
   diagImportSourceDocumentId: null,
+  medImportSourceDocumentId: null,
+  medImportLocalPreviewUrl: null,
   diagImportPatientMismatch: false,
   diagImportPatientIdentity: null,
   handlingFlags: { items: [], count: 0, critical_count: 0 },
@@ -8925,7 +8927,7 @@ function renderMedicationsHome(profile) {
       <div class="medication-row-main">
         ${formatMedicationTitleHtml(m)}${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}${
           isStopped ? `<span class="medication-stopped-pill">Stopped</span>` : ""
-        }
+        }${medicationSourcePhotoLink(m)}
         <p class="medication-row-meta">${escapeHtml(meta)}</p>
         ${formatMedicationConditions(m)}
         ${formatMedicationHistory(m)}
@@ -9819,7 +9821,7 @@ function renderMedicationsSettings(profile) {
          <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
     return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
       <div class="medication-row-main">
-        ${formatMedicationTitleHtml(m)}${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}
+        ${formatMedicationTitleHtml(m)}${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}${medicationSourcePhotoLink(m)}
         <p class="medication-row-meta">${escapeHtml(meta)}</p>
         ${formatMedicationConditions(m)}
         ${formatMedicationHistory(m)}
@@ -9958,6 +9960,67 @@ function setMedImportStatus(text, { error = false } = {}) {
   el.classList.remove("hidden");
 }
 
+function revokeMedImportLocalPreview() {
+  if (state.medImportLocalPreviewUrl) {
+    try {
+      URL.revokeObjectURL(state.medImportLocalPreviewUrl);
+    } catch {
+      /* ignore */
+    }
+    state.medImportLocalPreviewUrl = null;
+  }
+}
+
+function setMedImportFileName(file) {
+  const el = document.getElementById("med-import-file-name");
+  if (!el) return;
+  el.textContent = file ? file.name : "";
+}
+
+function renderMedImportPreview({ documentId = null, localUrl = null, title = "" } = {}) {
+  const el = document.getElementById("med-import-preview");
+  if (!el) return;
+  const src = documentId
+    ? `/api/documents/${encodeURIComponent(documentId)}/file`
+    : localUrl || "";
+  if (!src) {
+    el.innerHTML = "";
+    el.classList.add("hidden");
+    return;
+  }
+  const label = title ? escapeHtml(title) : "Stored photo";
+  const link = documentId
+    ? `<a class="med-import-preview-link muted small" href="${escapeHtml(src)}" target="_blank" rel="noopener">Open stored photo</a>`
+    : `<span class="muted small">Photo will be saved to Library when you run Read &amp; review</span>`;
+  el.innerHTML = `<img class="med-import-preview-img" src="${escapeHtml(src)}" alt="${label}">${link}`;
+  el.classList.remove("hidden");
+}
+
+function pickMedImportFile() {
+  const camera = document.getElementById("med-import-camera");
+  const fileInput = document.getElementById("med-import-file");
+  if (camera?.files?.length) return camera.files[0];
+  if (fileInput?.files?.length) return fileInput.files[0];
+  return null;
+}
+
+function onMedImportFilePicked(input) {
+  const file = input?.files?.[0] || null;
+  // Keep a single selected file across the two inputs
+  const otherId = input?.id === "med-import-camera" ? "med-import-file" : "med-import-camera";
+  const other = document.getElementById(otherId);
+  if (other && input?.files?.length) other.value = "";
+  setMedImportFileName(file);
+  revokeMedImportLocalPreview();
+  state.medImportSourceDocumentId = null;
+  if (file && String(file.type || "").startsWith("image/")) {
+    state.medImportLocalPreviewUrl = URL.createObjectURL(file);
+    renderMedImportPreview({ localUrl: state.medImportLocalPreviewUrl, title: file.name });
+  } else {
+    renderMedImportPreview({});
+  }
+}
+
 function clearMedImportReview() {
   const wrap = document.getElementById("med-import-review");
   const list = document.getElementById("med-import-review-list");
@@ -9965,7 +10028,19 @@ function clearMedImportReview() {
   wrap?.classList.add("hidden");
   const file = document.getElementById("med-import-file");
   if (file) file.value = "";
+  const camera = document.getElementById("med-import-camera");
+  if (camera) camera.value = "";
+  state.medImportSourceDocumentId = null;
+  revokeMedImportLocalPreview();
+  setMedImportFileName(null);
+  renderMedImportPreview({});
   setMedImportStatus("");
+}
+
+function medicationSourcePhotoLink(m) {
+  const docId = String(m?.source_document_id || "").trim();
+  if (!docId) return "";
+  return `<a class="med-source-photo-link" href="/api/documents/${escapeHtml(docId)}/file" target="_blank" rel="noopener" title="Open source photo">Photo</a>`;
 }
 
 function setDiagImportStatus(text, { error = false } = {}) {
@@ -10166,8 +10241,18 @@ function renderMedImportReview(data) {
   const method = meta.extraction_method || "unknown";
   const chars = meta.extracted_chars != null ? `${meta.extracted_chars} chars` : "";
   const bits = [`Extracted via ${method}${chars ? ` · ${chars}` : ""}`];
+  if (data.document_id) bits.push("photo saved to Library");
   if (warnings.length) bits.push(warnings.join(" · "));
   setMedImportStatus(bits.join(" — "));
+
+  state.medImportSourceDocumentId = data.document_id || null;
+  if (data.document_id) {
+    revokeMedImportLocalPreview();
+    renderMedImportPreview({
+      documentId: data.document_id,
+      title: data.document?.title || "Medication list photo",
+    });
+  }
 
   if (!proposed.length) {
     list.innerHTML = `<p class="muted small">No medications detected. Try a clearer photo or PDF.</p>`;
@@ -14027,12 +14112,11 @@ document.getElementById("med-identity-hint")?.addEventListener("click", (event) 
 
 document.getElementById("btn-import-medications")?.addEventListener("click", async () => {
   if (!state.activePatientId) return toast("Select a patient first", "error");
-  const fileInput = document.getElementById("med-import-file");
-  const file = fileInput?.files?.[0];
-  if (!file) return toast("Choose a PDF or image first", "error");
+  const file = pickMedImportFile();
+  if (!file) return toast("Take a photo or choose a PDF/image first", "error");
   const btn = document.getElementById("btn-import-medications");
   if (btn) btn.disabled = true;
-  setMedImportStatus("Extracting and parsing medications…");
+  setMedImportStatus("Reading photo and parsing medications…");
   try {
     const fd = new FormData();
     fd.append("file", file);
@@ -14049,6 +14133,13 @@ document.getElementById("btn-import-medications")?.addEventListener("click", asy
   } finally {
     if (btn) btn.disabled = false;
   }
+});
+
+document.getElementById("med-import-camera")?.addEventListener("change", (event) => {
+  onMedImportFilePicked(event.target);
+});
+document.getElementById("med-import-file")?.addEventListener("change", (event) => {
+  onMedImportFilePicked(event.target);
 });
 
 document.getElementById("btn-med-import-select-all")?.addEventListener("click", () => {
@@ -14068,7 +14159,10 @@ document.getElementById("btn-med-import-confirm")?.addEventListener("click", asy
   try {
     const data = await api(`/api/patients/${state.activePatientId}/medications/import/confirm`, {
       method: "POST",
-      body: JSON.stringify({ medications }),
+      body: JSON.stringify({
+        medications,
+        source_document_id: state.medImportSourceDocumentId || null,
+      }),
     });
     applyProfileResponse(data);
     clearMedImportReview();
@@ -14078,6 +14172,16 @@ document.getElementById("btn-med-import-confirm")?.addEventListener("click", asy
   } finally {
     if (btn) btn.disabled = false;
   }
+});
+
+document.getElementById("btn-med-add-from-photo")?.addEventListener("click", () => {
+  switchTab("settings", {
+    settingsSection: "profile",
+    profileSection: "medications",
+    settingsFocus: "#medication-import-block",
+  });
+  // Prefer opening the camera picker on mobile
+  setTimeout(() => document.getElementById("med-import-camera")?.click(), 250);
 });
 
 document.getElementById("btn-import-diagnostics")?.addEventListener("click", async () => {

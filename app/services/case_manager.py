@@ -1029,6 +1029,7 @@ def add_patient_medication(
     ended_at: str | None = None,
     category: str | None = None,
     show_on_log: bool | None = None,
+    source_document_id: str | None = None,
 ) -> dict[str, Any] | None:
     from uuid import uuid4
 
@@ -1090,6 +1091,9 @@ def add_patient_medication(
         "updated_at": now,
         "dosage_history": [],
     }
+    doc_id = (source_document_id or "").strip() or None
+    if doc_id:
+        entry["source_document_id"] = doc_id[:120]
     from app.services.medication_identity import apply_identity_fields
 
     apply_identity_fields(entry)

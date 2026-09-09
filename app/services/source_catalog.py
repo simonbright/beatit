@@ -100,6 +100,7 @@ DEFAULT_SOURCE_TYPES: dict[str, dict[str, str]] = {
 DOCUMENT_SOURCE_TYPE_MAP: dict[str, str] = {
     "imaging": "diagnostic",
     "pdf": "document",
+    "image": "document",
     "text": "document",
     "chat_observation": "chat_observation",
     "url": "web",

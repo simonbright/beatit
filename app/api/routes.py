@@ -3626,10 +3626,12 @@ class PatientMedicationConfirmItem(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     started_at: str | None = Field(default=None, max_length=20)
     ended_at: str | None = Field(default=None, max_length=20)
+    source_document_id: str | None = Field(default=None, max_length=120)
 
 
 class PatientMedicationConfirmRequest(BaseModel):
     medications: list[PatientMedicationConfirmItem] = Field(default_factory=list, max_length=80)
+    source_document_id: str | None = Field(default=None, max_length=120)
 
 
 @router.get("/patients/{patient_id}/medications/export.pdf")
@@ -3741,12 +3743,15 @@ async def api_import_patient_medications(
     if not any(p["id"] == patient_id for p in patients):
         raise HTTPException(status_code=404, detail="Patient not found")
     content = await file.read()
+    _, _, llm, _, _ = await _get_services()
     try:
         result = await propose_medications_from_upload(
             patient_id,
             content,
             content_type=file.content_type,
             filename=file.filename,
+            llm=llm,
+            persist_document=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3763,6 +3768,7 @@ async def api_confirm_patient_medications_import(
         raise HTTPException(status_code=404, detail="Patient not found")
     if not body.medications:
         raise HTTPException(status_code=400, detail="Select at least one medication to add")
+    default_doc_id = (body.source_document_id or "").strip() or None
     added: list[dict[str, Any]] = []
     errors: list[str] = []
     for raw in body.medications:
@@ -3770,6 +3776,7 @@ async def api_confirm_patient_medications_import(
         if clamped is None:
             errors.append("Skipped an invalid row")
             continue
+        row_doc_id = (raw.source_document_id or "").strip() or default_doc_id
         try:
             entry = add_patient_medication(
                 patient_id,
@@ -3780,6 +3787,7 @@ async def api_confirm_patient_medications_import(
                 notes=clamped.get("notes"),
                 started_at=clamped.get("started_at"),
                 ended_at=clamped.get("ended_at"),
+                source_document_id=row_doc_id,
             )
         except ValueError as exc:
             errors.append(str(exc))

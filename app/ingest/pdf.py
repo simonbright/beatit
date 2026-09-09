@@ -638,7 +638,8 @@ async def _ocr_image_with_vision(
                 {
                     "type": "text",
                     "text": (
-                        "This attachment is a clinical lab report photo or scan. "
+                        "This attachment is a clinical document photo or scan "
+                        "(lab report, medication list, prescription bottle, or similar). "
                         "Transcribe ALL readable text exactly. Preserve headings, "
                         "labels, numbers, and line breaks. Return only the transcript."
                     ),
@@ -835,6 +836,24 @@ def extract_med_list_text(
         meta["source_kind"] = "pdf"
         return text, meta
     return extract_image_text(content)
+
+
+async def extract_med_list_text_async(
+    content: bytes,
+    *,
+    content_type: str | None = None,
+    filename: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Async med-list extract: local OCR/PDF, then OpenRouter vision for thin images."""
+    kind = validate_med_import_upload(
+        content, content_type=content_type, filename=filename
+    )
+    if kind == "pdf":
+        text, meta = await extract_pdf_text_async(content)
+        meta = dict(meta)
+        meta["source_kind"] = "pdf"
+        return text, meta
+    return await extract_image_text_async(content, filename=filename)
 
 
 def is_empty_med_extract(text: str | None) -> bool:

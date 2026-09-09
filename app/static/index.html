@@ -630,6 +630,7 @@
                 </select>
                 <button type="button" class="btn secondary btn-sm" id="btn-export-medications-pdf" title="Download medications PDF">Export PDF</button>
               </div>
+              <button type="button" class="btn secondary btn-sm" id="btn-med-add-from-photo" title="Photograph a bottle or med list">Add from photo</button>
               <button type="button" class="btn secondary btn-sm" id="btn-med-safety-home">Health oversight</button>
               <button type="button" class="btn ghost btn-sm" id="btn-medications-settings">Manage in Settings</button>
             </div>
@@ -1655,14 +1656,22 @@
           <button type="button" class="btn secondary btn-sm" id="btn-export-medications-pdf-settings" title="Download medications PDF">Export PDF</button>
         </div>
         <div class="medication-import-block" id="medication-import-block">
-          <p class="muted small">Have a printed or photo list? Import a PDF or image, review the parsed rows, then add what looks right.</p>
+          <p class="muted small">Take a photo of a bottle, blister pack, or printed med list — or upload a PDF/image. We’ll read it, store the photo in your Library, then you review before adding.</p>
           <div class="medication-import-controls row-between wrap">
-            <label class="medication-import-file-label" for="med-import-file">
-              <span class="sr-only">Medications list file</span>
-              <input type="file" id="med-import-file" accept=".pdf,image/jpeg,image/png,image/webp,image/*">
-            </label>
-            <button type="button" class="btn secondary btn-sm" id="btn-import-medications">Import list</button>
+            <div class="medication-import-file-actions">
+              <label class="btn secondary btn-sm medication-import-file-btn" for="med-import-camera">
+                Take photo
+                <input type="file" id="med-import-camera" class="sr-only" accept="image/*" capture="environment">
+              </label>
+              <label class="btn ghost btn-sm medication-import-file-btn" for="med-import-file">
+                Choose file
+                <input type="file" id="med-import-file" class="sr-only" accept=".pdf,image/jpeg,image/png,image/webp,image/*">
+              </label>
+              <span class="muted small" id="med-import-file-name" aria-live="polite"></span>
+            </div>
+            <button type="button" class="btn secondary btn-sm" id="btn-import-medications">Read &amp; review</button>
           </div>
+          <div id="med-import-preview" class="med-import-preview hidden" aria-live="polite"></div>
           <p class="muted small hidden" id="med-import-status" role="status"></p>
           <div id="med-import-review" class="med-import-review hidden" aria-live="polite">
             <div class="row-between wrap med-import-review-head">

@@ -1653,6 +1653,20 @@ body {
   margin-top: 0.35rem;
 }
 
+.medication-import-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.medication-import-file-btn {
+  cursor: pointer;
+  margin: 0;
+}
+
 .medication-import-file-label {
   flex: 1 1 12rem;
   min-width: 0;
@@ -1661,6 +1675,32 @@ body {
 .medication-import-file-label input[type="file"] {
   max-width: 100%;
   font-size: 0.85rem;
+}
+
+.med-import-preview {
+  margin-top: 0.65rem;
+}
+
+.med-import-preview-img {
+  display: block;
+  max-width: min(100%, 22rem);
+  max-height: 12rem;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.med-import-preview-link {
+  display: inline-block;
+  margin-top: 0.35rem;
+}
+
+.med-source-photo-link {
+  margin-left: 0.35rem;
+  font-size: 0.85em;
 }
 
 .med-import-review {
