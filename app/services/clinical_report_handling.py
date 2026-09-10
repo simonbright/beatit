@@ -473,7 +473,15 @@ def flag_item_from_document(
 def _suggested_actions(reasons: list[str], *, meta: dict[str, Any] | None = None) -> list[dict[str, str]]:
     actions: list[dict[str, str]] = []
     if REASON_NEEDS_OCR in reasons:
-        label = "Retry OCR" if (meta or {}).get("auto_ocr_attempted") else "Re-extract / OCR"
+        has_text = int((meta or {}).get("extracted_chars") or 0) > 40 and not (
+            meta or {}
+        ).get("needs_ocr")
+        if (meta or {}).get("auto_ocr_attempted"):
+            label = "Re-extract text"
+        elif has_text:
+            label = "Re-extract text"
+        else:
+            label = "Extract text"
         actions.append({"id": "reextract", "label": label})
     if any(
         r in reasons

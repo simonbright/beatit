@@ -87,6 +87,8 @@ const state = {
 
 const backgroundTasks = new Map();
 let backgroundStatusTimer = null;
+/** Document ids with extract / re-extract currently running in this browser. */
+const documentExtractInFlight = new Set();
 
 /** Soft cache of full profile API payloads keyed by patient id — paint instantly, revalidate. */
 const patientProfileCache = new Map();
@@ -5114,11 +5116,11 @@ function renderLibraryDocItem(doc, { compact = false } = {}) {
       : "";
   const reextractBtn =
     editable && String(doc.source_type || "").toLowerCase() === "pdf"
-      ? `<button type="button" class="btn ghost btn-reextract" data-id="${doc.id}" title="Re-run text extraction / OCR">Re-extract</button>`
+      ? extractTextButtonHtml(doc, { className: "btn ghost btn-reextract" })
       : "";
   const replaceBtn =
     editable && String(doc.source_type || "").toLowerCase() === "pdf"
-      ? `<button type="button" class="btn ghost btn-replace-file" data-id="${doc.id}" title="Re-upload the PDF if the stored file is missing">Replace file</button><input type="file" class="hidden doc-replace-file-input" data-id="${doc.id}" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/*">`
+      ? `<button type="button" class="btn ghost btn-replace-file" data-id="${doc.id}" title="Re-upload the PDF if the stored file is missing" ${documentExtractBusy(doc) ? "disabled" : ""}>Replace file</button><input type="file" class="hidden doc-replace-file-input" data-id="${doc.id}" accept=".pdf,application/pdf,image/jpeg,image/png,image/webp,image/*">`
       : "";
   const deleteBtn = editable
     ? `<button class="btn danger btn-delete" data-id="${doc.id}">Delete</button>`
@@ -6930,11 +6932,9 @@ async function viewDocument(id) {
     }
     const isPdf = String(doc.source_type || "").toLowerCase() === "pdf";
     if (isPdf) {
+      links.push(extractTextButtonHtml(doc, { className: "btn secondary btn-reextract" }));
       links.push(
-        `<button type="button" class="btn secondary btn-reextract" data-id="${escapeHtml(doc.id)}">Re-extract / OCR</button>`
-      );
-      links.push(
-        `<button type="button" class="btn secondary btn-replace-file" data-id="${escapeHtml(doc.id)}">Replace file</button>`
+        `<button type="button" class="btn secondary btn-replace-file" data-id="${escapeHtml(doc.id)}" ${documentExtractBusy(doc) ? "disabled" : ""}>Replace file</button>`
       );
       links.push(
         `<input type="file" class="hidden doc-replace-file-input" data-id="${escapeHtml(doc.id)}" accept=".pdf,application/pdf">`
@@ -6956,10 +6956,12 @@ async function viewDocument(id) {
       );
     } else if (meta.needs_ocr || meta.extraction_method === "empty") {
       links.push(
-        `<span class="muted small">This looks like a scanned/image PDF. Re-extract runs OCR so analysis and chat can read it.</span>`
+        `<span class="muted small">This looks like a scanned/image PDF. Use <strong>Extract text</strong> to run OCR so analysis and chat can read it.</span>`
       );
     } else if (meta.extraction_method === "ocr") {
       links.push(`<span class="muted small">Text was recovered with OCR (${meta.extracted_chars || "?"} chars).</span>`);
+    } else if (documentExtractBusy(doc)) {
+      links.push(`<span class="muted small">Text extraction in progress…</span>`);
     }
     actionsEl.innerHTML = links.join("") || '<span class="muted small">No original file stored for this item.</span>';
   }
@@ -7045,84 +7047,186 @@ async function deleteDocument(id) {
 }
 
 async function reextractDocument(id) {
-  await withBackgroundTask({
-    id: `reextract-${id}-${Date.now()}`,
-    label: "Re-extracting PDF / OCR…",
-    run: async ({ setDetail }) => {
-      setDetail("Running text extraction and OCR if needed…");
-      const data = await api(`/api/documents/${encodeURIComponent(id)}/reextract`, {
-        method: "POST",
-        timeoutMs: 600000,
-      });
-      const method = data.document?.metadata?.extraction_method || "unknown";
-      const needs = data.document?.metadata?.needs_ocr;
-      const handling = data.handling || data.document?.handling;
-      if (data.lab_import || handling?.status === "flagged") {
-        notifyLabImportResult(data.lab_import, {
-          fallbackToast: needs
-            ? "Still little text — flagged for OCR review"
-            : `Re-extracted (${method})`,
-          handling,
-        });
-      } else if (needs) {
-        const hint = data.document?.metadata?.ocr_hint || data.document?.metadata?.vision_error;
-        toast(
-          hint
-            ? `Still little text — ${hint}`
-            : "Still little text — OCR tools may be unavailable, or the scan is unreadable",
-          "error"
+  if (!id) return;
+  if (documentExtractBusy(id)) {
+    toast("Text extraction already in progress for this file");
+    return;
+  }
+  const before = findLibraryDocument(id);
+  const firstPass = !(before && documentHasUsableExtract(before));
+  setDocumentExtractBusy(id, true);
+  try {
+    await withBackgroundTask({
+      id: `reextract-${id}-${Date.now()}`,
+      label: firstPass ? "Extracting text…" : "Re-extracting text…",
+      run: async ({ setDetail }) => {
+        setDetail(
+          firstPass
+            ? "Extracting text (OCR if needed)…"
+            : "Re-running text extraction and OCR if needed…"
         );
-        await refreshHandlingFlags();
-      } else {
-        const kindLabel = data.document?.metadata?.clinical_report_kind_label;
-        toast(
-          kindLabel
-            ? `Re-extracted (${method}) · tagged as ${kindLabel}`
-            : `Re-extracted (${method})`
+        const data = await apiWithRetries(
+          `/api/documents/${encodeURIComponent(id)}/reextract`,
+          { method: "POST", timeoutMs: 600000 },
+          { retries: 2, retryStatuses: [502, 503, 504] }
         );
-        await refreshHandlingFlags();
-      }
-      await loadDocuments();
-      await loadDocumentIndex();
-      if (state.activeDocumentId === id) {
-        await viewDocument(id);
-      }
-    },
+        const method = data.document?.metadata?.extraction_method || "unknown";
+        const needs = data.document?.metadata?.needs_ocr;
+        const handling = data.handling || data.document?.handling;
+        const doneVerb = firstPass ? "Extracted" : "Re-extracted";
+        if (data.lab_import || handling?.status === "flagged") {
+          notifyLabImportResult(data.lab_import, {
+            fallbackToast: needs
+              ? "Still little text — flagged for OCR review"
+              : `${doneVerb} (${method})`,
+            handling,
+          });
+        } else if (needs) {
+          const hint = data.document?.metadata?.ocr_hint || data.document?.metadata?.vision_error;
+          toast(
+            hint
+              ? `Still little text — ${hint}`
+              : "Still little text — OCR tools may be unavailable, or the scan is unreadable",
+            "error"
+          );
+          await refreshHandlingFlags();
+        } else {
+          const kindLabel = data.document?.metadata?.clinical_report_kind_label;
+          toast(
+            kindLabel
+              ? `${doneVerb} (${method}) · tagged as ${kindLabel}`
+              : `${doneVerb} (${method})`
+          );
+          await refreshHandlingFlags();
+        }
+        await loadDocuments();
+        await loadDocumentIndex();
+        if (state.activeDocumentId === id) {
+          await viewDocument(id);
+        }
+      },
+    });
+  } finally {
+    setDocumentExtractBusy(id, false);
+  }
+}
+
+function findLibraryDocument(id) {
+  return (
+    (state.documents || []).find((d) => d.id === id) ||
+    (state.documentIndex || []).find((d) => d.id === id) ||
+    null
+  );
+}
+
+function documentHasUsableExtract(doc) {
+  if (!doc) return false;
+  const meta = doc.metadata || {};
+  if (meta.ingest_processing) return false;
+  const method = String(meta.extraction_method || "").toLowerCase();
+  if (method === "empty" || meta.needs_ocr) return false;
+  const chars = Number(meta.extracted_chars || 0);
+  if (Number.isFinite(chars) && chars > 40) return true;
+  if (method && method !== "empty") return true;
+  return Boolean(doc.extracted_path);
+}
+
+function documentExtractBusy(docOrId) {
+  const id = typeof docOrId === "string" ? docOrId : docOrId?.id;
+  if (!id) return false;
+  if (documentExtractInFlight.has(id)) return true;
+  const doc =
+    typeof docOrId === "object" && docOrId
+      ? docOrId
+      : findLibraryDocument(id);
+  return Boolean(doc?.metadata?.ingest_processing);
+}
+
+function extractTextButtonLabel(doc, { busy = null } = {}) {
+  const isBusy = busy == null ? documentExtractBusy(doc) : busy;
+  if (isBusy) return "Extracting…";
+  return documentHasUsableExtract(doc) ? "Re-extract text" : "Extract text";
+}
+
+function extractTextButtonHtml(doc, { className = "btn ghost btn-reextract" } = {}) {
+  const id = doc?.id;
+  if (!id) return "";
+  const busy = documentExtractBusy(doc);
+  const hasText = documentHasUsableExtract(doc);
+  const label = extractTextButtonLabel(doc, { busy });
+  const title = busy
+    ? "Text extraction already in progress"
+    : hasText
+      ? "Run text extraction / OCR again"
+      : "Extract text from this file (OCR if needed)";
+  const disabled = busy ? ' disabled aria-busy="true"' : "";
+  return `<button type="button" class="${escapeHtml(className)}" data-id="${escapeHtml(id)}" title="${escapeHtml(title)}"${disabled}>${escapeHtml(label)}</button>`;
+}
+
+function setDocumentExtractBusy(id, busy) {
+  if (!id) return;
+  if (busy) documentExtractInFlight.add(id);
+  else documentExtractInFlight.delete(id);
+  document.querySelectorAll(`.btn-reextract[data-id="${CSS.escape(id)}"]`).forEach((btn) => {
+    btn.disabled = Boolean(busy);
+    btn.setAttribute("aria-busy", busy ? "true" : "false");
+    if (busy) {
+      btn.textContent = "Extracting…";
+      btn.title = "Text extraction already in progress";
+      return;
+    }
+    const doc = findLibraryDocument(id);
+    btn.textContent = extractTextButtonLabel(doc || { id }, { busy: false });
+    btn.title = documentHasUsableExtract(doc)
+      ? "Run text extraction / OCR again"
+      : "Extract text from this file (OCR if needed)";
+  });
+  document.querySelectorAll(`.btn-replace-file[data-id="${CSS.escape(id)}"]`).forEach((btn) => {
+    btn.disabled = Boolean(busy);
   });
 }
 
 async function replaceDocumentFile(id, file) {
   if (!id || !file) return;
-  await withBackgroundTask({
-    id: `replace-file-${id}-${Date.now()}`,
-    label: "Replacing PDF and extracting…",
-    run: async ({ setDetail }) => {
-      setDetail(`Uploading ${file.name}…`);
-      const fd = new FormData();
-      fd.append("file", file);
-      const data = await api(`/api/documents/${encodeURIComponent(id)}/replace-file`, {
-        method: "POST",
-        body: fd,
-        timeoutMs: 600000,
-      });
-      const method = data.document?.metadata?.extraction_method || "unknown";
-      const handling = data.handling || data.document?.handling;
-      if (data.lab_import || handling?.status === "flagged") {
-        notifyLabImportResult(data.lab_import, {
-          fallbackToast: `File replaced · extracted (${method})`,
-          handling,
-        });
-      } else {
-        toast(`File replaced · extracted (${method})`);
-        await refreshHandlingFlags();
-      }
-      await loadDocuments();
-      await loadDocumentIndex();
-      if (state.activeDocumentId === id) {
-        await viewDocument(id);
-      }
-    },
-  });
+  if (documentExtractBusy(id)) {
+    toast("Text extraction already in progress for this file");
+    return;
+  }
+  setDocumentExtractBusy(id, true);
+  try {
+    await withBackgroundTask({
+      id: `replace-file-${id}-${Date.now()}`,
+      label: "Replacing file and extracting text…",
+      run: async ({ setDetail }) => {
+        setDetail(`Uploading ${file.name}…`);
+        const fd = new FormData();
+        fd.append("file", file);
+        const data = await apiWithRetries(
+          `/api/documents/${encodeURIComponent(id)}/replace-file`,
+          { method: "POST", body: fd, timeoutMs: 600000 },
+          { retries: 2, retryStatuses: [502, 503, 504] }
+        );
+        const method = data.document?.metadata?.extraction_method || "unknown";
+        const handling = data.handling || data.document?.handling;
+        if (data.lab_import || handling?.status === "flagged") {
+          notifyLabImportResult(data.lab_import, {
+            fallbackToast: `File replaced · extracted (${method})`,
+            handling,
+          });
+        } else {
+          toast(`File replaced · extracted (${method})`);
+          await refreshHandlingFlags();
+        }
+        await loadDocuments();
+        await loadDocumentIndex();
+        if (state.activeDocumentId === id) {
+          await viewDocument(id);
+        }
+      },
+    });
+  } finally {
+    setDocumentExtractBusy(id, false);
+  }
 }
 
 function pickReplaceDocumentFile(id) {
@@ -7330,11 +7434,13 @@ safeOn("#btn-close-detail", "click", () => closeDocumentDetail());
 safeOn("#doc-detail-actions", "click", (event) => {
   const reextractBtn = event.target.closest(".btn-reextract");
   if (reextractBtn?.dataset.id) {
+    if (reextractBtn.disabled) return;
     reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
     return;
   }
   const replaceBtn = event.target.closest(".btn-replace-file");
   if (replaceBtn?.dataset.id) {
+    if (replaceBtn.disabled) return;
     pickReplaceDocumentFile(replaceBtn.dataset.id);
     return;
   }
@@ -7399,11 +7505,13 @@ safeOn("#documents-list", "click", (event) => {
   }
   const reextractBtn = event.target.closest(".btn-reextract");
   if (reextractBtn?.dataset.id) {
+    if (reextractBtn.disabled) return;
     reextractDocument(reextractBtn.dataset.id).catch((e) => toast(e.message, "error"));
     return;
   }
   const replaceBtn = event.target.closest(".btn-replace-file");
   if (replaceBtn?.dataset.id) {
+    if (replaceBtn.disabled) return;
     pickReplaceDocumentFile(replaceBtn.dataset.id);
     return;
   }
@@ -10279,7 +10387,7 @@ function renderDiagImportReview(data) {
   setDiagImportStatus(bits.join(" — "), { error: Boolean(data.patient_mismatch) });
 
   if (!proposed.length) {
-    list.innerHTML = `<p class="muted small">No lab readings detected. Try Re-extract / OCR on the document, or a clearer PDF.</p>`;
+    list.innerHTML = `<p class="muted small">No lab readings detected. Try Extract text / OCR on the document, or a clearer PDF.</p>`;
     wrap.classList.remove("hidden");
     return;
   }
