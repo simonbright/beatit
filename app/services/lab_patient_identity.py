@@ -101,6 +101,10 @@ def parse_dob_candidates(raw: str | None) -> list[str]:
         "%d %B %Y",
         "%d-%b-%Y",  # LifeLabs: 27-OCT-2011
         "%d-%B-%Y",
+        "%d-%b-%y",  # LifeLabs service date: 01-SEP-26
+        "%d-%B-%y",
+        "%d/%b/%Y",
+        "%d/%b/%y",
     ]
     for fmt in unambiguous:
         try:
@@ -157,6 +161,8 @@ def parse_dob_to_iso_legacy(text: str) -> str | None:
         "%d %B %Y",
         "%d-%b-%Y",
         "%d-%B-%Y",
+        "%d-%b-%y",
+        "%d-%B-%y",
         "%Y-%m-%d",
         "%Y/%m/%d",
     ]

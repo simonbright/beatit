@@ -261,6 +261,87 @@ def parse_diagnostics_json(raw: str) -> tuple[list[dict[str, Any]], list[str]]:
     return proposed, warnings
 
 
+_SERVICE_DATE_RE = re.compile(
+    r"(?im)(?:Date\s+of\s+Service|Collected|Collection\s+Date|Specimen\s+Date|Drawn)\s*[:\-]?\s*"
+    r"(\d{1,2}[-/][A-Za-z]{3,9}[-/]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})"
+)
+
+# Common LifeLabs / Canadian panel rows: NAME … VALUE [FLAG] [REF] UNIT
+_HEURISTIC_LAB_TESTS: list[tuple[str, str, str]] = [
+    ("Alanine Transaminase (ALT)", r"ALANINE\s+TRANSAMINASE(?:\s*\(ALT\))?|\bALT\b", "U/L"),
+    ("25-Hydroxy Vitamin D", r"25-HYDROXY\s+VITAMIN\s+D|VITAMIN\s+D\b", "nmol/L"),
+    ("Vitamin B12", r"VITAMIN\s+B12|\bB12\b", "pmol/L"),
+    ("Thyroid Stimulating Hormone", r"THYROID\s+STIMULATING\s+HORMONE|\bTSH\b", "mIU/L"),
+    ("Ferritin", r"\bFERRITIN\b", "ug/L"),
+    ("Hemoglobin", r"\bHEMOGLOBIN\b|\bHGB\b|\bHB\b", "g/L"),
+    ("Creatinine", r"\bCREATININE\b", "umol/L"),
+    ("Glucose", r"\bGLUCOSE\b", "mmol/L"),
+    ("HDL Cholesterol", r"\bHDL\b", "mmol/L"),
+    ("LDL Cholesterol", r"\bLDL\b", "mmol/L"),
+    ("Triglycerides", r"\bTRIGLYCERIDES?\b", "mmol/L"),
+    ("HbA1c", r"\bHBA1C\b|HEMOGLOBIN\s+A1C", "%"),
+]
+
+
+def _parse_lab_service_date(text: str) -> str | None:
+    from app.services.lab_patient_identity import parse_dob_to_iso
+
+    m = _SERVICE_DATE_RE.search(text or "")
+    if not m:
+        return None
+    return parse_dob_to_iso(m.group(1))
+
+
+def heuristic_parse_lab_panel(text: str) -> list[dict[str, Any]]:
+    """Regex fallback for clear panel layouts (e.g. LifeLabs) when LLM returns nothing."""
+    body = str(text or "")
+    if not body.strip():
+        return []
+    service_date = _parse_lab_service_date(body)
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for display_name, name_pat, default_unit in _HEURISTIC_LAB_TESTS:
+        # Allow OCR to smash columns together: NAME value [LO|HI] [ref] unit
+        pat = re.compile(
+            rf"(?is)({name_pat})[^\n\d]{{0,40}}?"
+            rf"(?P<value>\d{{1,4}}(?:\.\d{{1,3}})?)\s*"
+            rf"(?:(?P<flag>LO|HI|H|L)\b)?\s*"
+            rf"(?:(?P<ref><\s*\d+(?:\.\d+)?|>\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?)\s*)?"
+            rf"(?P<unit>U/L|nmol/L|pmol/L|mIU/L|ug/L|µg/L|g/L|mmol/L|mg/L|umol/L|%|IU/L)?",
+        )
+        m = pat.search(body)
+        if not m:
+            continue
+        key = display_name.lower()
+        if key in seen:
+            continue
+        try:
+            value = float(m.group("value"))
+        except (TypeError, ValueError):
+            continue
+        unit = (m.group("unit") or default_unit or "").strip() or default_unit
+        flag = (m.group("flag") or "").strip().upper()
+        notes = None
+        if flag in {"LO", "L"}:
+            notes = "LO"
+        elif flag in {"HI", "H"}:
+            notes = "HI"
+        row = clamp_proposed_diagnostic(
+            {
+                "name": display_name,
+                "value": value,
+                "unit": unit,
+                "recorded_at": service_date,
+                "notes": notes,
+                "category": "blood",
+            }
+        )
+        if row:
+            seen.add(key)
+            found.append(row)
+    return found
+
+
 def diagnostic_identity_key(
     name: str | None,
     recorded_at: str | None,
@@ -438,6 +519,16 @@ async def _propose_from_text(
 
     proposed, parse_warnings = parse_diagnostics_json(raw)
     warnings.extend(parse_warnings)
+    if not proposed:
+        heuristic = heuristic_parse_lab_panel(clipped)
+        if heuristic:
+            proposed = heuristic
+            warnings.append(
+                f"Used table fallback parser ({len(heuristic)} reading(s)) after model returned none"
+            )
+            if meta is not None:
+                meta = {**(meta or {}), "extraction_method": (meta or {}).get("extraction_method") or "heuristic"}
+                meta["parse_method"] = "heuristic_panel"
     proposed, overlap_warnings, _ = annotate_proposed_duplicates(proposed, patient_id)
     warnings.extend(overlap_warnings)
     missing_dates = sum(1 for p in proposed if not p.get("recorded_at"))

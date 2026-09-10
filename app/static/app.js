@@ -8756,6 +8756,9 @@ async function activatePatientCase(patientId, caseId, { label } = {}) {
       toast("Could not switch case", "error");
       return false;
     }
+    // Close pickers immediately so mobile/desktop both leave the switch UI.
+    hideModal("modal-switch-case");
+    hideModal("modal-new-case");
     // Soft switch — refresh context without a full page reload so success is obvious.
     try {
       await loadCaseContext();
@@ -8767,7 +8770,12 @@ async function activatePatientCase(patientId, caseId, { label } = {}) {
       ]);
       hideSwitchProgress();
       clearSwitchBusyState();
-      toast(label ? `Now working on ${label}` : "Switched patient / case");
+      const clean =
+        String(label || "")
+          .replace(/^Switching to\s+/i, "")
+          .replace(/…\s*$/, "")
+          .trim() || null;
+      toast(clean ? `Now working on ${clean}` : "Switched patient / case");
       return true;
     } catch (err) {
       // Fall back to hard reload if soft refresh fails
@@ -10364,11 +10372,16 @@ function renderDiagImportReview(data) {
   const wrap = document.getElementById("diag-import-review");
   const list = document.getElementById("diag-import-review-list");
   if (!wrap || !list) return;
-  // Ensure Settings → Profile is visible for review when importing from Library
-  switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-import-review" });
+  // Labs import UI lives under Settings → Who profile → Labs (not Basics).
+  switchTab("settings", {
+    settingsSection: "profile",
+    profileSection: "labs",
+    settingsFocus: "#diag-import-review",
+  });
+  setProfileSection("labs", { scroll: true, focusSelector: "#diag-import-review" });
   const proposed = data.proposed || [];
   const meta = data.extraction_meta || {};
-  state.diagImportSourceDocumentId = meta.document_id || null;
+  state.diagImportSourceDocumentId = meta.document_id || data.document_id || null;
   state.diagImportPatientMismatch = Boolean(data.patient_mismatch);
   state.diagImportPatientIdentity = data.patient_identity || null;
   const warnings = data.warnings || [];
@@ -10384,11 +10397,18 @@ function renderDiagImportReview(data) {
     );
   }
   if (warnings.length) bits.push(warnings.join(" · "));
-  setDiagImportStatus(bits.join(" — "), { error: Boolean(data.patient_mismatch) });
+  setDiagImportStatus(bits.join(" — "), { error: Boolean(data.patient_mismatch) || !proposed.length });
 
   if (!proposed.length) {
-    list.innerHTML = `<p class="muted small">No lab readings detected. Try Extract text / OCR on the document, or a clearer PDF.</p>`;
+    const preview = String(data.extracted_preview || "").trim();
+    const previewBit = preview
+      ? `<details class="diag-import-empty-preview"><summary class="muted small">Show extracted text preview</summary><pre class="muted small">${escapeHtml(preview.slice(0, 1200))}</pre></details>`
+      : "";
+    list.innerHTML = `<p class="muted small">No lab readings detected in the parsed text. Try <strong>Extract text</strong> on the Library document, then Import to Labs again — or enter readings manually below.</p>${previewBit}`;
     wrap.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     return;
   }
 
@@ -10507,6 +10527,11 @@ async function importDiagnosticsFromLibraryDocument(docId) {
   if (!state.activePatientId) return toast("Select a patient first", "error");
   if (!docId) return;
   setDiagImportStatus("Parsing lab results from document…");
+  switchTab("settings", {
+    settingsSection: "profile",
+    profileSection: "labs",
+    settingsFocus: "#diag-import-status",
+  });
   try {
     const data = await api(`/api/patients/${state.activePatientId}/diagnostics/import/from-document`, {
       method: "POST",
@@ -10514,10 +10539,16 @@ async function importDiagnosticsFromLibraryDocument(docId) {
       timeoutMs: 300000,
     });
     renderDiagImportReview(data);
-    toast(`Parsed ${(data.proposed || []).length} lab reading(s)`);
+    const n = (data.proposed || []).length;
+    if (n > 0) toast(`Parsed ${n} lab reading(s) — review under Labs`);
+    else toast("No lab readings found in the text — check Labs review for details", "error");
   } catch (err) {
     setDiagImportStatus(err.message || "Import failed", { error: true });
-    switchTab("settings", { settingsSection: "profile", settingsFocus: "#diag-import-status" });
+    switchTab("settings", {
+      settingsSection: "profile",
+      profileSection: "labs",
+      settingsFocus: "#diag-import-status",
+    });
     toast(err.message || "Import failed", "error");
   }
 }
