@@ -44,6 +44,8 @@ const state = {
   caseContextReady: false,
   patientProfileId: null,
   logObservationsRequest: 0,
+  logObservations: [],
+  logObservationsKey: null,
   mobileLogDays: 1,
   mobileLogView: "timeline",
   diagnosticPresets: [],
@@ -85,6 +87,16 @@ const state = {
 
 const backgroundTasks = new Map();
 let backgroundStatusTimer = null;
+
+/** Soft cache of full profile API payloads keyed by patient id — paint instantly, revalidate. */
+const patientProfileCache = new Map();
+/** Cached log observations keyed by `${patientId}:${days}`. */
+const logObservationsCache = new Map();
+let profileRefreshPromise = null;
+let profileRefreshPatientId = null;
+let logLiveTimer = null;
+let logDayBoundaryTimer = null;
+let logLiveTick = 0;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -2458,10 +2470,15 @@ function setHomeSection(section, { scroll = false } = {}) {
   });
   syncStickyHeaderOffset();
   if (next === "log") {
-    renderMobileLogRecent();
+    renderMobileLogRecent({ softObservations: true });
     syncPatientSpecificLogTiles();
+    ensureLogLiveUpdates();
+    // Revalidate quietly — never jump the page while the user is already on Log.
+    refreshActivePatientProfile({ background: true }).catch(() => {});
+  } else {
+    stopLogLiveUpdates();
   }
-  if (changed && (next === "diagnostics" || next === "medications" || next === "log")) {
+  if (changed && (next === "diagnostics" || next === "medications")) {
     refreshActivePatientProfile().catch(() => {});
   }
   if (changed && next === "flagged") {
@@ -2471,7 +2488,12 @@ function setHomeSection(section, { scroll = false } = {}) {
     loadCoverageReport().catch((e) => toast(e.message || "Could not load coverage", "error"));
   }
   if (next === "log" && isMobileLogLayout()) {
-    focusMobileLogViewport({ behavior: scroll ? "smooth" : "auto" });
+    // Only snap to top when entering Log or when scroll was requested — not on quiet revalidate.
+    if (changed || scroll) {
+      focusMobileLogViewport({ behavior: scroll ? "smooth" : "auto" });
+    } else {
+      syncHomeLogFocusClass();
+    }
     return;
   }
   syncHomeLogFocusClass();
@@ -7208,6 +7230,7 @@ function bootstrapUi() {
   initHeaderCollapse();
   syncStickyHeaderOffset();
   window.addEventListener("resize", syncStickyHeaderOffset);
+  initLogLiveUpdates();
   // Avoid flashing "No assessment yet" before /api/analyses/latest returns
   renderHomeState(false);
 }
@@ -8731,25 +8754,48 @@ async function loadCaseContext() {
     state.activeCaseId = ctx.case_id || null;
     state.activePatientLabel = ctx.patient_label || label || null;
     if (prevPatientId !== state.activePatientId) {
-      clearPatientScopedLogState({ keepPatientId: true });
-    } else {
-      state.patientProfile = null;
-      state.patientProfileId = null;
-      syncMobileLogForLabel();
+      clearPatientScopedLogState({ keepPatientId: true, deferRender: true });
+      if (!restorePatientProfileFromCache(state.activePatientId)) {
+        renderLogObservations([]);
+        renderMobileLogRecent({ softObservations: false });
+        const recentEl = document.getElementById("journal-recent");
+        if (recentEl) {
+          recentEl.innerHTML = state.activePatientId
+            ? logLoadingHtml("Loading logs…")
+            : `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to log how you feel."))}</p>`;
+        }
+      }
+    } else if (
+      !state.patientProfile ||
+      state.patientProfileId !== state.activePatientId
+    ) {
+      // Same patient, but profile missing — paint soft cache immediately if we have it.
+      restorePatientProfileFromCache(state.activePatientId);
     }
     state.diagStatusFilter = "all";
     state.coverageReport = null;
     if (ctx.patient_id) {
       syncMobileLogRangeControl();
-      // Clear tiles until this patient's profile loads — never reuse prior person's order.
-      const grid = document.getElementById("mobile-log-grid");
-      if (grid) grid.innerHTML = logLoadingHtml("Loading log options…");
-      const orderEl = document.getElementById("log-tiles-order-list");
-      if (orderEl) orderEl.innerHTML = logLoadingHtml("Loading log tiles…");
-      await refreshActivePatientProfile();
+      const hasCached =
+        state.patientProfileId === state.activePatientId && !!state.patientProfile;
+      if (!hasCached) {
+        // Clear tiles until this patient's profile loads — never reuse prior person's order.
+        const grid = document.getElementById("mobile-log-grid");
+        if (grid) grid.innerHTML = logLoadingHtml("Loading log options…");
+        const orderEl = document.getElementById("log-tiles-order-list");
+        if (orderEl) orderEl.innerHTML = logLoadingHtml("Loading log tiles…");
+      }
+      if (hasCached) {
+        // Instant paint already done — refresh in background so data stays current.
+        refreshActivePatientProfile({ background: true }).catch(() => {});
+      } else {
+        await refreshActivePatientProfile();
+      }
+      if (state.homeSection === "log") ensureLogLiveUpdates();
     } else {
       syncPatientSpecificLogTiles();
       renderPatientProfile({}, null);
+      stopLogLiveUpdates();
     }
     if (state.homeSection === "coverage") {
       loadCoverageReport().catch(() => {});
@@ -10986,12 +11032,14 @@ function syncMobileLogRangeControl() {
   syncMobileLogViewControl();
 }
 
-function clearPatientScopedLogState({ keepPatientId = false } = {}) {
+function clearPatientScopedLogState({ keepPatientId = false, deferRender = false } = {}) {
   state.patientProfile = null;
   state.patientProfileId = null;
   state.journalDraft = emptyJournalDraft();
   state.quickScaleKey = null;
   state.logObservationsRequest += 1;
+  state.logObservations = [];
+  state.logObservationsKey = null;
   hideModal("modal-journal");
   hideModal("modal-quick-scale");
   if (!keepPatientId) {
@@ -10999,8 +11047,9 @@ function clearPatientScopedLogState({ keepPatientId = false } = {}) {
   }
   syncMobileLogForLabel();
   syncMobileLogRangeControl();
+  if (deferRender) return;
   renderLogObservations([]);
-  renderMobileLogRecent();
+  renderMobileLogRecent({ softObservations: false });
   const recentEl = document.getElementById("journal-recent");
   if (recentEl) {
     recentEl.innerHTML = state.activePatientId
@@ -11150,11 +11199,11 @@ function renderMobileLogTimelineRows(entries) {
     .join("");
 }
 
-function renderMobileLogRecent() {
+function renderMobileLogRecent({ softObservations = true, preserveScroll = false } = {}) {
   const el = document.getElementById("mobile-log-recent");
   if (!el) return;
   syncMobileLogRangeControl();
-  refreshLogObservations();
+  refreshLogObservations({ soft: softObservations });
   if (!state.activePatientId) {
     el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to start logging."))}</p>`;
     return;
@@ -11170,24 +11219,52 @@ function renderMobileLogRecent() {
     return;
   }
   const entries = filterJournalByDayRange(journalEntriesForActivePatient(), state.mobileLogDays);
-  if (!entries.length) {
-    el.innerHTML = `<p class="muted small">${escapeHtml(journalEmptyRangeMessage())}</p>`;
-    return;
-  }
   const view = normalizeMobileLogView(state.mobileLogView);
-  if (view === "list") {
-    el.classList.remove("is-timeline");
-    el.innerHTML = renderMobileLogListRows(entries);
+  const entryFp = journalFingerprint({ journal: entries });
+  const nextSig = `${view}|${state.mobileLogDays}|${entryFp}`;
+  if (el.dataset.logSig === nextSig && entries.length) {
     return;
   }
-  el.classList.add("is-timeline");
-  el.innerHTML = renderMobileLogTimelineRows(entries);
+  if (el.dataset.logSig === nextSig && !entries.length && el.textContent.includes("Nothing")) {
+    return;
+  }
+
+  const paint = () => {
+    el.dataset.logSig = nextSig;
+    if (!entries.length) {
+      el.classList.remove("is-timeline");
+      el.innerHTML = `<p class="muted small">${escapeHtml(journalEmptyRangeMessage())}</p>`;
+      return;
+    }
+    if (view === "list") {
+      el.classList.remove("is-timeline");
+      el.innerHTML = renderMobileLogListRows(entries);
+      return;
+    }
+    el.classList.add("is-timeline");
+    el.innerHTML = renderMobileLogTimelineRows(entries);
+  };
+
+  if (preserveScroll) withPreservedWindowScroll(paint);
+  else paint();
+}
+
+function logObservationsCacheKey(patientId, days) {
+  return `${patientId}:${normalizeMobileLogDays(days)}`;
 }
 
 function renderLogObservations(observations) {
   const el = document.getElementById("mobile-log-observations");
   if (!el) return;
   const items = Array.isArray(observations) ? observations : [];
+  const nextFp = observationsFingerprint(items);
+  const prevFp = observationsFingerprint(state.logObservations);
+  const same =
+    nextFp === prevFp &&
+    ((items.length === 0 && (el.classList.contains("hidden") || !el.innerHTML)) ||
+      (items.length > 0 && !!el.querySelector(".mobile-log-observations-list")));
+  state.logObservations = items;
+  if (same) return;
   if (!items.length) {
     el.classList.add("hidden");
     el.innerHTML = "";
@@ -11203,18 +11280,32 @@ function renderLogObservations(observations) {
     </ul>`;
 }
 
-async function refreshLogObservations() {
+async function refreshLogObservations({ soft = false } = {}) {
   const el = document.getElementById("mobile-log-observations");
   if (!el) return;
   if (!state.activePatientId || !state.caseContextReady) {
+    state.logObservations = [];
+    state.logObservationsKey = null;
     renderLogObservations([]);
     return;
   }
   const patientId = state.activePatientId;
   const days = normalizeMobileLogDays(state.mobileLogDays);
+  const cacheKey = logObservationsCacheKey(patientId, days);
+  const cached = logObservationsCache.get(cacheKey);
+  const prevKey = state.logObservationsKey;
   const reqId = ++state.logObservationsRequest;
-  el.classList.remove("hidden");
-  el.innerHTML = logLoadingHtml("Loading observations…");
+  state.logObservationsKey = cacheKey;
+
+  if (soft && cached) {
+    renderLogObservations(cached);
+  } else if (soft && prevKey === cacheKey) {
+    // Same range — keep current UI (including empty) while revalidating; no spinner flash.
+  } else {
+    el.classList.remove("hidden");
+    el.innerHTML = logLoadingHtml("Loading observations…");
+  }
+
   try {
     const res = await fetch(
       `/api/patients/${patientId}/log-observations?days=${encodeURIComponent(String(days))}`,
@@ -11222,17 +11313,96 @@ async function refreshLogObservations() {
     );
     if (reqId !== state.logObservationsRequest || state.activePatientId !== patientId) return;
     if (!res.ok) {
-      renderLogObservations([]);
+      if (!soft) renderLogObservations([]);
       return;
     }
     const data = await res.json();
     if (reqId !== state.logObservationsRequest || state.activePatientId !== patientId) return;
     if (data.patient_id && data.patient_id !== patientId) return;
-    renderLogObservations(data.observations || []);
+    const observations = data.observations || [];
+    logObservationsCache.set(cacheKey, observations);
+    renderLogObservations(observations);
   } catch {
     if (reqId !== state.logObservationsRequest) return;
-    renderLogObservations([]);
+    if (!soft) renderLogObservations([]);
   }
+}
+
+function isLogPaneActive() {
+  return state.homeSection === "log" && !document.hidden;
+}
+
+function stopLogLiveUpdates() {
+  if (logLiveTimer) {
+    clearInterval(logLiveTimer);
+    logLiveTimer = null;
+  }
+  if (logDayBoundaryTimer) {
+    clearTimeout(logDayBoundaryTimer);
+    logDayBoundaryTimer = null;
+  }
+  logLiveTick = 0;
+}
+
+function scheduleNextMidnightLogRefresh() {
+  if (logDayBoundaryTimer) {
+    clearTimeout(logDayBoundaryTimer);
+    logDayBoundaryTimer = null;
+  }
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(24, 0, 2, 0);
+  const delay = Math.max(1000, next.getTime() - now.getTime());
+  logDayBoundaryTimer = setTimeout(() => {
+    logDayBoundaryTimer = null;
+    if (!isLogPaneActive() || !state.activePatientId) return;
+    // Day window rolled over — refilter "today" and refresh observations.
+    renderMobileLogRecent({ softObservations: true, preserveScroll: true });
+    refreshActivePatientProfile({ background: true }).catch(() => {});
+    scheduleNextMidnightLogRefresh();
+  }, delay);
+}
+
+function ensureLogLiveUpdates() {
+  if (!isLogPaneActive() || !state.activePatientId) {
+    stopLogLiveUpdates();
+    return;
+  }
+  scheduleNextMidnightLogRefresh();
+  if (logLiveTimer) return;
+  logLiveTick = 0;
+  logLiveTimer = setInterval(() => {
+    if (!isLogPaneActive() || !state.activePatientId) {
+      stopLogLiveUpdates();
+      return;
+    }
+    logLiveTick += 1;
+    refreshLogObservations({ soft: true }).catch(() => {});
+    // Revalidate journal every ~60s so multi-device writes stay current.
+    if (logLiveTick % 2 === 0) {
+      refreshActivePatientProfile({ background: true }).catch(() => {});
+    }
+  }, 30000);
+}
+
+function initLogLiveUpdates() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopLogLiveUpdates();
+      return;
+    }
+    if (state.homeSection !== "log" || !state.activePatientId) return;
+    ensureLogLiveUpdates();
+    refreshActivePatientProfile({ background: true }).catch(() => {});
+    refreshLogObservations({ soft: true }).catch(() => {});
+  });
+  window.addEventListener("focus", () => {
+    if (document.hidden) return;
+    if (state.homeSection !== "log" || !state.activePatientId) return;
+    refreshActivePatientProfile({ background: true }).catch(() => {});
+    refreshLogObservations({ soft: true }).catch(() => {});
+    ensureLogLiveUpdates();
+  });
 }
 
 const MOM_MED_NAME = "MoM (Milk of Magnesia)";
@@ -11683,7 +11853,10 @@ async function submitQuickScale(severity) {
   }
 }
 
-function applyProfileResponse(data, { expectedPatientId = null } = {}) {
+function applyProfileResponse(
+  data,
+  { expectedPatientId = null, fromCache = false, background = false } = {}
+) {
   const profilePatientId =
     data?.patient?.id || data?.patient_id || expectedPatientId || null;
   // Unscoped profile payloads are unsafe when switching patients mid-request.
@@ -11691,15 +11864,100 @@ function applyProfileResponse(data, { expectedPatientId = null } = {}) {
   if (state.activePatientId && profilePatientId !== state.activePatientId) {
     return;
   }
-  renderPatientProfile(data.profile || {}, profilePatientId, {
-    diagnostic_series: data.diagnostic_series,
-    diagnostic_gaps: data.diagnostic_gaps,
-    diagnostic_presets: data.diagnostic_presets,
-    journal_series: data.journal_series,
-    journal_presets: data.journal_presets,
-    milestone_presets: data.milestone_presets,
-    common_remedies: data.common_remedies,
-  });
+  cachePatientProfilePayload(profilePatientId, data);
+  const nextProfile = data.profile || {};
+  const hadProfile =
+    state.patientProfileId === profilePatientId && !!state.patientProfile;
+  const journalChanged =
+    !hadProfile ||
+    journalFingerprint(state.patientProfile) !== journalFingerprint(nextProfile);
+  const tilesChanged =
+    !hadProfile ||
+    logTilesFingerprint(state.patientProfile) !== logTilesFingerprint(nextProfile);
+
+  // Background revalidate while viewing Log: update memory when unchanged; never jump scroll.
+  if (background && hadProfile && !journalChanged && !tilesChanged) {
+    state.patientProfile = nextProfile;
+    state.patientProfileId = profilePatientId;
+    if (data.diagnostic_series) state.diagnosticSeriesCache = data.diagnostic_series;
+    if (data.diagnostic_gaps) state.diagnosticGaps = data.diagnostic_gaps;
+    if (data.diagnostic_presets?.length) state.diagnosticPresets = data.diagnostic_presets;
+    if (data.journal_presets?.length) state.journalPresets = data.journal_presets;
+    if (data.milestone_presets?.length) state.milestonePresets = data.milestone_presets;
+    if (data.common_remedies?.length) state.commonRemedies = data.common_remedies;
+    return;
+  }
+
+  // Fresh server profile may include new journal entries — drop stale observation bullets.
+  if (!fromCache && journalChanged) invalidateLogObservationsCache(profilePatientId);
+
+  const paint = () =>
+    renderPatientProfile(nextProfile, profilePatientId, {
+      diagnostic_series: data.diagnostic_series,
+      diagnostic_gaps: data.diagnostic_gaps,
+      diagnostic_presets: data.diagnostic_presets,
+      journal_series: data.journal_series,
+      journal_presets: data.journal_presets,
+      milestone_presets: data.milestone_presets,
+      common_remedies: data.common_remedies,
+    });
+
+  if (background && hadProfile) {
+    withPreservedWindowScroll(paint);
+    return;
+  }
+  paint();
+}
+
+function withPreservedWindowScroll(fn) {
+  const x = window.scrollX;
+  const y = window.scrollY;
+  fn();
+  const restore = () => window.scrollTo(x, y);
+  restore();
+  requestAnimationFrame(restore);
+}
+
+function journalFingerprint(profile) {
+  const journal = profile?.journal || [];
+  return journal
+    .map(
+      (e) =>
+        `${e.id}|${e.recorded_at || e.created_at || ""}|${e.kind || ""}|${e.label || ""}|${e.severity ?? ""}|${e.text || ""}`
+    )
+    .join(";");
+}
+
+function logTilesFingerprint(profile) {
+  if (!profile) return "";
+  const order = profile.log_tile_order || [];
+  const custom = profile.log_custom_tiles || [];
+  return `${JSON.stringify(order)}|${JSON.stringify(custom)}`;
+}
+
+function observationsFingerprint(observations) {
+  return (observations || []).map((o) => String(o.text || "")).join("\n");
+}
+
+function cachePatientProfilePayload(patientId, data) {
+  if (!patientId || !data) return;
+  patientProfileCache.set(patientId, { data, at: Date.now() });
+}
+
+function invalidateLogObservationsCache(patientId) {
+  if (!patientId) return;
+  const prefix = `${patientId}:`;
+  for (const key of [...logObservationsCache.keys()]) {
+    if (key.startsWith(prefix)) logObservationsCache.delete(key);
+  }
+}
+
+function restorePatientProfileFromCache(patientId) {
+  if (!patientId) return false;
+  const hit = patientProfileCache.get(patientId);
+  if (!hit?.data) return false;
+  applyProfileResponse(hit.data, { expectedPatientId: patientId, fromCache: true });
+  return state.patientProfileId === patientId && !!state.patientProfile;
 }
 
 function resolveDiagnosticSeries(profile, extras = {}) {
@@ -12741,7 +12999,7 @@ function openDiagChartExpand(key) {
   showModal("modal-diag-chart-expand");
 }
 
-async function refreshActivePatientProfile() {
+async function refreshActivePatientProfile({ background = false } = {}) {
   if (!state.activePatientId) {
     state.patientProfile = null;
     state.patientProfileId = null;
@@ -12751,14 +13009,28 @@ async function refreshActivePatientProfile() {
     return;
   }
   const patientId = state.activePatientId;
-  const r = await fetch(`/api/patients/${patientId}/profile`);
-  if (!r.ok) return;
-  // Ignore stale responses if the user switched patients mid-flight
-  if (state.activePatientId !== patientId) return;
-  const data = await r.json();
-  if (data.patient?.id && data.patient.id !== patientId) return;
-  if (state.activePatientId !== patientId) return;
-  applyProfileResponse(data);
+  if (profileRefreshPromise && profileRefreshPatientId === patientId) {
+    return profileRefreshPromise;
+  }
+  profileRefreshPatientId = patientId;
+  profileRefreshPromise = (async () => {
+    try {
+      const r = await fetch(`/api/patients/${patientId}/profile`);
+      if (!r.ok) return;
+      // Ignore stale responses if the user switched patients mid-flight
+      if (state.activePatientId !== patientId) return;
+      const data = await r.json();
+      if (data.patient?.id && data.patient.id !== patientId) return;
+      if (state.activePatientId !== patientId) return;
+      applyProfileResponse(data, { background });
+    } finally {
+      if (profileRefreshPatientId === patientId) {
+        profileRefreshPromise = null;
+        profileRefreshPatientId = null;
+      }
+    }
+  })();
+  return profileRefreshPromise;
 }
 
 function showModal(id) { document.getElementById(id)?.classList.remove("hidden"); }
