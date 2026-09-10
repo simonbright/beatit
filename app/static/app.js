@@ -11045,6 +11045,8 @@ function clearPatientScopedLogState({ keepPatientId = false, deferRender = false
   if (!keepPatientId) {
     // used when fully clearing selection
   }
+  const recent = document.getElementById("mobile-log-recent");
+  if (recent) delete recent.dataset.logSig;
   syncMobileLogForLabel();
   syncMobileLogRangeControl();
   if (deferRender) return;
@@ -11199,21 +11201,36 @@ function renderMobileLogTimelineRows(entries) {
     .join("");
 }
 
+function logRecentIsPainted(el = document.getElementById("mobile-log-recent")) {
+  if (!el) return false;
+  if (el.querySelector(".log-tl-item, .mobile-log-recent-row")) return true;
+  const text = el.textContent || "";
+  return /Nothing (today|logged|in the last)/i.test(text) || /Select a patient/i.test(text);
+}
+
+function logTilesArePainted(el = document.getElementById("mobile-log-grid")) {
+  return !!(el && el.querySelector(".mobile-log-tile"));
+}
+
 function renderMobileLogRecent({ softObservations = true, preserveScroll = false } = {}) {
   const el = document.getElementById("mobile-log-recent");
   if (!el) return;
   syncMobileLogRangeControl();
   refreshLogObservations({ soft: softObservations });
   if (!state.activePatientId) {
+    delete el.dataset.logSig;
+    el.classList.remove("is-timeline");
     el.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to start logging."))}</p>`;
     return;
   }
   if (state.patientProfileId && state.patientProfileId !== state.activePatientId) {
+    delete el.dataset.logSig;
     el.classList.remove("is-timeline");
     el.innerHTML = logLoadingHtml("Loading logs…");
     return;
   }
   if (!state.patientProfile) {
+    delete el.dataset.logSig;
     el.classList.remove("is-timeline");
     el.innerHTML = logLoadingHtml("Loading logs…");
     return;
@@ -11222,10 +11239,9 @@ function renderMobileLogRecent({ softObservations = true, preserveScroll = false
   const view = normalizeMobileLogView(state.mobileLogView);
   const entryFp = journalFingerprint({ journal: entries });
   const nextSig = `${view}|${state.mobileLogDays}|${entryFp}`;
-  if (el.dataset.logSig === nextSig && entries.length) {
-    return;
-  }
-  if (el.dataset.logSig === nextSig && !entries.length && el.textContent.includes("Nothing")) {
+  // Only skip re-paint when the list is already on screen. Stale logSig after a
+  // "Loading…" flash was leaving mobile stuck on the spinner.
+  if (el.dataset.logSig === nextSig && logRecentIsPainted(el)) {
     return;
   }
 
@@ -11876,7 +11892,9 @@ function applyProfileResponse(
     logTilesFingerprint(state.patientProfile) !== logTilesFingerprint(nextProfile);
 
   // Background revalidate while viewing Log: update memory when unchanged; never jump scroll.
+  // If the Log UI is still showing a spinner, force a paint even when data fingerprint matches.
   if (background && hadProfile && !journalChanged && !tilesChanged) {
+    const uiReady = logRecentIsPainted() && logTilesArePainted();
     state.patientProfile = nextProfile;
     state.patientProfileId = profilePatientId;
     if (data.diagnostic_series) state.diagnosticSeriesCache = data.diagnostic_series;
@@ -11885,6 +11903,10 @@ function applyProfileResponse(
     if (data.journal_presets?.length) state.journalPresets = data.journal_presets;
     if (data.milestone_presets?.length) state.milestonePresets = data.milestone_presets;
     if (data.common_remedies?.length) state.commonRemedies = data.common_remedies;
+    if (uiReady) return;
+    renderMobileLogRecent({ softObservations: true, preserveScroll: true });
+    syncPatientSpecificLogTiles();
+    syncMobileLogForLabel();
     return;
   }
 
@@ -13010,7 +13032,19 @@ async function refreshActivePatientProfile({ background = false } = {}) {
   }
   const patientId = state.activePatientId;
   if (profileRefreshPromise && profileRefreshPatientId === patientId) {
-    return profileRefreshPromise;
+    await profileRefreshPromise;
+    // A shared in-flight background fetch can finish without painting. Ensure Log UI recovers.
+    if (
+      !background &&
+      state.patientProfileId === patientId &&
+      state.patientProfile &&
+      (!logRecentIsPainted() || !logTilesArePainted())
+    ) {
+      renderMobileLogRecent({ softObservations: true });
+      syncPatientSpecificLogTiles();
+      syncMobileLogForLabel();
+    }
+    return;
   }
   profileRefreshPatientId = patientId;
   profileRefreshPromise = (async () => {
