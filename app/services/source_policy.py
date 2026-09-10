@@ -91,9 +91,12 @@ _SPECIALTY_COPY = {
         "care_team": "the oncology team",
         "workup_section": "Staging & workup",
         "baseline_query": (
-            "Provide a comprehensive baseline oncology assessment synthesizing ALL documents in scope: "
-            "what we know from every report and source, what we do not know, critical gaps to close, "
-            "staging considerations, and a broad overview of treatment options."
+            "Provide a comprehensive baseline oncology assessment synthesizing ALL documents in scope "
+            "AND all PATIENT TRACKED DATA (current labs with trends, logs/self-reports, log pattern "
+            "observations, medications, measurements, and milestones): "
+            "what we know from every report and the live patient profile, what we do not know, "
+            "critical gaps to close, staging considerations, and a broad overview of treatment options. "
+            "Treat profile changes since any prior assessment as first-class evidence."
         ),
         "care_constraint": "NOT a substitute for in-person oncology care",
     },
@@ -102,9 +105,12 @@ _SPECIALTY_COPY = {
         "care_team": "the cardiology team",
         "workup_section": "Clinical status & workup",
         "baseline_query": (
-            "Provide a comprehensive baseline cardiology assessment synthesizing ALL documents in scope: "
-            "what we know from every report and source, what we do not know, critical gaps to close, "
-            "risk and workup status, and a broad overview of management options."
+            "Provide a comprehensive baseline cardiology assessment synthesizing ALL documents in scope "
+            "AND all PATIENT TRACKED DATA (current labs with trends, logs/self-reports, log pattern "
+            "observations, medications, measurements, and milestones): "
+            "what we know from every report and the live patient profile, what we do not know, "
+            "critical gaps to close, risk and workup status, and a broad overview of management options. "
+            "Treat profile changes since any prior assessment as first-class evidence."
         ),
         "care_constraint": "NOT a substitute for in-person cardiology care",
     },
@@ -113,9 +119,12 @@ _SPECIALTY_COPY = {
         "care_team": "the neurology team",
         "workup_section": "Clinical status & workup",
         "baseline_query": (
-            "Provide a comprehensive baseline neurology assessment synthesizing ALL documents in scope: "
-            "what we know from every report and source, what we do not know, critical gaps to close, "
-            "workup status, and a broad overview of management options."
+            "Provide a comprehensive baseline neurology assessment synthesizing ALL documents in scope "
+            "AND all PATIENT TRACKED DATA (current labs with trends, logs/self-reports, log pattern "
+            "observations, medications, measurements, and milestones): "
+            "what we know from every report and the live patient profile, what we do not know, "
+            "critical gaps to close, workup status, and a broad overview of management options. "
+            "Treat profile changes since any prior assessment as first-class evidence."
         ),
         "care_constraint": "NOT a substitute for in-person neurology care",
     },
@@ -124,9 +133,12 @@ _SPECIALTY_COPY = {
         "care_team": "the medical team",
         "workup_section": "Clinical status & workup",
         "baseline_query": (
-            "Provide a comprehensive baseline clinical assessment synthesizing ALL documents in scope: "
-            "what we know from every report and source, what we do not know, critical gaps to close, "
-            "workup status, and a broad overview of management options."
+            "Provide a comprehensive baseline clinical assessment synthesizing ALL documents in scope "
+            "AND all PATIENT TRACKED DATA (current labs with trends, logs/self-reports, log pattern "
+            "observations, medications, measurements, and milestones): "
+            "what we know from every report and the live patient profile, what we do not know, "
+            "critical gaps to close, workup status, and a broad overview of management options. "
+            "Treat profile changes since any prior assessment as first-class evidence."
         ),
         "care_constraint": "NOT a substitute for in-person clinical care",
     },
@@ -153,7 +165,7 @@ def response_structure_with_sources(specialty: dict[str, str] | None = None) -> 
     return f"""
 Structure your response with these sections:
 1. Executive summary — at least 6 complete sentences covering diagnosis, key findings from ALL major report types in scope, current status, and immediate priorities. Every sentence must include clinical content AND a [SOURCE: …] tag. Never output only a source tag line.
-2. What we know — hard data only, each bullet tagged [SOURCE: Document "..."]
+2. What we know — hard data only; tag [SOURCE: Document "..."] for library files and [SOURCE: Patient profile] for tracked labs, logs, medications, measurements, milestones, and log observations
 3. What we do not know / uncertainties — tag [SOURCE: Unknown]
 4. Critical gaps to close (prioritized numbered list)
 5. {workup} — ONLY documented findings first; separate "unconfirmed/suggested" items clearly
@@ -211,28 +223,31 @@ def rewrite_specialty_headings(
 
 COMPREHENSIVE_SYNTHESIS_RULES = """
 COMPREHENSIVE SYNTHESIS (mandatory for baseline assessment and executive summary):
-- Before writing, mentally inventory EVERY document in DOCUMENT INVENTORY and STORED DOCUMENTS.
-- The executive summary and "What we know" MUST reflect major findings from EACH substantive report type present (e.g. pathology, CT/MRI report, labs, clinic notes, transcripts, vision reads) — not only the first or most recent source.
+- Before writing, mentally inventory EVERY document in DOCUMENT INVENTORY and STORED DOCUMENTS, AND all PATIENT TRACKED DATA (labs, logs, log observations, medications, measurements, milestones).
+- The executive summary and "What we know" MUST reflect major findings from EACH substantive report type present (e.g. pathology, CT/MRI report, labs, clinic notes, transcripts, vision reads) AND from the live patient profile — not only the first or most recent library source.
 - If multiple documents address the same topic (e.g. two imaging reports), synthesize them together; note agreement or conflict.
-- Do NOT omit abnormal labs, tumor markers, metastatic sites, prior treatments, or comorbidities documented anywhere in scope.
+- Do NOT omit abnormal labs, tumor markers, metastatic sites, prior treatments, comorbidities, recent log patterns, or medication changes documented in the library OR the patient profile.
+- When PATIENT TRACKED DATA conflicts with an older document, prefer the more recent dated evidence and note the discrepancy.
 - DICOM slice uploads listed as aggregated groups are NOT diagnostic reads — rely on radiology reports and vision reads for imaging interpretation.
 - If a clinically important document in inventory has little extractable text, say what is missing and cite the document title anyway.
 """
 
 BASELINE_GAP_RULES = """
 OPEN ITEMS / GAPS (baseline assessment only):
-- Before listing something as a gap or open item, search ALL provided document text and titles.
-- Do NOT flag as missing any finding, report, test, or date that appears in any stored document above, even partially or in an appendix.
-- Only list gaps for information genuinely absent from the STORED DOCUMENTS section.
+- Before listing something as a gap or open item, search ALL provided document text and titles AND PATIENT TRACKED DATA.
+- Do NOT flag as missing any finding, report, test, medication, log pattern, or date that appears in any stored document or in PATIENT TRACKED DATA above, even partially.
+- Only list gaps for information genuinely absent from BOTH STORED DOCUMENTS and PATIENT TRACKED DATA.
 - If a clinical report exists in the library (e.g. CT, MRI, pathology), do not claim that report is missing — cite it or state what it does not contain.
+- If labs, logs, or medications are present in PATIENT TRACKED DATA, do not claim those are unknown — cite [SOURCE: Patient profile].
 """
 
 BASELINE_GUIDANCE_SECTION = """
 === ASSESSMENT GUIDANCE (user instructions — follow carefully) ===
 {guidance}
 
-Apply this guidance when reading STORED DOCUMENTS and writing the assessment.
+Apply this guidance when reading STORED DOCUMENTS, PATIENT TRACKED DATA, and writing the assessment.
 Prioritize sources the user mentions by title, author, facility, or type (e.g. video, PDF, pathology) when they appear in the library above.
+Also honor guidance that refers to recent logs, medications, labs, or other tracked profile data.
 """
 
 CUSTOM_QUERY_RESPONSE_STRUCTURE = """
@@ -264,7 +279,7 @@ PATIENT_ASK_RESPONSE_STRUCTURE = """
 This is a PATIENT ASK — synthesize the FULL accumulated record for this person.
 
 You MUST use:
-1. PATIENT TRACKED DATA below (labs with history, logs/self-reports, medications, measurements, milestones)
+1. PATIENT TRACKED DATA below (labs with history, logs/self-reports, log pattern observations, medications, measurements, milestones)
 2. STORED DOCUMENTS in the library
 3. Prior assessment only when it clarifies trends
 

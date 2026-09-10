@@ -338,10 +338,12 @@ BASELINE_BUILD_ON_PRIOR_SECTION = """
 {new_docs_note}
 === INSTRUCTIONS FOR THIS RE-RUN ===
 This is an UPDATE to the prior baseline, not a blank-slate rewrite.
-- RETAIN findings from the prior assessment that remain supported by the documents below.
+- RETAIN findings from the prior assessment that remain supported by the documents and PATIENT TRACKED DATA below.
 - INTEGRATE new documents (especially vision reads and radiology reports) into the appropriate sections.
-- UPDATE open items: resolve items now documented; add new gaps only when truly missing from all sources.
-- Do NOT drop prior clinical facts unless contradicted by stronger source evidence in the current document set.
+- INTEGRATE current PATIENT TRACKED DATA: new or changed logs/self-reports, log pattern observations, medications, labs, measurements, and milestones since the prior run.
+- UPDATE conclusions when the live profile differs from the prior assessment (e.g. new symptoms logged, meds started/stopped/changed, new lab values).
+- UPDATE open items: resolve items now documented in the library or profile; add new gaps only when truly missing from all sources.
+- Do NOT drop prior clinical facts unless contradicted by stronger source evidence in the current document set or PATIENT TRACKED DATA.
 """
 
 
@@ -461,7 +463,8 @@ class SynthesisService:
         if tracked.strip():
             tracked_section = (
                 "\n=== PATIENT TRACKED DATA "
-                "(labs, logs, medications, measurements — cite [SOURCE: Patient profile]) ===\n"
+                "(labs, logs, log observations, medications, measurements, milestones — "
+                "cite [SOURCE: Patient profile]) ===\n"
                 f"{tracked}\n"
             )
 
@@ -508,6 +511,14 @@ class SynthesisService:
                 "\nFor this patient ask: weigh the most recent labs and recent logs first, "
                 "then historical trends; end with concrete Suggested responses.\n"
             )
+        baseline_hint = ""
+        if analysis_type == "baseline":
+            baseline_hint = (
+                "\nFor this baseline/rerun: PATIENT TRACKED DATA is mandatory evidence — "
+                "integrate current labs, logs, log observations, medications, measurements, "
+                "and milestones. Do not treat the document library alone as the full chart; "
+                "update the prior assessment for any profile changes.\n"
+            )
 
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
@@ -520,7 +531,7 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 {tracked_section}{chat_section}{prior_section}{guidance_section}
 === USER QUERY (answer this directly — this is the primary task) ===
 {query}
-{case_focus_line}{ask_hint}{gap_rules}
+{case_focus_line}{ask_hint}{baseline_hint}{gap_rules}
 {_response_structure_for_analysis(analysis_type=analysis_type, query=query, specialty=specialty)}
 
 CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."], [SOURCE: Patient profile], or another SOURCE tag.
@@ -621,6 +632,23 @@ Use clear ### headings for each section."""
             else ""
         )
 
+        ctx = get_active_context()
+        pinned_patient_id = patient_id or existing.get("patient_id") or ctx.get("patient_id")
+        pinned_patient_label = (
+            patient_label or existing.get("patient_label") or ctx.get("patient_label")
+        )
+        tracked = format_profile_for_prompt(
+            pinned_patient_id, pinned_patient_label, rich=True
+        )
+        tracked_section = ""
+        if tracked.strip():
+            tracked_section = (
+                "\n=== PATIENT TRACKED DATA "
+                "(labs, logs, log observations, medications, measurements, milestones — "
+                "cite [SOURCE: Patient profile]) ===\n"
+                f"{tracked}\n"
+            )
+
         prompt = f"""Use the following stored research and clinical material as your evidence base.
 If the documents do not contain information needed to answer, state the gap explicitly.
 
@@ -632,7 +660,7 @@ DOCUMENT TITLES — use these EXACT strings inside [SOURCE: Document "..."] tags
 
 === STORED DOCUMENTS ===
 {corpus_text}
-
+{tracked_section}
 === PRIOR DRAFT (user wants a revision — not a brand-new task) ===
 Original question:
 {prior_query}
@@ -651,18 +679,18 @@ Previous draft:
 This is a REFINEMENT run. Revise the prior draft to address the refinement instructions.
 Keep strong sections that still fit; replace or expand parts the user asked to change.
 Do NOT start from scratch unless the refinement instructions require it.
+Integrate current PATIENT TRACKED DATA when revising (labs, logs, medications, observations).
 
-CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."] or another SOURCE tag.
+CRITICAL: Every factual bullet MUST end with [SOURCE: Document "..."], [SOURCE: Patient profile], or another SOURCE tag.
 Do NOT write parenthetical citations like (CT Report). Use [SOURCE: Document "exact title"] only.
 Do NOT mention palliative care, hospice, or comfort care anywhere in the response.
 
 Use clear ### headings for each section."""
 
-        ctx = get_active_context()
         system = await build_medical_system_prompt(
             self.db,
-            patient_id=patient_id or existing.get("patient_id") or ctx.get("patient_id"),
-            patient_label=patient_label or existing.get("patient_label") or ctx.get("patient_label"),
+            patient_id=pinned_patient_id,
+            patient_label=pinned_patient_label,
             case_label=case_label or existing.get("case_label") or ctx.get("case_label"),
         )
         system = f"{system}\n\n{SOURCE_ATTRIBUTION_RULES}"

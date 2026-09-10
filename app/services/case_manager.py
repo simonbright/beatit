@@ -1755,7 +1755,8 @@ def format_profile_for_prompt(
     """Format demographics, labs, logs, and meds for LLM prompts.
 
     ``rich=True`` (default for analysis) includes longer lab trends, journal
-    history, symptom series, and milestones so asks can use accumulated data.
+    history, symptom series, log pattern observations, and milestones so
+    assessments and asks can use accumulated data.
     """
     if not patient_id:
         return ""
@@ -1858,6 +1859,21 @@ def format_profile_for_prompt(
                 f"Log trend · {series.get('label') or series.get('name')}"
                 f"{f' ({unit})' if unit else ''}: {trend}"
             )
+
+        from app.services.log_observations import build_log_observations
+
+        journal_all = profile.get("journal") or []
+        for days, label in ((7, "last 7 days"), (20, "last 20 days")):
+            observations = build_log_observations(journal_all, days, max_items=5)
+            if not observations:
+                continue
+            lines.append(
+                f"Log pattern observations ({label}; cite as Patient profile):"
+            )
+            for obs in observations:
+                text = str(obs.get("text") or "").strip()
+                if text:
+                    lines.append(f"  · {text}")
 
     meds = profile.get("medications") or []
     active_meds = [m for m in meds if (m.get("status") or "active") == "active"]
