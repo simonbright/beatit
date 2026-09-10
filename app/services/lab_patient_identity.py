@@ -27,7 +27,7 @@ _NAME_STOP = {
 }
 
 _DOB_LABEL = (
-    r"(?:DOB|D\.O\.B\.|Date\s+of\s+Birth|Birth\s*Date|Born(?:\s+on)?|"
+    r"(?:DOB|D\.O\.B\.|Date\s+of\s+Birth|Birth\s*Date|Birthdate|Born(?:\s+on)?|"
     r"Date\s+of\s+birth|Patient\s+DOB)"
 )
 
@@ -99,6 +99,8 @@ def parse_dob_candidates(raw: str | None) -> list[str]:
         "%B %d %Y",
         "%d %b %Y",
         "%d %B %Y",
+        "%d-%b-%Y",  # LifeLabs: 27-OCT-2011
+        "%d-%B-%Y",
     ]
     for fmt in unambiguous:
         try:
@@ -153,6 +155,8 @@ def parse_dob_to_iso_legacy(text: str) -> str | None:
         "%B %d %Y",
         "%d %b %Y",
         "%d %B %Y",
+        "%d-%b-%Y",
+        "%d-%B-%Y",
         "%Y-%m-%d",
         "%Y/%m/%d",
     ]
@@ -215,6 +219,9 @@ def extract_lab_patient_identity(text: str | None) -> dict[str, Any]:
         rf"{_NAME_LABEL}\s*[:\-]\s*([A-Z][A-Za-z'''\-]+(?:[ \t]+[A-Z][A-Za-z'''\-]+){{1,4}})",
         rf"{_NAME_LABEL}\s*[:\-]\s*([A-Z]{{2,}}(?:[ \t]+[A-Z]{{2,}}){{1,4}})",
         rf"{_NAME_LABEL}\s*[:\-]\s*([A-Z][A-Za-z'''\-]+[ \t]*,[ \t]*[A-Z][A-Za-z'''\-]+(?:[ \t]+[A-Z][A-Za-z'''\-]+)?)",
+        # LifeLabs / Canadian labs: "Patient" then LAST, FIRST [MIDDLE] (optional colon; same or next line)
+        rf"(?im)^(?:Patient|Name)\s*[:\-]?\s*\n?\s*([A-Z]{{2,}}(?:[ \t]*-[ \t]*[A-Z]{{2,}})*,[ \t]*[A-Z][A-Za-z'''\-]+(?:[ \t]+[A-Z][A-Za-z'''\-]+){{0,3}})",
+        rf"(?im)^(?:Patient|Name)\s*[:\-]\s*([A-Z]{{2,}}(?:[ \t]*-[ \t]*[A-Z]{{2,}})*,[ \t]*[A-Z][A-Za-z'''\-]+(?:[ \t]+[A-Z][A-Za-z'''\-]+){{0,3}})",
     ]
     junk_tail = {"dob", "sex", "gender", "age", "male", "female", "id", "mrn", "phn"}
     for pat in name_patterns:
@@ -233,6 +240,7 @@ def extract_lab_patient_identity(text: str | None) -> dict[str, Any]:
     dob_patterns = [
         rf"{_DOB_LABEL}\s*[:\-]?\s*(\d{{4}}-\d{{2}}-\d{{2}})",
         rf"{_DOB_LABEL}\s*[:\-]?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}})",
+        rf"{_DOB_LABEL}\s*[:\-]?\s*(\d{{1,2}}-[A-Za-z]{{3,9}}-\d{{2,4}})",  # LifeLabs 27-OCT-2011
         rf"{_DOB_LABEL}\s*[:\-]?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},?\s+\d{{4}})",
         rf"{_DOB_LABEL}\s*[:\-]?\s*(\d{{1,2}}\s+[A-Za-z]{{3,9}}\s+\d{{4}})",
     ]

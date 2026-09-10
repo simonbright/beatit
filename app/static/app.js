@@ -269,6 +269,13 @@ async function pollPdfIngestJob(jobId, { setDetail, isCancelled, filename, docum
       if (setDetail) {
         setDetail(`Processing${label}: server busy, retrying…`);
       }
+      // Stop endless spinner loops when the ingest worker is gone or Render keeps 502-ing.
+      if (consecutiveGatewayErrors >= 8) {
+        throw new Error(
+          err?.message ||
+            `Lab processing unavailable${label}. Wait a moment and try again.`
+        );
+      }
       // Fall back to document metadata if the job endpoint is unreachable
       if (documentId && consecutiveGatewayErrors >= 2) {
         try {
@@ -8638,14 +8645,32 @@ async function activatePatientCase(patientId, caseId, { label } = {}) {
     if (!res.ok) {
       hideSwitchProgress();
       clearSwitchBusyState();
-      alert("Could not switch case");
-      return;
+      toast("Could not switch case", "error");
+      return false;
     }
-    location.reload();
+    // Soft switch — refresh context without a full page reload so success is obvious.
+    try {
+      await loadCaseContext();
+      await Promise.allSettled([
+        loadDocumentIndex(),
+        loadLatestAssessment(),
+        loadCustomTasks(),
+        refreshHandlingFlags(),
+      ]);
+      hideSwitchProgress();
+      clearSwitchBusyState();
+      toast(label ? `Now working on ${label}` : "Switched patient / case");
+      return true;
+    } catch (err) {
+      // Fall back to hard reload if soft refresh fails
+      location.reload();
+      return true;
+    }
   } catch (err) {
     hideSwitchProgress();
     clearSwitchBusyState();
-    alert(err.message || "Could not switch case");
+    toast(err.message || "Could not switch case", "error");
+    return false;
   }
 }
 
@@ -8881,8 +8906,19 @@ function renderPatientProfile(profile, patientId, extras = {}) {
     renderMedicationsHome(null);
     return;
   }
-  if (dobEl) dobEl.value = profile.date_of_birth ? String(profile.date_of_birth).slice(0, 10) : "";
-  if (genderEl) genderEl.value = profile.gender || "";
+  if (dobEl) {
+    const serverDob = profile.date_of_birth ? String(profile.date_of_birth).slice(0, 10) : "";
+    // Keep unsaved form DOB when re-rendering the same patient (e.g. after Add measurement).
+    if (!(state.patientProfileId === patientId && !serverDob && dobEl.value)) {
+      dobEl.value = serverDob;
+    }
+  }
+  if (genderEl) {
+    const serverGender = profile.gender || "";
+    if (!(state.patientProfileId === patientId && !serverGender && genderEl.value)) {
+      genderEl.value = serverGender;
+    }
+  }
   const age = ageFromDob(profile.date_of_birth);
   if (hintEl) {
     hintEl.textContent = age != null
@@ -13139,7 +13175,9 @@ async function openNewCaseModal() {
   document.getElementById("new-case-patient-label").textContent = `for ${patientLabel}`;
   document.getElementById("input-new-case-label").value = "";
   document.getElementById("input-new-case-context").value = "";
-  document.getElementById("modal-new-case").dataset.patientId = patientId;
+  const caseModal = document.getElementById("modal-new-case");
+  caseModal.dataset.patientId = patientId;
+  caseModal.dataset.patientLabel = patientLabel || "";
   showModal("modal-new-case");
   document.getElementById("input-new-case-label")?.focus();
 }
@@ -13155,42 +13193,79 @@ document.getElementById("btn-cancel-new-patient")?.addEventListener("click", () 
 document.getElementById("btn-confirm-new-patient")?.addEventListener("click", async () => {
   const label = document.getElementById("input-new-patient-label")?.value.trim();
   if (!label) return;
-  const res = await fetch("/api/patients", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label }),
-  });
-  if (!res.ok) {
-    alert("Failed to create patient");
-    return;
+  const btn = document.getElementById("btn-confirm-new-patient");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch("/api/patients", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    if (!res.ok) {
+      toast("Failed to create patient", "error");
+      return;
+    }
+    const created = await res.json();
+    hideModal("modal-new-patient");
+    toast(`Created ${created.patient.label} — add a case next to switch to them`);
+    document.getElementById("new-case-patient-label").textContent = `for ${created.patient.label}`;
+    document.getElementById("input-new-case-label").value = "";
+    document.getElementById("input-new-case-context").value = "";
+    const caseModal = document.getElementById("modal-new-case");
+    caseModal.dataset.patientId = created.patient.id;
+    caseModal.dataset.patientLabel = created.patient.label;
+    showModal("modal-new-case");
+    document.getElementById("input-new-case-label")?.focus();
+  } finally {
+    if (btn) btn.disabled = false;
   }
-  const created = await res.json();
-  hideModal("modal-new-patient");
-  document.getElementById("new-case-patient-label").textContent = `for ${created.patient.label}`;
-  document.getElementById("input-new-case-label").value = "";
-  document.getElementById("input-new-case-context").value = "";
-  document.getElementById("modal-new-case").dataset.patientId = created.patient.id;
-  showModal("modal-new-case");
-  document.getElementById("input-new-case-label")?.focus();
 });
 
-document.getElementById("btn-cancel-new-case")?.addEventListener("click", () => hideModal("modal-new-case"));
-document.getElementById("btn-confirm-new-case")?.addEventListener("click", async () => {
-  const patientId = document.getElementById("modal-new-case").dataset.patientId;
-  const label = document.getElementById("input-new-case-label")?.value.trim();
-  if (!label) return;
-  const patientContext = document.getElementById("input-new-case-context")?.value.trim() || null;
-  const res = await fetch(`/api/patients/${patientId}/cases`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, patient_context: patientContext }),
-  });
-  if (!res.ok) {
-    alert("Failed to create case");
-    return;
+document.getElementById("btn-cancel-new-case")?.addEventListener("click", () => {
+  const caseModal = document.getElementById("modal-new-case");
+  const pendingLabel = caseModal?.dataset.patientLabel;
+  hideModal("modal-new-case");
+  if (pendingLabel) {
+    toast(
+      `${pendingLabel} was created, but you're still on ${state.activePatientLabel || "the previous patient"}. Create a case or use Switch to change.`,
+      "error"
+    );
   }
-  const caseData = await res.json();
-  await activatePatientCase(patientId, caseData.case.id);
+  if (caseModal) {
+    delete caseModal.dataset.patientId;
+    delete caseModal.dataset.patientLabel;
+  }
+});
+document.getElementById("btn-confirm-new-case")?.addEventListener("click", async () => {
+  const caseModal = document.getElementById("modal-new-case");
+  const patientId = caseModal?.dataset.patientId;
+  const patientLabel = caseModal?.dataset.patientLabel || "";
+  const label = document.getElementById("input-new-case-label")?.value.trim();
+  if (!patientId || !label) return;
+  const btn = document.getElementById("btn-confirm-new-case");
+  if (btn) btn.disabled = true;
+  try {
+    const patientContext = document.getElementById("input-new-case-context")?.value.trim() || null;
+    const res = await fetch(`/api/patients/${patientId}/cases`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, patient_context: patientContext }),
+    });
+    if (!res.ok) {
+      toast("Failed to create case", "error");
+      return;
+    }
+    const caseData = await res.json();
+    hideModal("modal-new-case");
+    if (caseModal) {
+      delete caseModal.dataset.patientId;
+      delete caseModal.dataset.patientLabel;
+    }
+    const switchLabel = patientLabel ? `${patientLabel} · ${caseData.case.label}` : caseData.case.label;
+    await activatePatientCase(patientId, caseData.case.id, { label: switchLabel });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 });
 
 async function openRenameCaseModal() {
@@ -13327,6 +13402,19 @@ document.getElementById("btn-save-profile")?.addEventListener("click", async () 
     toast("Select a patient first", "error");
     return;
   }
+  try {
+    const data = await persistDemographicsFromForm();
+    applyProfileResponse(data);
+    toast("Demographics saved");
+  } catch (err) {
+    toast(err.message || "Could not save profile", "error");
+  }
+});
+
+async function persistDemographicsFromForm() {
+  if (!state.activePatientId) {
+    throw new Error("Select a patient first");
+  }
   const res = await fetch(`/api/patients/${state.activePatientId}/profile`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -13337,13 +13425,10 @@ document.getElementById("btn-save-profile")?.addEventListener("click", async () 
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    toast(err.detail || "Could not save profile", "error");
-    return;
+    throw new Error(err.detail || "Could not save profile");
   }
-  const data = await res.json();
-  applyProfileResponse(data);
-  toast("Demographics saved");
-});
+  return res.json();
+}
 
 document.getElementById("btn-add-measurement")?.addEventListener("click", async () => {
   if (!state.activePatientId) {
@@ -13363,6 +13448,17 @@ document.getElementById("btn-add-measurement")?.addEventListener("click", async 
   if (height_cm == null && weight_kg == null) {
     toast("Enter height and/or weight", "error");
     return;
+  }
+  // Persist DOB/gender from the form first so Add measurement cannot wipe unsaved demographics.
+  const dobVal = document.getElementById("profile-dob")?.value;
+  const genderVal = document.getElementById("profile-gender")?.value;
+  if (dobVal || genderVal) {
+    try {
+      await persistDemographicsFromForm();
+    } catch (err) {
+      toast(err.message || "Could not save date of birth / gender", "error");
+      return;
+    }
   }
   const res = await fetch(`/api/patients/${state.activePatientId}/measurements`, {
     method: "POST",
