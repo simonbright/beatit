@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import shutil
 import subprocess
 import tempfile
@@ -662,6 +663,37 @@ async def _ocr_image_with_vision(
     return "", meta
 
 
+def local_image_ocr_usable_for_labs(text: str | None) -> bool:
+    """True when local OCR looks like a lab panel, not just a long noisy photo transcript.
+
+    Phone photos of LifeLabs reports often yield thousands of tesseract characters
+    that still miss result values. Char count alone must not skip vision.
+    """
+    body = str(text or "")
+    if len(body.strip()) < MIN_NATIVE_CHARS:
+        return False
+    pairs = 0
+    for name_pat in (
+        r"TRANSAMINASE|\bALT\b",
+        r"VITAMIN\s*D|25[\s\-]*HYDROXY",
+        r"VITAMIN\s*B\s*12|\bB12\b",
+        r"THYROID|STIMULATING\s+HORMONE|\bTSH\b",
+        r"FERRITIN",
+        r"HEMOGLOBIN|\bHGB\b",
+        r"CREATININE",
+        r"GLUCOSE",
+        r"CHOLESTEROL|\bLDL\b|\bHDL\b",
+        r"HEMOGLOBIN\s*A1C|\bHBA1C\b",
+    ):
+        m = re.search(name_pat, body, flags=re.IGNORECASE)
+        if not m:
+            continue
+        window = body[m.end() : m.end() + 80]
+        if re.search(r"\d{1,4}(?:\.\d{1,2})?", window):
+            pairs += 1
+    return pairs >= 2
+
+
 def extract_image_text(content: bytes) -> tuple[str, dict[str, Any]]:
     """OCR a single image (JPEG/PNG/WebP) via tesseract. Returns (text, meta)."""
     tesseract = shutil.which("tesseract")
@@ -724,15 +756,16 @@ def extract_image_text(content: bytes) -> tuple[str, dict[str, Any]]:
 async def extract_image_text_async(
     content: bytes, *, filename: str | None = None
 ) -> tuple[str, dict[str, Any]]:
-    """Local image OCR, then OpenRouter vision if local OCR failed or was thin."""
+    """Local image OCR, then OpenRouter vision if local OCR failed, was thin, or unusable as a lab."""
     text, meta = await asyncio.to_thread(extract_image_text, content)
-    if not meta.get("needs_ocr") and len((text or "").strip()) >= MIN_NATIVE_CHARS:
-        return text, meta
-    if (
-        len((text or "").strip()) >= MIN_NATIVE_CHARS
+    local_ok = (
+        not meta.get("needs_ocr")
+        and text
         and text != EMPTY_IMAGE_PLACEHOLDER
         and not is_empty_med_extract(text)
-    ):
+        and local_image_ocr_usable_for_labs(text)
+    )
+    if local_ok:
         return text, meta
 
     vision_text, vision_meta = await _ocr_image_with_vision(

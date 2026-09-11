@@ -3086,6 +3086,9 @@ async def api_import_patient_diagnostics_from_document(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    transcript = (result.get("vision_transcript") or "").strip()
+    if transcript:
+        await target_store.save_extracted_text(doc["id"], transcript)
     return result
 
 

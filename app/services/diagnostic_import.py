@@ -632,7 +632,77 @@ async def propose_diagnostics_from_document(
                 msg = f"{msg} {hint}"
             raise ValueError(msg)
 
-    return await _propose_from_text(patient_id, text, meta=meta, llm=llm)
+    from app.ingest.pdf import local_image_ocr_usable_for_labs
+
+    if text and not local_image_ocr_usable_for_labs(text):
+        vision = await _vision_reread_lab_image(doc)
+        if vision:
+            vision_text, vision_meta = vision
+            text = vision_text
+            meta = {
+                **meta,
+                **(vision_meta or {}),
+                "extraction_method": "vision_ocr",
+                "extracted_chars": len(vision_text),
+                "parse_method": "vision_reread",
+            }
+
+    result = await _propose_from_text(patient_id, text, meta=meta, llm=llm)
+    if result.get("proposed"):
+        if meta.get("parse_method") == "vision_reread":
+            result["vision_transcript"] = text
+        return result
+
+    # Stored tesseract can be long but unreadable. Re-read photos with vision and parse again.
+    if meta.get("parse_method") == "vision_reread":
+        return result
+    vision = await _vision_reread_lab_image(doc)
+    if not vision:
+        return result
+    vision_text, vision_meta = vision
+    meta = {
+        **meta,
+        **(vision_meta or {}),
+        "extraction_method": "vision_ocr",
+        "extracted_chars": len(vision_text),
+        "parse_method": "vision_reread",
+    }
+    retried = await _propose_from_text(patient_id, vision_text, meta=meta, llm=llm)
+    retried["vision_transcript"] = vision_text
+    if not retried.get("proposed"):
+        warnings = list(retried.get("warnings") or [])
+        warnings.append(
+            "Photo OCR could not be parsed. Vision re-read also found no lab rows — "
+            "check the preview, or enter readings manually."
+        )
+        retried["warnings"] = warnings
+    return retried
+
+
+async def _vision_reread_lab_image(
+    doc: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    from app.services.document_paths import resolve_document_file_path
+    from app.ingest.pdf import extract_image_text_async
+
+    path = resolve_document_file_path(doc)
+    if not path or not path.exists():
+        return None
+    name = path.name.lower()
+    orig = str((doc.get("metadata") or {}).get("original_filename") or "").lower()
+    if not name.endswith((".jpg", ".jpeg", ".png", ".webp")) and not orig.endswith(
+        (".jpg", ".jpeg", ".png", ".webp")
+    ):
+        return None
+    content = await asyncio.to_thread(path.read_bytes)
+    text, file_meta = await extract_image_text_async(content, filename=path.name)
+    method = str((file_meta or {}).get("extraction_method") or "")
+    if method not in {"vision_ocr", "vision_ocr_thin"}:
+        return None
+    cleaned = (text or "").strip()
+    if not cleaned or is_empty_med_extract(cleaned):
+        return None
+    return cleaned, file_meta or {}
 
 
 def _profile_readings_for_document(patient_id: str, doc_id: str | None) -> int:
