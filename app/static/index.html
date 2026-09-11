@@ -1556,13 +1556,13 @@
         <h4 class="patient-measurements-title">Key diagnostics</h4>
         <p class="muted small">Blood tests first (lipids, HbA1c, creatinine, etc.). Use the lab <strong>collection / date of service</strong>, not the print date. Imaging scores (e.g. calcium score) can be added too.</p>
         <div class="diagnostic-import-block" id="diagnostic-import-block">
-          <p class="muted small">Have lab PDFs or photos? Upload one or more — each file is stored in the <strong>Library</strong>, then processed in order (readings auto-added when clear). Use <strong>Import to Labs</strong> on a Library document if you need to review manually.</p>
+          <p class="muted small">Choose lab PDFs or photos, then tap <strong>Upload &amp; parse</strong>. Files are saved to the Library and parsing starts automatically — clear readings are added when possible, otherwise a review appears below. Use <strong>Import to Labs</strong> on a Library document only if you need to parse that file again.</p>
           <div class="medication-import-controls row-between wrap">
             <label class="medication-import-file-label" for="diag-import-file">
               <span class="sr-only">Lab results files</span>
               <input type="file" id="diag-import-file" accept=".pdf,image/jpeg,image/png,image/webp,image/*" multiple>
             </label>
-            <button type="button" class="btn secondary btn-sm" id="btn-import-diagnostics">Upload labs</button>
+            <button type="button" class="btn secondary btn-sm" id="btn-import-diagnostics">Upload &amp; parse</button>
           </div>
           <p class="muted small hidden" id="diag-import-status" role="status"></p>
           <div id="diag-import-review" class="med-import-review hidden" aria-live="polite">
