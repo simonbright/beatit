@@ -14837,16 +14837,16 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
   const total = files.length;
   setDiagImportStatus(
     total === 1
-      ? `Uploading to Library: ${files[0].name}…`
-      : `Uploading ${total} files to Library (processing in order)…`
+      ? `Uploading & parsing: ${files[0].name}…`
+      : `Uploading & parsing ${total} files (in order)…`
   );
   try {
     await withBackgroundTask({
       id: `upload-labs-${Date.now()}`,
       label:
         total === 1
-          ? `Uploading lab: ${files[0].name}`
-          : `Uploading ${total} lab files`,
+          ? `Uploading & parsing: ${files[0].name}`
+          : `Uploading & parsing ${total} lab files`,
       run: async ({ setDetail, isCancelled }) => {
         let ok = 0;
         let failed = 0;
