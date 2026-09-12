@@ -33,10 +33,12 @@ _SI_UNITS: dict[str, str] = {
     "vitamin d 25-oh": "nmol/L",
     "vitamin b12": "pmol/L",
     "ferritin": "µg/L",
+    "folate": "nmol/L",
     "iron": "µmol/L",
     "tibc": "µmol/L",
     "total psa": "µg/L",
     "testosterone": "nmol/L",
+    "mchc": "g/L",
     "wbc": "x E9/L",
     "rbc": "x E12/L",
     "platelets": "x E9/L",
@@ -66,10 +68,12 @@ _US_UNITS: dict[str, str] = {
     "vitamin d 25-oh": "ng/mL",
     "vitamin b12": "pg/mL",
     "ferritin": "ng/mL",
+    "folate": "ng/mL",
     "iron": "µg/dL",
     "tibc": "µg/dL",
     "total psa": "ng/mL",
     "testosterone": "ng/dL",
+    "mchc": "g/dL",
     "wbc": "Thousand/uL",
     "rbc": "Million/uL",
     "platelets": "Thousand/uL",
@@ -109,9 +113,11 @@ _MG = {"magnesium"}
 _VITD = {"vitamin d 25-oh", "vitamin d", "25-oh vitamin d", "25-hydroxy vitamin d"}
 _B12 = {"vitamin b12", "b12"}
 _FERR = {"ferritin"}
+_FOLATE = {"folate", "folate serum", "serum folate", "folic acid"}
 _IRON = {"iron", "tibc"}
 _PSA = {"total psa", "psa"}
 _TESTO = {"testosterone"}
+_MCHC = {"mchc"}
 _CELL_THOUSAND = {
     "wbc",
     "platelets",
@@ -128,18 +134,17 @@ _CELL_MILLION = {"rbc"}
 _IDENTITY_NAMES = {
     "hba1c",
     "a1c",
+    "tsh",
     "cholesterol/hdl ratio",
     "egfr",
     "alt",
     "ast",
     "alkaline phosphatase",
-    "tsh",
     "crp",
     "c reactive protein",
     "esr",
     "mcv",
     "mch",
-    "mchc",
     "rdw",
     "sodium",
     "potassium",
@@ -190,6 +195,8 @@ def normalize_unit(unit: str | None) -> str:
         "thousands/ul": "Thousand/uL",
         "k/ul": "Thousand/uL",
         "10*3/ul": "Thousand/uL",
+        "cells/ul": "cells/uL",
+        "cell/ul": "cells/uL",
         "million/ul": "Million/uL",
         "millions/ul": "Million/uL",
         "m/ul": "Million/uL",
@@ -233,8 +240,39 @@ def _analyte_key(name: str | None) -> str:
         "psa": "total psa",
         "c reactive protein": "crp",
         "platelet count": "platelets",
+        "folate, serum": "folate",
+        "serum folate": "folate",
+        "folic acid": "folate",
+        "thyroid stimulating hormone": "tsh",
+        "thyroid-stimulating hormone": "tsh",
     }
     return aliases.get(key, key)
+
+
+def canonical_lab_display_name(name: str | None) -> str:
+    """Merge common report synonyms onto one chart/table label."""
+    cleaned = " ".join(str(name or "").strip().split())
+    if not cleaned:
+        return ""
+    key = _analyte_key(cleaned)
+    display = {
+        "tsh": "TSH",
+        "folate": "Folate",
+        "ldl cholesterol": "LDL cholesterol",
+        "hdl cholesterol": "HDL cholesterol",
+        "non-hdl cholesterol": "Non-HDL cholesterol",
+        "total cholesterol": "Total cholesterol",
+        "triglyceride": "Triglyceride",
+        "glucose fasting": "Glucose fasting",
+        "vitamin d 25-oh": "Vitamin D 25-OH",
+        "vitamin b12": "Vitamin B12",
+        "total psa": "Total PSA",
+        "hemoglobin": "Hemoglobin",
+        "hematocrit": "Hematocrit",
+        "platelets": "Platelets",
+        "bilirubin total": "Bilirubin total",
+    }
+    return display.get(key, cleaned)
 
 
 def _round_value(value: float, *, system: str, unit: str) -> float:
@@ -274,6 +312,7 @@ def detect_unit_system(name: str | None, unit: str | None) -> UnitSystem:
         "ng/dL",
         "Thousand/uL",
         "Million/uL",
+        "cells/uL",
     }
     si_markers = {
         "mmol/L",
@@ -334,6 +373,10 @@ def _to_si(key: str, value: float, unit: str) -> tuple[float, str] | None:
         return value * 0.738, si_unit
     if key in _FERR and u in {"ng/mL", "ug/L"}:
         return value, si_unit
+    if key in _FOLATE and u == "ng/mL":
+        return value * 2.266, si_unit
+    if key in _MCHC and u == "g/dL":
+        return value * 10.0, si_unit
     if key in _IRON and u == "ug/dL":
         return value / 5.587, si_unit
     if key in _PSA and u == "ng/mL":
@@ -342,6 +385,8 @@ def _to_si(key: str, value: float, unit: str) -> tuple[float, str] | None:
         return value * 0.0347, si_unit
     if key in _CELL_THOUSAND and u == "Thousand/uL":
         return value, si_unit
+    if key in _CELL_THOUSAND and u == "cells/uL":
+        return value / 1000.0, si_unit
     if key in _CELL_MILLION and u == "Million/uL":
         return value, si_unit
     return None
@@ -352,6 +397,8 @@ def _to_us(key: str, value: float, unit: str) -> tuple[float, str] | None:
     us_unit = _US_UNITS.get(key)
     if not us_unit:
         return None
+    if u == "cells/uL" and key in _CELL_THOUSAND:
+        return value / 1000.0, us_unit
     if detect_unit_system(key, u) == "us" or u == normalize_unit(us_unit):
         return value, us_unit
     # Prefer converting from SI canonical
@@ -381,6 +428,10 @@ def _to_us(key: str, value: float, unit: str) -> tuple[float, str] | None:
         return value / 0.738, us_unit
     if key in _FERR and u in {"ug/L", "µg/L"}:
         return value, us_unit
+    if key in _FOLATE and u == "nmol/L":
+        return value / 2.266, us_unit
+    if key in _MCHC and u == "g/L":
+        return value / 10.0, us_unit
     if key in _IRON and u in {"umol/L", "µmol/L"}:
         return value * 5.587, us_unit
     if key in _PSA and u in {"ug/L", "µg/L"}:
@@ -389,6 +440,8 @@ def _to_us(key: str, value: float, unit: str) -> tuple[float, str] | None:
         return value / 0.0347, us_unit
     if key in _CELL_THOUSAND and u == "x E9/L":
         return value, us_unit
+    if key in _CELL_THOUSAND and u == "cells/uL":
+        return value / 1000.0, us_unit
     if key in _CELL_MILLION and u == "x E12/L":
         return value, us_unit
     # If we only have US already handled; if SI via mg/dL path failed, try via SI first
@@ -487,6 +540,10 @@ def convert_reference_band(
 def enrich_diagnostic_units(row: dict[str, Any]) -> dict[str, Any]:
     """Fill value_si/unit_si and value_us/unit_us from the original reading."""
     out = dict(row)
+    raw_name = out.get("name")
+    canon = canonical_lab_display_name(raw_name)
+    if canon:
+        out["name"] = canon
     name = out.get("name")
     try:
         value = float(out.get("value"))
@@ -494,20 +551,31 @@ def enrich_diagnostic_units(row: dict[str, Any]) -> dict[str, Any]:
         return out
     unit = normalize_unit(out.get("unit")) or (str(out.get("unit") or "").strip() or None)
     if unit:
-        out["unit"] = unit if unit != normalize_unit(out.get("unit")) else out.get("unit")
-        # Prefer normalized canonical spelling when we know it
         out["unit"] = unit
 
     key = _analyte_key(name)
     system = detect_unit_system(name, unit)
     out["unit_system_original"] = system
 
-    if key in _BLOCKED_NAMES or system == "unknown":
-        out.setdefault("value_si", value)
-        out.setdefault("unit_si", unit)
-        out.setdefault("value_us", value)
-        out.setdefault("unit_us", unit)
+    # Force recompute when new conversion rules apply (e.g. cells/uL, folate).
+    needs_recompute = (
+        "value_si" not in out
+        or "value_us" not in out
+        or (key in _FOLATE | _MCHC | _CELL_THOUSAND and unit in {"ng/mL", "g/dL", "cells/uL"})
+    )
+    if not needs_recompute and out.get("value_si") is not None and out.get("value_us") is not None:
         return out
+
+    if key in _BLOCKED_NAMES or system == "unknown":
+        # Absolute differentials in cells/uL are convertible for known WBC lines.
+        if not (key in _CELL_THOUSAND and normalize_unit(unit) == "cells/uL"):
+            out["value_si"] = value
+            out["unit_si"] = unit
+            out["value_us"] = value
+            out["unit_us"] = unit
+            return out
+        system = "us"
+        out["unit_system_original"] = "us"
 
     if system == "same" or key in _IDENTITY_NAMES:
         out["value_si"] = value
@@ -537,6 +605,15 @@ def diagnostic_needs_unit_enrichment(row: dict[str, Any] | None) -> bool:
         return False
     if row.get("value") is None:
         return False
+    name = str(row.get("name") or "")
+    unit = normalize_unit(row.get("unit"))
+    key = _analyte_key(name)
+    if canonical_lab_display_name(name) != name:
+        return True
+    if key in _FOLATE | _MCHC and unit in {"ng/mL", "g/dL"}:
+        return True
+    if key in _CELL_THOUSAND and unit == "cells/uL":
+        return True
     return (
         "value_si" not in row
         or "value_us" not in row

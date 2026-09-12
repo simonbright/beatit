@@ -649,14 +649,23 @@
               <p class="muted small">Blood-test trends with collection dates. Green shaded zone = on-target range (or the safe side of a one-sided bound). Trend line segments follow each reading (green / yellow / red). Gray values have no reference yet. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones. Toggle <strong>Canada</strong> or <strong>United States</strong> units when sharing with clinicians in either system — originals from each lab report are kept.</p>
             </div>
             <div class="diagnostics-actions">
-              <div class="diag-unit-toggle" role="group" aria-label="Lab unit system">
-                <button type="button" class="btn secondary btn-sm diag-unit-btn active" id="diag-unit-si" data-lab-unit="si" title="Canadian SI units (mmol/L, g/L)">Canada</button>
-                <button type="button" class="btn ghost btn-sm diag-unit-btn" id="diag-unit-us" data-lab-unit="us" title="US conventional units (mg/dL, g/dL)">United States</button>
-              </div>
               <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with date and time stamp">Export PDF</button>
               <button type="button" class="btn ghost btn-sm" id="btn-diagnostics-settings" data-nav-settings>Add in Settings</button>
             </div>
           </div>
+          <div class="diag-labs-toolbar" id="diag-labs-toolbar">
+            <div class="diag-view-toggle" role="group" aria-label="Labs view">
+              <button type="button" class="btn secondary btn-sm diag-view-btn active" id="diag-view-charts" data-labs-view="charts">Charts</button>
+              <button type="button" class="btn ghost btn-sm diag-view-btn" id="diag-view-table" data-labs-view="table">Table</button>
+            </div>
+            <div class="diag-unit-toggle" role="group" aria-label="Lab unit system">
+              <span class="diag-unit-toggle-label muted small">Units</span>
+              <button type="button" class="btn secondary btn-sm diag-unit-btn active" id="diag-unit-si" data-lab-unit="si" title="Canadian SI units (mmol/L, g/L)">Canada</button>
+              <button type="button" class="btn ghost btn-sm diag-unit-btn" id="diag-unit-us" data-lab-unit="us" title="US conventional units (mg/dL, g/dL)">United States</button>
+            </div>
+            <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-flip" title="Swap rows and columns">Flip table</button>
+          </div>
+          <p class="muted small diag-unit-hint" id="diag-unit-hint">Showing Canadian (SI) units. Original report values stay available on each point.</p>
           <details id="diagnostics-milestone-controls" class="diag-milestone-controls hidden">
             <summary class="diag-milestone-summary">
               <span class="diag-milestone-summary-label">Timeline overlays</span>
@@ -691,6 +700,11 @@
           <div id="diagnostics-status-filter" class="diag-status-filter hidden" role="group" aria-label="Filter labs by target status"></div>
           <div id="diagnostics-charts" class="diagnostics-charts">
             <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Who profile.</p>
+          </div>
+          <div id="diagnostics-table-wrap" class="diagnostics-table-wrap hidden">
+            <div class="diagnostics-table-scroll">
+              <table id="diagnostics-table" class="diagnostics-matrix-table" aria-label="Lab results by date"></table>
+            </div>
           </div>
         </div>
       </div>

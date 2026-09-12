@@ -1665,7 +1665,10 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
         name = (row.get("name") or "").strip()
         if not name or row.get("value") is None:
             continue
-        enriched = enrich_diagnostic_units(row) if "value_si" not in row else dict(row)
+        enriched = enrich_diagnostic_units(row)
+        name = (enriched.get("name") or name).strip()
+        if not name or enriched.get("value") is None:
+            continue
         key = name.lower()
         group = groups.get(key)
         category = _infer_diagnostic_category(name, enriched.get("category"))
@@ -1688,6 +1691,9 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
             group["unit_us"] = enriched["unit_us"]
         if category == "blood":
             group["category"] = "blood"
+        # Prefer canonical display name (e.g. TSH over long form)
+        if enriched.get("name") and len(str(enriched["name"])) <= len(str(group["name"])):
+            group["name"] = enriched["name"]
         group["readings"].append(
             {
                 "id": enriched.get("id"),

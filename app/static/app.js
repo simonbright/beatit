@@ -65,6 +65,8 @@ const state = {
   diagExpandCache: {},
   diagnosticSeriesCache: null,
   labUnitSystem: "si",
+  labsView: "charts",
+  labsTableFlipped: false,
   coverageReport: null,
   coverageView: "all",
   analysisJobId: null,
@@ -9102,7 +9104,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   state.patientProfileId = patientId || null;
   state.diagnosticSeriesCache = extras.diagnostic_series || series;
   if (extras.diagnostic_gaps) state.diagnosticGaps = extras.diagnostic_gaps;
-  renderDiagnosticsCharts(profile, series);
+  refreshDiagnosticsViews();
   const journalSeries = extras.journal_series || groupJournalClient(profile);
   renderJournalHome(profile, journalSeries);
   renderMedicationsHome(profile);
@@ -9648,7 +9650,7 @@ function applyDiagMilestonePrefsAndRedraw() {
   prefs.seen = inSpan.map((e) => e.id);
   saveDiagMilestonePrefs(state.activePatientId, prefs);
   renderDiagnosticsMilestoneControls(profile, allEvents, series);
-  renderDiagnosticsCharts(profile, series, { skipControls: true });
+  refreshDiagnosticsViews({ skipControls: true });
 }
 
 function filterMilestonesForRange(events, start, end, padDays = 0) {
@@ -12410,6 +12412,134 @@ function syncLabUnitToggleUi() {
     btn.classList.toggle("ghost", !active);
     btn.setAttribute("aria-pressed", active ? "true" : "false");
   });
+  const hint = document.getElementById("diag-unit-hint");
+  if (hint) {
+    hint.textContent =
+      system === "us"
+        ? "Showing United States (conventional) units. Tap Canada for SI (mmol/L, g/L). Original report values stay on each point."
+        : "Showing Canadian (SI) units. Tap United States for conventional (mg/dL, g/dL). Original report values stay on each point.";
+  }
+  const flipBtn = document.getElementById("btn-diag-table-flip");
+  flipBtn?.classList.toggle("hidden", state.labsView !== "table");
+}
+
+function syncLabsViewUi() {
+  const view = state.labsView === "table" ? "table" : "charts";
+  document.querySelectorAll(".diag-view-btn").forEach((btn) => {
+    const active = btn.getAttribute("data-labs-view") === view;
+    btn.classList.toggle("active", active);
+    btn.classList.toggle("secondary", active);
+    btn.classList.toggle("ghost", !active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  document.getElementById("diagnostics-charts")?.classList.toggle("hidden", view !== "charts");
+  document.getElementById("diagnostics-table-wrap")?.classList.toggle("hidden", view !== "table");
+  document.getElementById("diagnostics-status-filter")?.classList.toggle("hidden", view === "table");
+  document.getElementById("btn-diag-table-flip")?.classList.toggle("hidden", view !== "table");
+}
+
+function refreshDiagnosticsViews(opts = {}) {
+  const profile = state.patientProfile;
+  const series = state.diagnosticSeriesCache || [];
+  syncLabUnitToggleUi();
+  syncLabsViewUi();
+  if (state.labsView === "table") {
+    renderDiagnosticsTable(series);
+  } else {
+    renderDiagnosticsCharts(profile, series, opts);
+  }
+}
+
+function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem } = {}) {
+  const display = seriesForLabUnitSystem(series, system).filter(
+    (s) => (s.category || "blood") === "blood" || s.category === "vital" || s.category === "imaging"
+  );
+  const dates = [
+    ...new Set(
+      display.flatMap((s) =>
+        (s.readings || []).map((r) => String(r.recorded_at || "").slice(0, 10)).filter(Boolean)
+      )
+    ),
+  ].sort();
+  const tests = display
+    .map((s) => ({
+      name: s.name,
+      unit: s.unit || "",
+      byDate: Object.fromEntries(
+        (s.readings || []).map((r) => [
+          String(r.recorded_at || "").slice(0, 10),
+          {
+            value: r.value,
+            unit: r.unit || s.unit || "",
+            reportedAside: formatReportedAside(r),
+            status: r.status,
+          },
+        ])
+      ),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { dates, tests, flipped: Boolean(flipped) };
+}
+
+function renderDiagnosticsTable(series) {
+  const wrap = document.getElementById("diagnostics-table-wrap");
+  const table = document.getElementById("diagnostics-table");
+  if (!wrap || !table) return;
+  syncLabUnitToggleUi();
+  syncLabsViewUi();
+  const matrix = buildLabsMatrix(series || state.diagnosticSeriesCache || [], {
+    flipped: state.labsTableFlipped,
+    system: state.labUnitSystem,
+  });
+  if (!matrix.dates.length || !matrix.tests.length) {
+    table.innerHTML = `<tbody><tr><td class="muted small">No lab readings yet.</td></tr></tbody>`;
+    return;
+  }
+  const unitBadge =
+    state.labUnitSystem === "us" ? "US" : "Canada";
+  if (!matrix.flipped) {
+    // Rows = tests, columns = dates
+    const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Test · ${escapeHtml(unitBadge)}</th>${matrix.dates
+      .map((d) => `<th scope="col">${escapeHtml(formatDiagDateAxis(d))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>`)
+      .join("")}</tr></thead>`;
+    const body = matrix.tests
+      .map((t) => {
+        const cells = matrix.dates
+          .map((d) => {
+            const cell = t.byDate[d];
+            if (!cell) return `<td class="diag-matrix-empty">—</td>`;
+            const st = cell.status
+              ? ` diag-matrix-cell-${cell.status}`
+              : "";
+            const tip = `${t.name} · ${formatDiagDate(d)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}${cell.reportedAside || ""}`;
+            return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
+          })
+          .join("");
+        return `<tr><th scope="row">${escapeHtml(t.name)}</th>${cells}</tr>`;
+      })
+      .join("");
+    table.innerHTML = `${head}<tbody>${body}</tbody>`;
+  } else {
+    // Flipped: rows = dates, columns = tests
+    const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Date · ${escapeHtml(unitBadge)}</th>${matrix.tests
+      .map((t) => `<th scope="col">${escapeHtml(t.name)}</th>`)
+      .join("")}</tr></thead>`;
+    const body = matrix.dates
+      .map((d) => {
+        const cells = matrix.tests
+          .map((t) => {
+            const cell = t.byDate[d];
+            if (!cell) return `<td class="diag-matrix-empty">—</td>`;
+            const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
+            const tip = `${t.name} · ${formatDiagDate(d)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}`;
+            return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
+          })
+          .join("");
+        return `<tr><th scope="row">${escapeHtml(formatDiagDate(d))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>${cells}</tr>`;
+      })
+      .join("");
+    table.innerHTML = `${head}<tbody>${body}</tbody>`;
+  }
 }
 
 function seriesForLabUnitSystem(series, system = state.labUnitSystem) {
@@ -12800,32 +12930,41 @@ function clientStatusForValue(value, reference) {
   return null;
 }
 
+function isNarrowDiagViewport() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches;
+}
+
 function buildSparklineSvg(
   readings,
   { stroke = "var(--accent)", reference = null, milestones = null, size = "compact" } = {}
 ) {
   const large = size === "large";
-  const w = large ? 720 : 360;
-  const h = large ? 300 : 150;
-  const padL = large ? 72 : 46;
-  const padR = large ? 28 : 18;
-  const padTop = large ? 40 : 28;
-  const padBottom = large ? 44 : 28;
-  const fontY = large ? 14 : 10;
-  const fontVal = large ? 16 : 13;
-  const fontDate = large ? 12 : 10;
+  const narrow = isNarrowDiagViewport();
+  const w = large ? (narrow ? 400 : 720) : narrow ? 340 : 360;
+  const h = large ? (narrow ? 360 : 300) : narrow ? 175 : 150;
+  const padL = large ? (narrow ? 48 : 72) : narrow ? 40 : 46;
+  const padR = large ? (narrow ? 18 : 28) : 14;
+  const padTop = large ? (narrow ? 36 : 40) : 26;
+  // Extra bottom room for staggered dates on expand / mobile
+  const padBottom = large ? (narrow ? 78 : 56) : narrow ? 36 : 28;
+  const fontY = large ? (narrow ? 12 : 14) : 10;
+  const fontVal = large ? (narrow ? 13 : 16) : narrow ? 11 : 13;
+  const fontDate = large ? (narrow ? 11 : 12) : 10;
   const strokeW = large ? 3.6 : 2.8;
-  const dotR = large ? 6.2 : 4.2;
+  const dotR = large ? (narrow ? 5.4 : 6.2) : 4.2;
   const hitR = large ? 18 : 12;
-  const valueLift = large ? 16 : 12;
+  const valueLift = large ? 18 : 12;
   const plotClass = large ? "diag-chart-plot diag-chart-plot-large" : "diag-chart-plot";
   const svgClass = large ? "diag-chart-svg diag-chart-svg-large" : "diag-chart-svg";
+  const showValueLabels = large || (!narrow && (readings || []).length <= 6);
+  const showAllDates = large;
 
   const points = dedupeReadingsByDate(readings || [])
     .map((r) => ({
       date: String(r.recorded_at || "").slice(0, 10),
       value: Number(r.value),
       status: r.status || clientStatusForValue(r.value, reference),
+      reportedAside: formatReportedAside(r),
     }))
     .filter((p) => p.date && Number.isFinite(p.value))
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -12849,12 +12988,10 @@ function buildSparklineSvg(
     const refLine = hasRef
       ? `<text x="${w / 2}" y="${large ? 240 : 128}" text-anchor="middle" fill="currentColor" font-size="${large ? 16 : 13}" opacity="0.75">${escapeHtml(reference.label || "Reference")}</text>`
       : "";
-    const dateLine = large
-      ? `<text x="${w / 2}" y="168" text-anchor="middle" fill="currentColor" font-size="16" opacity="0.85">${escapeHtml(formatDiagDatePrecise(p.date))}</text>`
-      : "";
+    const dateLine = `<text x="${w / 2}" y="${large ? 168 : 98}" text-anchor="middle" fill="currentColor" font-size="${large ? 16 : 12}" opacity="0.9">${escapeHtml(formatDiagDate(p.date))}</text>`;
     return `<div class="${plotClass}">
       <svg class="${svgClass}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Single reading">
-        <text x="${w / 2}" y="${large ? 120 : 78}" text-anchor="middle" fill="${color}" font-size="${large ? 64 : 40}" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
+        <text x="${w / 2}" y="${large ? 120 : 72}" text-anchor="middle" fill="${color}" font-size="${large ? 56 : 36}" font-weight="700">${escapeHtml(formatDiagValue(p.value))}</text>
         ${dateLine}
         ${statusBit}
         ${refLine}
@@ -12869,7 +13006,6 @@ function buildSparklineSvg(
   let max = Math.max(...values);
   if (refLow != null) min = Math.min(min, refLow);
   if (refHigh != null) max = Math.max(max, refHigh);
-  // Give one-sided targets a visible green band
   if (direction === "lower_better" && refHigh != null) {
     min = Math.min(min, refHigh - Math.max(Math.abs(refHigh) * 0.25, 0.2));
   }
@@ -12885,7 +13021,6 @@ function buildSparklineSvg(
   const readMin = toDay(points[0].date);
   const readMax = toDay(points[points.length - 1].date);
   const dayMs = 86400000;
-  // Stretch the axis so meds started just after the last lab still plot with visible headroom
   const inRange = filterMilestonesForRange(
     milestones,
     points[0].date,
@@ -12909,7 +13044,6 @@ function buildSparklineSvg(
   }
   if (post.length) {
     const latest = Math.max(...post);
-    // Enough empty time after the last lab so a Sep 1 start isn't glued to Aug 27
     const minHead = Math.max((readMax - readMin) * 0.22, 50 * dayMs);
     tMax = Math.max(latest, readMax + minHead);
   }
@@ -12986,7 +13120,6 @@ function buildSparklineSvg(
     }
   }
 
-  // Color each segment by the worse of its endpoint statuses so the line tracks readings
   const segments = coords
     .slice(0, -1)
     .map((a, i) => {
@@ -12998,30 +13131,50 @@ function buildSparklineSvg(
     .join("");
 
   const dots = coords
-    .map((c) => {
+    .map((c, i) => {
       const label = formatDiagValue(c.value);
       const fill = statusColor(c.status);
-      const valueY = c.y - valueLift;
-      const tip = `${formatDiagDatePrecise(c.date)} · ${label}${
+      const above = i % 2 === 0;
+      const valueY = above
+        ? Math.max(plotTop + fontVal, c.y - valueLift)
+        : Math.min(plotBottom - 4, c.y + valueLift + fontVal * 0.35);
+      const tip = `${formatDiagDate(c.date)} · ${label}${
         c.status ? ` · ${statusLabel(c.status)}` : ""
-      }`;
+      }${c.reportedAside || ""}`;
+      const valueText = showValueLabels
+        ? `<text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="${fontVal}" font-weight="700" stroke="#fff" stroke-width="${large ? 5 : 4}" paint-order="stroke fill" pointer-events="none">${escapeHtml(label)}</text>`
+        : "";
       return `<g class="diag-chart-point" data-tip="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}">
         <circle class="diag-chart-hit" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${hitR}" fill="transparent" stroke="none"></circle>
         <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${dotR}" fill="${fill}" stroke="#fff" stroke-width="${large ? 2 : 1.5}" pointer-events="none"></circle>
-        <text x="${c.x.toFixed(1)}" y="${valueY.toFixed(1)}" text-anchor="middle" fill="currentColor" font-size="${fontVal}" font-weight="700" stroke="#fff" stroke-width="${large ? 5 : 4}" paint-order="stroke fill" pointer-events="none">${escapeHtml(label)}</text>
+        ${valueText}
         <title>${escapeHtml(tip)}</title>
       </g>`;
     })
     .join("");
 
-  const dateLabels = pickNonOverlappingAxisDates(coords, {
-    formatLabel: large ? formatDiagDate : formatDiagDateAxis,
-    minGap: large ? 14 : 8,
-  })
-    .map((c) => {
-      return `<text x="${c.x.toFixed(1)}" y="${(h - (large ? 12 : 8)).toFixed(1)}" text-anchor="${c.anchor}" fill="currentColor" font-size="${fontDate}" opacity="0.85" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(c.label)}</text>`;
+  let dateLabels = "";
+  if (showAllDates) {
+    dateLabels = coords
+      .map((c, i) => {
+        const label = formatDiagDateAxis(c.date);
+        const row = i % 2;
+        const y = h - (row === 0 ? (narrow ? 44 : 34) : (narrow ? 18 : 14));
+        const anchor =
+          i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle";
+        return `<text x="${c.x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" fill="currentColor" font-size="${fontDate}" font-weight="600" opacity="0.92" stroke="#fff" stroke-width="3.5" paint-order="stroke fill">${escapeHtml(label)}</text>`;
+      })
+      .join("");
+  } else {
+    dateLabels = pickNonOverlappingAxisDates(coords, {
+      formatLabel: formatDiagDateAxis,
+      minGap: narrow ? 16 : 10,
     })
-    .join("");
+      .map((c) => {
+        return `<text x="${c.x.toFixed(1)}" y="${(h - (narrow ? 10 : 8)).toFixed(1)}" text-anchor="${c.anchor}" fill="currentColor" font-size="${fontDate}" opacity="0.9" stroke="#fff" stroke-width="3" paint-order="stroke fill">${escapeHtml(c.label)}</text>`;
+      })
+      .join("");
+  }
 
   return `<div class="${plotClass}">
     <svg class="${svgClass}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Trend">
@@ -13150,13 +13303,17 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
         : meaning
           ? `<span class="diag-chart-info-link muted" title="${escapeHtml(meaning)}">What is this?</span>`
           : "";
+      const unitSystemBit =
+        state.labUnitSystem === "us"
+          ? `<span class="diag-unit-pill" title="United States conventional units">US</span>`
+          : `<span class="diag-unit-pill" title="Canadian SI units">CA</span>`;
       const expandKey = `${s.category || "blood"}::${s.name || "metric"}`;
       expandCache[expandKey] = { series: s, milestones, status };
       return `<article class="diag-chart-card diag-status-card-${status || "none"}" data-category="${escapeHtml(
         s.category || "blood"
       )}" data-diag-expand-key="${escapeHtml(expandKey)}" title="${escapeHtml(meaning || s.name)}">
       <div class="diag-chart-head">
-        <h4 class="diag-chart-title">${escapeHtml(s.name)}</h4>
+        <h4 class="diag-chart-title">${escapeHtml(s.name)} ${unitSystemBit}</h4>
         <div class="diag-chart-head-actions">
           <span class="diag-chart-latest" style="color:${stroke}">${escapeHtml(latestLabel)}</span>
           <button type="button" class="btn ghost btn-sm diag-chart-expand-btn" data-diag-expand="${escapeHtml(
@@ -15065,11 +15222,23 @@ document.getElementById("btn-diag-import-confirm")?.addEventListener("click", ()
 
 document.getElementById("diag-unit-si")?.addEventListener("click", () => {
   saveLabUnitSystem("si");
-  renderDiagnosticsCharts(state.patientProfile, state.diagnosticSeriesCache || []);
+  refreshDiagnosticsViews();
 });
 document.getElementById("diag-unit-us")?.addEventListener("click", () => {
   saveLabUnitSystem("us");
-  renderDiagnosticsCharts(state.patientProfile, state.diagnosticSeriesCache || []);
+  refreshDiagnosticsViews();
+});
+document.getElementById("diag-view-charts")?.addEventListener("click", () => {
+  state.labsView = "charts";
+  refreshDiagnosticsViews();
+});
+document.getElementById("diag-view-table")?.addEventListener("click", () => {
+  state.labsView = "table";
+  refreshDiagnosticsViews();
+});
+document.getElementById("btn-diag-table-flip")?.addEventListener("click", () => {
+  state.labsTableFlipped = !state.labsTableFlipped;
+  refreshDiagnosticsViews();
 });
 
 document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", async () => {
@@ -15225,7 +15394,8 @@ document.getElementById("diagnostics-status-filter")?.addEventListener("click", 
   const series = resolveDiagnosticSeries(profile, {
     diagnostic_series: state.diagnosticSeriesCache,
   });
-  renderDiagnosticsCharts(profile, series, { skipControls: true });
+  state.diagnosticSeriesCache = series;
+  refreshDiagnosticsViews({ skipControls: true });
 });
 
 document.getElementById("diagnostics-charts")?.addEventListener("click", (e) => {
