@@ -3009,7 +3009,7 @@ class PatientDiagnosticConfirmItem(BaseModel):
 
 
 class PatientDiagnosticConfirmRequest(BaseModel):
-    diagnostics: list[PatientDiagnosticConfirmItem] = Field(default_factory=list, max_length=120)
+    diagnostics: list[PatientDiagnosticConfirmItem] = Field(default_factory=list, max_length=400)
     source_document_id: str | None = Field(default=None, max_length=120)
 
 

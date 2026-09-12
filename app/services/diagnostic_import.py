@@ -45,7 +45,8 @@ Return a JSON array. Each object may include:
 Rules:
 - Prefer collection / specimen / date of service over report print date.
 - If one collection date applies to the whole panel, use it for every row.
-- Do not invent values. Skip rows without a numeric result.
+- Historical / multi-visit exports (several "Date of Service" or Lab No. sections, or date columns): emit a **separate row for every analyte on every collection date**. Do not collapse history to the latest visit.
+- Do not invent values. Skip rows without a numeric result (ignore NEGATIVE / text-only).
 - Prefer standard names when clear (LDL → "LDL cholesterol", HDL → "HDL cholesterol", non-HDL → "Non-HDL cholesterol").
 - Include ratios and scores (e.g. Cholesterol/HDL ratio, coronary calcium) when present.
 - Never emit duplicate rows for the same test on the same collection date (one row per analyte per date).
@@ -218,6 +219,13 @@ def clamp_proposed_diagnostic(raw: Any) -> dict[str, Any] | None:
             recorded_at = _normalize_med_date(str(recorded_raw))
         except ValueError:
             recorded_at = None
+        if recorded_at is None:
+            from app.services.lab_patient_identity import parse_dob_to_iso
+
+            # LifeLabs-style dates (01-SEP-26, Jul 03 2026) and date+time stamps
+            date_token = str(recorded_raw).strip()
+            date_token = re.split(r"[T\s]\d{1,2}:", date_token, maxsplit=1)[0].strip()
+            recorded_at = parse_dob_to_iso(date_token)
     unit = _clamp_str(raw.get("unit"), 40)
     if not unit:
         for preset in DIAGNOSTIC_PRESETS:
@@ -263,8 +271,185 @@ def parse_diagnostics_json(raw: str) -> tuple[list[dict[str, Any]], list[str]]:
 
 _SERVICE_DATE_RE = re.compile(
     r"(?im)(?:Date\s+of\s+Service|Collected|Collection\s+Date|Specimen\s+Date|Drawn)\s*[:\-]?\s*"
-    r"(\d{1,2}[-/][A-Za-z]{3,9}[-/]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})"
+    r"("
+    r"[A-Za-z]{3,9}\s+\d{1,2}\s+\d{2,4}"  # Jul 03 2026
+    r"|\d{1,2}[-/][A-Za-z]{3,9}[-/]\d{2,4}"  # 03-JUL-2026
+    r"|\d{4}-\d{2}-\d{2}"
+    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    r")"
 )
+
+_LIFELABS_DOS_RE = re.compile(
+    r"(?im)Date\s+of\s+Service:\s*([A-Za-z]{3,9}\s+\d{1,2}\s+\d{2,4})"
+)
+
+_LIFELABS_SECTION_START_RE = re.compile(
+    r"(?im)(?:^|\n)(?:Lab\s+No:\s*\S+|Date\s+of\s+Service:\s*[A-Za-z]{3,9}\s+\d{1,2}\s+\d{2,4})"
+)
+
+# (canonical name, line-start pattern, default unit). Longer / more specific first.
+_LIFELABS_LINE_TESTS: list[tuple[str, str, str]] = [
+    ("Immature Granulocytes", r"Immature\s+Granulocytes", "x E9/L"),
+    ("Non-HDL cholesterol", r"Non\s*[- ]?\s*HDL\s+Cholesterol", "mmol/L"),
+    ("HDL cholesterol", r"HDL\s+Cholesterol", "mmol/L"),
+    ("LDL cholesterol", r"LDL\s+Cholesterol", "mmol/L"),
+    ("Cholesterol/HDL ratio", r"Chol(?:esterol)?/HDL(?:\s+Ratio)?", None),
+    ("Total cholesterol", r"Cholesterol(?!\s*/)", "mmol/L"),
+    ("Triglyceride", r"Triglycerides?", "mmol/L"),
+    ("Vitamin D 25-OH", r"25-Hydroxy\s+Vitamin\s+D", "nmol/L"),
+    ("Vitamin B12", r"Vitamin\s+B12", "pmol/L"),
+    ("TSH", r"(?:Thyroid\s+Stimulating\s+Hormone|TSH)", "mIU/L"),
+    ("CRP", r"C\s*Reactive\s+Protein", "mg/L"),
+    ("ESR", r"Erythrocyte\s+Sedimentation\s+Rate", "mm/hr"),
+    ("eGFR", r"Glomerular\s+Filtration\s+Rate\s*\(eGFR\)", "mL/min/1.73m2"),
+    ("ALT", r"Alanine\s+Aminotransferase(?:\s*\(ALT\))?", "U/L"),
+    ("AST", r"Aspartate\s+Aminotransferase(?:\s*\(AST\))?", "U/L"),
+    ("Alkaline Phosphatase", r"Alkaline\s+Phosphatase", "U/L"),
+    ("Bilirubin total", r"Bilirubin\s+Total", "umol/L"),
+    ("Glucose fasting", r"Glucose\s+Fasting", "mmol/L"),
+    ("Glucose random", r"Glucose\s*\(\s*Random\s*\)", "mmol/L"),
+    ("HbA1c", r"(?:Hemoglobin\s+A1[cC]|HbA1[cC])", "%"),
+    ("Platelets", r"Platelet(?:\s+Count)?", "x E9/L"),
+    ("Neutrophils", r"Neutrophils", "x E9/L"),
+    ("Lymphocytes", r"Lymphocytes", "x E9/L"),
+    ("Monocytes", r"Monocytes", "x E9/L"),
+    ("Eosinophils", r"Eosinophils", "x E9/L"),
+    ("Basophils", r"Basophils", "x E9/L"),
+    ("Hemoglobin", r"Hemoglobin(?!\s+A1)", "g/L"),
+    ("Hematocrit", r"Hematocrit", "L/L"),
+    ("Creatinine", r"Creatinine(?!\s*\()", "umol/L"),
+    ("Albumin", r"Albumin(?!\s*\()", "g/L"),
+    ("Ferritin", r"Ferritin", "ug/L"),
+    ("Magnesium", r"Magnesium", "mmol/L"),
+    ("Calcium", r"Calcium", "mmol/L"),
+    ("Sodium", r"Sodium", "mmol/L"),
+    ("Potassium", r"Potassium", "mmol/L"),
+    ("Chloride", r"Chloride", "mmol/L"),
+    ("MCHC", r"MCHC", "g/L"),
+    ("MCV", r"MCV", "fL"),
+    ("MCH", r"MCH", "pg"),
+    ("RDW", r"RDW", "%"),
+    ("WBC", r"WBC", "x E9/L"),
+    ("RBC", r"RBC(?!\s+Morphology)", "x E12/L"),
+]
+
+_LIFELABS_VALUE_TAIL = (
+    r"\s+(?:(?P<flag>HI|LO|HH|LL)\s+)?"
+    r"(?P<ineq>[<>]=?)?\s*"
+    r"(?P<value>\d+(?:\.\d+)?)\b"
+    r"(?:\s+(?P<unit>"
+    r"x\s*E9/L|x\s*E12/L|U/L|nmol/L|pmol/L|mIU/L|ug/L|µg/L|g/L|mmol/L|mg/L|"
+    r"umol/L|µmol/L|mm/hr|mm/h|fL|pg|L/L|%|mL/min(?:/1\.73m2)?"
+    r"))?"
+)
+
+
+def _parse_lab_service_date(text: str) -> str | None:
+    from app.services.lab_patient_identity import parse_dob_to_iso
+
+    m = _SERVICE_DATE_RE.search(text or "")
+    if not m:
+        return None
+    return parse_dob_to_iso(m.group(1).strip())
+
+
+def _parse_lifelabs_dos(text: str) -> str | None:
+    from app.services.lab_patient_identity import parse_dob_to_iso
+
+    m = _LIFELABS_DOS_RE.search(text or "")
+    if m:
+        return parse_dob_to_iso(m.group(1).strip())
+    return _parse_lab_service_date(text)
+
+
+def _split_lifelabs_sections(text: str) -> list[str]:
+    body = str(text or "")
+    if not body.strip():
+        return []
+    starts = [m.start() for m in _LIFELABS_SECTION_START_RE.finditer(body)]
+    if not starts:
+        return [body]
+    if starts[0] > 0:
+        starts = [0] + starts
+    sections: list[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(body)
+        chunk = body[start:end].strip()
+        if chunk:
+            sections.append(chunk)
+    return sections
+
+
+def _parse_lifelabs_section_rows(section: str, service_date: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for display_name, name_pat, default_unit in _LIFELABS_LINE_TESTS:
+        pat = re.compile(rf"(?im)^(?:{name_pat}){_LIFELABS_VALUE_TAIL}")
+        m = pat.search(section)
+        if not m:
+            continue
+        key = display_name.lower()
+        if key in seen:
+            continue
+        try:
+            value = float(m.group("value"))
+        except (TypeError, ValueError):
+            continue
+        unit = (m.group("unit") or default_unit or "").strip() or default_unit
+        if unit:
+            unit = re.sub(r"\s+", " ", unit)
+        flag = (m.group("flag") or "").strip().upper()
+        ineq = (m.group("ineq") or "").strip()
+        notes_parts: list[str] = []
+        if flag in {"LO", "L", "LL"}:
+            notes_parts.append("LO")
+        elif flag in {"HI", "H", "HH"}:
+            notes_parts.append("HI")
+        if ineq:
+            notes_parts.append(f"{ineq}{m.group('value')}")
+        if display_name == "Glucose fasting":
+            notes_parts.append("fasting")
+        row = clamp_proposed_diagnostic(
+            {
+                "name": display_name,
+                "value": value,
+                "unit": unit,
+                "recorded_at": service_date,
+                "notes": "; ".join(dict.fromkeys(notes_parts)) or None,
+                "category": "blood",
+            }
+        )
+        if row:
+            seen.add(key)
+            found.append(row)
+    return found
+
+
+def heuristic_parse_lifelabs_history(text: str) -> list[dict[str, Any]]:
+    """Parse LifeLabs multi-visit PDF exports: one row per analyte per Date of Service."""
+    body = str(text or "")
+    if not body.strip():
+        return []
+    dos_hits = _LIFELABS_DOS_RE.findall(body)
+    # Prefer sectioned parse when the export spans multiple visits or many pages.
+    if len({h.strip() for h in dos_hits}) < 2 and "Lab No:" not in body:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for section in _split_lifelabs_sections(body):
+        service_date = _parse_lifelabs_dos(section)
+        if not service_date:
+            continue
+        for row in _parse_lifelabs_section_rows(section, service_date):
+            key = diagnostic_identity_key(row.get("name"), row.get("recorded_at"))
+            if key and key in seen_keys:
+                continue
+            if key:
+                seen_keys.add(key)
+            rows.append(row)
+    return rows
+
 
 # Common LifeLabs / Canadian panel rows: NAME … VALUE [FLAG] [REF] UNIT
 _HEURISTIC_LAB_TESTS: list[tuple[str, str, str]] = [
@@ -283,17 +468,12 @@ _HEURISTIC_LAB_TESTS: list[tuple[str, str, str]] = [
 ]
 
 
-def _parse_lab_service_date(text: str) -> str | None:
-    from app.services.lab_patient_identity import parse_dob_to_iso
-
-    m = _SERVICE_DATE_RE.search(text or "")
-    if not m:
-        return None
-    return parse_dob_to_iso(m.group(1))
-
-
 def heuristic_parse_lab_panel(text: str) -> list[dict[str, Any]]:
     """Regex fallback for clear panel layouts (e.g. LifeLabs) when LLM returns nothing."""
+    history = heuristic_parse_lifelabs_history(text)
+    if history:
+        return history
+
     body = str(text or "")
     if not body.strip():
         return []
@@ -340,6 +520,23 @@ def heuristic_parse_lab_panel(text: str) -> list[dict[str, Any]]:
             seen.add(key)
             found.append(row)
     return found
+
+
+def _merge_proposed_readings(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Union by (name, date); keep primary row when both present."""
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in list(primary) + list(secondary):
+        key = diagnostic_identity_key(row.get("name"), row.get("recorded_at"))
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        merged.append(row)
+    return merged
 
 
 def diagnostic_identity_key(
@@ -498,37 +695,75 @@ async def _propose_from_text(
     if is_empty_med_extract(text):
         raise ValueError("No readable text found for lab import.")
 
-    clipped = text if len(text) <= 28000 else text[:28000] + "\n…[truncated]"
-    client = llm or LLMClient()
-    try:
-        raw = await client.chat(
-            messages=[
-                {"role": "system", "content": DIAG_IMPORT_SYSTEM},
-                {
-                    "role": "user",
-                    "content": DIAG_IMPORT_USER_TEMPLATE.format(
-                        text=clipped,
-                        preset_names=_preset_names_for_prompt(),
-                    ),
-                },
-            ],
-            temperature=0.1,
-        )
-    except Exception as exc:
-        raise ValueError(f"Could not parse lab results with LLM: {exc}") from exc
+    heuristic_full = heuristic_parse_lab_panel(text)
+    heuristic_dates = {
+        str(r.get("recorded_at") or "")[:10]
+        for r in heuristic_full
+        if r.get("recorded_at")
+    }
+    prefer_heuristic = len(heuristic_dates) >= 2 or len(heuristic_full) >= 20
 
-    proposed, parse_warnings = parse_diagnostics_json(raw)
-    warnings.extend(parse_warnings)
-    if not proposed:
-        heuristic = heuristic_parse_lab_panel(clipped)
-        if heuristic:
-            proposed = heuristic
-            warnings.append(
-                f"Used table fallback parser ({len(heuristic)} reading(s)) after model returned none"
+    clipped = text if len(text) <= 28000 else text[:28000] + "\n…[truncated]"
+    if prefer_heuristic and len(text) > 28000:
+        warnings.append(
+            f"Long multi-visit lab export ({len(text)} chars) — used dated table parser "
+            f"for {len(heuristic_full)} reading(s) across {len(heuristic_dates)} date(s)"
+        )
+
+    proposed: list[dict[str, Any]] = []
+    if prefer_heuristic:
+        proposed = list(heuristic_full)
+        if meta is not None:
+            meta = {
+                **(meta or {}),
+                "parse_method": "heuristic_lifelabs_history",
+                "extraction_method": (meta or {}).get("extraction_method") or "heuristic",
+            }
+    else:
+        client = llm or LLMClient()
+        try:
+            raw = await client.chat(
+                messages=[
+                    {"role": "system", "content": DIAG_IMPORT_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": DIAG_IMPORT_USER_TEMPLATE.format(
+                            text=clipped,
+                            preset_names=_preset_names_for_prompt(),
+                        ),
+                    },
+                ],
+                temperature=0.1,
             )
-            if meta is not None:
-                meta = {**(meta or {}), "extraction_method": (meta or {}).get("extraction_method") or "heuristic"}
-                meta["parse_method"] = "heuristic_panel"
+        except Exception as exc:
+            raise ValueError(f"Could not parse lab results with LLM: {exc}") from exc
+
+        proposed, parse_warnings = parse_diagnostics_json(raw)
+        warnings.extend(parse_warnings)
+        if heuristic_full:
+            before = len(proposed)
+            proposed = _merge_proposed_readings(proposed, heuristic_full)
+            gained = len(proposed) - before
+            if gained > 0:
+                warnings.append(
+                    f"Merged {gained} additional reading(s) from table parser"
+                )
+            elif not proposed and heuristic_full:
+                proposed = heuristic_full
+                warnings.append(
+                    f"Used table fallback parser ({len(heuristic_full)} reading(s)) "
+                    "after model returned none"
+                )
+                if meta is not None:
+                    meta = {
+                        **(meta or {}),
+                        "extraction_method": (meta or {}).get("extraction_method")
+                        or "heuristic",
+                        "parse_method": "heuristic_panel",
+                    }
+        elif not proposed:
+            warnings.append("No lab readings detected in the document")
+
     proposed, overlap_warnings, _ = annotate_proposed_duplicates(proposed, patient_id)
     warnings.extend(overlap_warnings)
     missing_dates = sum(1 for p in proposed if not p.get("recorded_at"))
@@ -747,18 +982,6 @@ async def auto_confirm_lab_readings_from_document(
             proposed_count=max(linked, int(meta.get("reading_count") or 0)),
             warnings=["Library entry was built from existing chart readings — skipped re-import"],
         )
-    linked_existing = _profile_readings_for_document(patient_id, doc_id)
-    if linked_existing > 0 and meta.get("handling_status") in {"ok", "handled", "dismissed"}:
-        return _empty_lab_import_result(
-            patient_id,
-            doc,
-            skipped_duplicate=linked_existing,
-            proposed_count=linked_existing,
-            warnings=[
-                f"Skipped re-import — {linked_existing} reading(s) already linked to this document"
-            ],
-        )
-
     # Identity check before LLM parse when text is already available (cheap)
     text_for_id = (extracted_text or "").strip()
     identity_preview = None
