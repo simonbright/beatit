@@ -866,31 +866,42 @@ def attach_references_to_series(
     date_of_birth: str | None,
     gender: str | None,
 ) -> list[dict[str, Any]]:
+    """Attach SI reference bands and dual-system status (SI + US refs)."""
+    from app.services.lab_units import convert_reference_band
+
     age = age_years_from_dob(date_of_birth)
     out: list[dict[str, Any]] = []
     for item in series:
         row = dict(item)
-        ref = reference_for_metric(
+        si_unit = row.get("unit_si") or row.get("unit")
+        ref_si = reference_for_metric(
             str(row.get("name") or ""),
-            unit=row.get("unit"),
+            unit=si_unit,
             gender=gender,
             age=age,
         )
-        if ref:
-            row["reference"] = ref
+        ref_us = convert_reference_band(row.get("name"), ref_si, to_system="us") if ref_si else None
+        if ref_si:
+            row["reference"] = ref_si
+            row["reference_si"] = ref_si
+            if ref_us:
+                row["reference_us"] = ref_us
+            # Status uses SI values (canonical clinical bands)
             latest = row.get("latest") or {}
-            status = status_for_value(latest.get("value"), ref)
+            latest_si = latest.get("value_si", latest.get("value"))
+            status = status_for_value(latest_si, ref_si)
             if status:
                 row["status"] = status
-            # Per-reading status for chart coloring
             readings = []
             for r in row.get("readings") or []:
                 rr = dict(r)
-                st = status_for_value(rr.get("value"), ref)
+                st = status_for_value(rr.get("value_si", rr.get("value")), ref_si)
                 if st:
                     rr["status"] = st
                 readings.append(rr)
             row["readings"] = readings
+            if readings:
+                row["latest"] = readings[-1]
         out.append(row)
     return out
 

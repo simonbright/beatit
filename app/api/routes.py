@@ -2738,7 +2738,11 @@ async def api_get_patient_profile(patient_id: str):
 
 
 @router.get("/patients/{patient_id}/diagnostics/export.pdf")
-async def export_patient_diagnostics_pdf(patient_id: str, request: Request):
+async def export_patient_diagnostics_pdf(
+    patient_id: str,
+    request: Request,
+    unit_system: str = "si",
+):
     patients = list_patients()
     patient = next((p for p in patients if p["id"] == patient_id), None)
     if not patient:
@@ -2748,12 +2752,19 @@ async def export_patient_diagnostics_pdf(patient_id: str, request: Request):
     if not series:
         raise HTTPException(status_code=404, detail="No diagnostics to export")
 
+    from app.services.lab_units import project_series_for_unit_system
+
+    system = "us" if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"} else "si"
+    series = project_series_for_unit_system(series, system)
+
     sub_bits: list[str] = []
     age = age_years_from_dob(profile.get("date_of_birth"))
     if age is not None:
         sub_bits.append(f"Age {age}")
     if profile.get("gender"):
         sub_bits.append(str(profile["gender"]))
+    system_label = "United States (conventional)" if system == "us" else "Canada (SI)"
+    sub_bits.append(f"Units: {system_label}")
     patient_subline = " · ".join(sub_bits) if sub_bits else None
 
     exported_at = datetime.now(timezone.utc)
@@ -2779,6 +2790,7 @@ async def export_patient_diagnostics_pdf(patient_id: str, request: Request):
             "filename": filename,
             "export_kind": "diagnostics",
             "series_count": len(series),
+            "unit_system": system,
         },
     )
     return FastAPIResponse(

@@ -2604,6 +2604,23 @@ body {
   align-items: center;
 }
 
+.diag-unit-toggle {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+  padding: 0.1rem;
+  border-radius: 0.45rem;
+  background: rgba(15, 118, 110, 0.06);
+}
+
+.diag-unit-toggle .diag-unit-btn {
+  min-width: 5.5rem;
+}
+
+.diag-unit-toggle .diag-unit-btn.active {
+  font-weight: 600;
+}
+
 .patient-diagnostic-form {
   grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
 }

@@ -193,9 +193,14 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
             reverse=True,
         )
     diagnostics = data.get("diagnostics") or []
+    units_changed = False
     if isinstance(diagnostics, list):
+        from app.services.lab_units import enrich_diagnostics_list
+
+        cleaned = [d for d in diagnostics if isinstance(d, dict)]
+        enriched, units_changed = enrich_diagnostics_list(cleaned)
         profile["diagnostics"] = sorted(
-            diagnostics,
+            enriched,
             key=lambda d: str(d.get("recorded_at") or ""),
             reverse=True,
         )
@@ -280,6 +285,11 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
+    if units_changed:
+        try:
+            save_patient_profile(patient_id, profile)
+        except OSError:
+            pass
     return profile
 
 
@@ -533,6 +543,9 @@ def add_patient_diagnostic(
     doc_id = (source_document_id or "").strip() or None
     if doc_id:
         entry["source_document_id"] = doc_id
+    from app.services.lab_units import enrich_diagnostic_units
+
+    entry = enrich_diagnostic_units(entry)
     profile.setdefault("diagnostics", []).append(entry)
     saved = save_patient_profile(patient_id, profile)
     return next((d for d in saved["diagnostics"] if d["id"] == entry["id"]), entry)
@@ -1643,34 +1656,50 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
 
     Blood-test series with multiple dated points are sorted first.
     Same-day duplicates are collapsed (last reading wins) so chart axes stay clean.
+    Each reading includes original plus SI/US display values when available.
     """
+    from app.services.lab_units import enrich_diagnostic_units
+
     groups: dict[str, dict[str, Any]] = {}
     for row in (profile or {}).get("diagnostics") or []:
         name = (row.get("name") or "").strip()
         if not name or row.get("value") is None:
             continue
+        enriched = enrich_diagnostic_units(row) if "value_si" not in row else dict(row)
         key = name.lower()
         group = groups.get(key)
-        category = _infer_diagnostic_category(name, row.get("category"))
+        category = _infer_diagnostic_category(name, enriched.get("category"))
         if not group:
             group = {
                 "key": key,
                 "name": name,
-                "unit": row.get("unit"),
+                "unit": enriched.get("unit"),
+                "unit_si": enriched.get("unit_si") or enriched.get("unit"),
+                "unit_us": enriched.get("unit_us") or enriched.get("unit"),
                 "category": category,
                 "readings": [],
             }
             groups[key] = group
-        if row.get("unit") and not group.get("unit"):
-            group["unit"] = row["unit"]
+        if enriched.get("unit") and not group.get("unit"):
+            group["unit"] = enriched["unit"]
+        if enriched.get("unit_si"):
+            group["unit_si"] = enriched["unit_si"]
+        if enriched.get("unit_us"):
+            group["unit_us"] = enriched["unit_us"]
         if category == "blood":
             group["category"] = "blood"
         group["readings"].append(
             {
-                "id": row.get("id"),
-                "recorded_at": str(row.get("recorded_at") or "")[:10],
-                "value": row.get("value"),
-                "notes": row.get("notes"),
+                "id": enriched.get("id"),
+                "recorded_at": str(enriched.get("recorded_at") or "")[:10],
+                "value": enriched.get("value"),
+                "unit": enriched.get("unit"),
+                "value_si": enriched.get("value_si", enriched.get("value")),
+                "unit_si": enriched.get("unit_si") or enriched.get("unit"),
+                "value_us": enriched.get("value_us", enriched.get("value")),
+                "unit_us": enriched.get("unit_us") or enriched.get("unit"),
+                "unit_system_original": enriched.get("unit_system_original"),
+                "notes": enriched.get("notes"),
             }
         )
     series: list[dict[str, Any]] = []
@@ -1681,11 +1710,15 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
         )
         readings = _dedupe_readings_by_date(raw_readings)
         latest = readings[-1] if readings else None
+        # Default series unit stays SI for status/reference attachment
         series.append(
             {
                 "key": group["key"],
                 "name": group["name"],
-                "unit": group.get("unit"),
+                "unit": group.get("unit_si") or group.get("unit"),
+                "unit_si": group.get("unit_si") or group.get("unit"),
+                "unit_us": group.get("unit_us") or group.get("unit"),
+                "unit_original": group.get("unit"),
                 "category": group.get("category") or "blood",
                 "readings": readings,
                 "latest": latest,
@@ -1805,23 +1838,47 @@ def format_profile_for_prompt(
     trend_n = 8 if rich else 5
     if diag_series:
         lines.append(
-            "Lab / diagnostic readings (most recent first within each metric; cite as Patient profile):"
+            "Lab / diagnostic readings (most recent first within each metric; cite as Patient profile). "
+            "When US and Canadian units differ, both are shown:"
         )
+    from app.services.lab_units import format_dual_unit_text
+
     for series in diag_series[:diag_limit]:
         latest_row = series.get("latest") or {}
-        unit = f" {series['unit']}" if series.get("unit") else ""
-        if latest_row.get("value") is None:
+        if latest_row.get("value") is None and latest_row.get("value_si") is None:
             continue
-        line = (
-            f"{series['name']}: {latest_row['value']}{unit} "
-            f"({latest_row.get('recorded_at') or '?'})"
+        dual = format_dual_unit_text(
+            {
+                "name": series.get("name"),
+                "value": latest_row.get("value"),
+                "unit": latest_row.get("unit") or series.get("unit_original") or series.get("unit"),
+                "value_si": latest_row.get("value_si", latest_row.get("value")),
+                "unit_si": latest_row.get("unit_si") or series.get("unit_si") or series.get("unit"),
+                "value_us": latest_row.get("value_us", latest_row.get("value")),
+                "unit_us": latest_row.get("unit_us") or series.get("unit_us") or series.get("unit"),
+                "unit_system_original": latest_row.get("unit_system_original"),
+            },
+            prefer="si",
         )
+        line = f"{series['name']}: {dual} ({latest_row.get('recorded_at') or '?'})"
         if series["point_count"] > 1:
-            trend = ", ".join(
-                f"{r.get('recorded_at')}: {r.get('value')}"
-                for r in (series.get("readings") or [])[-trend_n:]
-            )
-            line += f" · history {trend}"
+            trend_bits = []
+            for r in (series.get("readings") or [])[-trend_n:]:
+                bit = format_dual_unit_text(
+                    {
+                        "name": series.get("name"),
+                        "value": r.get("value"),
+                        "unit": r.get("unit") or series.get("unit"),
+                        "value_si": r.get("value_si", r.get("value")),
+                        "unit_si": r.get("unit_si") or series.get("unit_si"),
+                        "value_us": r.get("value_us", r.get("value")),
+                        "unit_us": r.get("unit_us") or series.get("unit_us"),
+                        "unit_system_original": r.get("unit_system_original"),
+                    },
+                    prefer="si",
+                )
+                trend_bits.append(f"{r.get('recorded_at')}: {bit}")
+            line += f" · history {', '.join(trend_bits)}"
         lines.append(line)
 
     journal_days = 90 if rich else 14

@@ -64,6 +64,7 @@ const state = {
   diagnosticGaps: null,
   diagExpandCache: {},
   diagnosticSeriesCache: null,
+  labUnitSystem: "si",
   coverageReport: null,
   coverageView: "all",
   analysisJobId: null,
@@ -7379,6 +7380,8 @@ function initSectionSubnav() {
 }
 
 async function loadInitialData() {
+  state.labUnitSystem = loadLabUnitSystem();
+  syncLabUnitToggleUi();
   loadSelectionFromSession();
   loadAssessmentGuidanceFromSession();
   try {
@@ -12187,18 +12190,28 @@ function groupDiagnosticsClient(profile) {
       groups.set(key, {
         key,
         name,
-        unit: row.unit || null,
+        unit: row.unit_si || row.unit || null,
+        unit_si: row.unit_si || row.unit || null,
+        unit_us: row.unit_us || row.unit || null,
         category: row.category || "blood",
         readings: [],
       });
     }
     const g = groups.get(key);
     if (row.unit && !g.unit) g.unit = row.unit;
+    if (row.unit_si) g.unit_si = row.unit_si;
+    if (row.unit_us) g.unit_us = row.unit_us;
     if (row.category === "blood") g.category = "blood";
     g.readings.push({
       id: row.id,
       recorded_at: String(row.recorded_at || "").slice(0, 10),
       value: row.value,
+      unit: row.unit,
+      value_si: row.value_si != null ? row.value_si : row.value,
+      unit_si: row.unit_si || row.unit,
+      value_us: row.value_us != null ? row.value_us : row.value,
+      unit_us: row.unit_us || row.unit,
+      unit_system_original: row.unit_system_original,
       notes: row.notes,
     });
   }
@@ -12363,6 +12376,96 @@ function formatDiagValue(value) {
   if (abs >= 100) return n.toFixed(0);
   if (abs >= 10) return n.toFixed(1);
   return String(parseFloat(n.toFixed(2)));
+}
+
+const LAB_UNIT_STORAGE_KEY = "beatit-lab-unit-system";
+
+function loadLabUnitSystem() {
+  try {
+    const raw = localStorage.getItem(LAB_UNIT_STORAGE_KEY);
+    if (raw === "us" || raw === "si") return raw;
+  } catch (_) {
+    /* ignore */
+  }
+  return "si";
+}
+
+function saveLabUnitSystem(system) {
+  const next = system === "us" ? "us" : "si";
+  state.labUnitSystem = next;
+  try {
+    localStorage.setItem(LAB_UNIT_STORAGE_KEY, next);
+  } catch (_) {
+    /* ignore */
+  }
+  syncLabUnitToggleUi();
+}
+
+function syncLabUnitToggleUi() {
+  const system = state.labUnitSystem === "us" ? "us" : "si";
+  document.querySelectorAll(".diag-unit-btn").forEach((btn) => {
+    const active = btn.getAttribute("data-lab-unit") === system;
+    btn.classList.toggle("active", active);
+    btn.classList.toggle("secondary", active);
+    btn.classList.toggle("ghost", !active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function seriesForLabUnitSystem(series, system = state.labUnitSystem) {
+  const useUs = system === "us";
+  return (series || []).map((raw) => {
+    const item = { ...raw };
+    const unit = useUs
+      ? item.unit_us || item.unit
+      : item.unit_si || item.unit;
+    item.unit = unit;
+    item.display_unit_system = useUs ? "us" : "si";
+    const ref = useUs
+      ? item.reference_us || item.reference
+      : item.reference_si || item.reference;
+    if (ref) item.reference = ref;
+    const readings = (item.readings || []).map((r) => {
+      const rr = { ...r };
+      if (rr.value_reported == null) rr.value_reported = rr.value;
+      if (!rr.unit_reported) rr.unit_reported = rr.unit;
+      if (useUs) {
+        rr.value = rr.value_us != null ? rr.value_us : rr.value;
+        rr.unit = rr.unit_us || unit;
+      } else {
+        rr.value = rr.value_si != null ? rr.value_si : rr.value;
+        rr.unit = rr.unit_si || unit;
+      }
+      return rr;
+    });
+    item.readings = readings;
+    item.latest = readings.length ? readings[readings.length - 1] : item.latest;
+    if (item.latest && !readings.length) {
+      const latest = { ...item.latest };
+      if (latest.value_reported == null) latest.value_reported = latest.value;
+      if (!latest.unit_reported) latest.unit_reported = latest.unit;
+      if (useUs) {
+        latest.value = latest.value_us != null ? latest.value_us : latest.value;
+        latest.unit = latest.unit_us || unit;
+      } else {
+        latest.value = latest.value_si != null ? latest.value_si : latest.value;
+        latest.unit = latest.unit_si || unit;
+      }
+      item.latest = latest;
+    }
+    return item;
+  });
+}
+
+function formatReportedAside(reading) {
+  if (!reading) return "";
+  const reportedVal = reading.value_reported != null ? reading.value_reported : null;
+  const reportedUnit = reading.unit_reported || "";
+  if (reportedVal == null) return "";
+  const reported = `${formatDiagValue(reportedVal)}${reportedUnit ? ` ${reportedUnit}` : ""}`.trim();
+  const display = `${formatDiagValue(reading.value)}${reading.unit ? ` ${reading.unit}` : ""}`.trim();
+  if (!reported || reported === display) return "";
+  return ` · reported ${reported}`;
 }
 
 /** Nice round Y-axis ticks within [vmin, vmax], plus reference bounds when present. */
@@ -12936,7 +13039,10 @@ function buildSparklineSvg(
 function renderDiagnosticsCharts(profile, series, opts = {}) {
   const wrap = document.getElementById("diagnostics-charts");
   if (!wrap) return;
-  const bloodFirst = [...(series || [])];
+  if (!state.labUnitSystem) state.labUnitSystem = loadLabUnitSystem();
+  syncLabUnitToggleUi();
+  const displaySeries = seriesForLabUnitSystem(series || state.diagnosticSeriesCache || []);
+  const bloodFirst = [...displaySeries];
   const extras = [];
   const weight = weightSeriesFromProfile(profile);
   const bmi = bmiSeriesFromProfile(profile);
@@ -13018,8 +13124,9 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
     .map(({ s, status }) => {
       const unit = s.unit ? ` ${s.unit}` : "";
       const latest = s.latest;
+      const reportedAside = formatReportedAside(latest);
       const latestLabel = latest
-        ? `${formatDiagValue(latest.value)}${unit} · ${formatDiagDate(latest.recorded_at)}`
+        ? `${formatDiagValue(latest.value)}${unit}${reportedAside} · ${formatDiagDate(latest.recorded_at)}`
         : "—";
       const stroke = statusColor(status);
       const cat = s.category === "imaging" ? "Imaging" : s.category === "vital" ? "Vitals" : "Blood";
@@ -13132,6 +13239,7 @@ function openDiagChartExpand(key) {
     .map((r) => ({
       date: String(r.recorded_at || "").slice(0, 10),
       value: Number(r.value),
+      reportedAside: formatReportedAside(r),
       status: r.status || clientStatusForValue(r.value, ref),
     }))
     .filter((p) => p.date && Number.isFinite(p.value))
@@ -13146,7 +13254,7 @@ function openDiagChartExpand(key) {
         <td>${escapeHtml(formatDiagDatePrecise(r.date))}</td>
         <td class="diag-expand-value" style="color:${statusColor(r.status)}">${escapeHtml(formatDiagValue(r.value))}${
           unitOnly ? ` <span class="muted">${escapeHtml(unitOnly)}</span>` : ""
-        }</td>
+        }${r.reportedAside ? `<span class="muted small">${escapeHtml(r.reportedAside)}</span>` : ""}</td>
         <td>${st}</td>
       </tr>`;
     })
@@ -14955,15 +15063,28 @@ document.getElementById("btn-diag-import-confirm")?.addEventListener("click", ()
   confirmDiagImportAndShowCharts().catch((e) => toast(e.message, "error"));
 });
 
+document.getElementById("diag-unit-si")?.addEventListener("click", () => {
+  saveLabUnitSystem("si");
+  renderDiagnosticsCharts(state.patientProfile, state.diagnosticSeriesCache || []);
+});
+document.getElementById("diag-unit-us")?.addEventListener("click", () => {
+  saveLabUnitSystem("us");
+  renderDiagnosticsCharts(state.patientProfile, state.diagnosticSeriesCache || []);
+});
+
 document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", async () => {
   const patientId = state.activePatientId;
   if (!patientId) return toast("Select a patient first", "error");
   const btn = document.getElementById("btn-export-diagnostics-pdf");
   if (btn) btn.disabled = true;
   try {
-    const res = await fetch(`/api/patients/${patientId}/diagnostics/export.pdf`, {
-      credentials: "include",
-    });
+    const system = state.labUnitSystem === "us" ? "us" : "si";
+    const res = await fetch(
+      `/api/patients/${patientId}/diagnostics/export.pdf?unit_system=${encodeURIComponent(system)}`,
+      {
+        credentials: "include",
+      }
+    );
     if (res.status === 401) {
       window.location.href = "/login";
       return;
