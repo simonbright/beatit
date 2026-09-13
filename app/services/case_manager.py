@@ -287,13 +287,19 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
         profile["medication_safety"] = safety
     if units_changed:
         try:
-            save_patient_profile(patient_id, profile)
+            # Write without reloading — reload would re-enter this path.
+            save_patient_profile(patient_id, profile, reload=False)
         except OSError:
             pass
     return profile
 
 
-def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+def save_patient_profile(
+    patient_id: str,
+    profile: dict[str, Any],
+    *,
+    reload: bool = True,
+) -> dict[str, Any]:
     d = _patient_dir(patient_id)
     d.mkdir(parents=True, exist_ok=True)
     meds_out: list[dict[str, Any]] = []
@@ -337,6 +343,8 @@ def save_patient_profile(patient_id: str, profile: dict[str, Any]) -> dict[str, 
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+    if not reload:
+        return cleaned
     return get_patient_profile(patient_id)
 
 

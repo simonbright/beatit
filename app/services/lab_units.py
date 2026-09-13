@@ -557,11 +557,18 @@ def enrich_diagnostic_units(row: dict[str, Any]) -> dict[str, Any]:
     system = detect_unit_system(name, unit)
     out["unit_system_original"] = system
 
-    # Force recompute when new conversion rules apply (e.g. cells/uL, folate).
+    # Force recompute when dual fields are missing or special US→SI never applied.
+    unit_si_existing = normalize_unit(out.get("unit_si"))
     needs_recompute = (
         "value_si" not in out
         or "value_us" not in out
-        or (key in _FOLATE | _MCHC | _CELL_THOUSAND and unit in {"ng/mL", "g/dL", "cells/uL"})
+        or (key in _FOLATE and unit == "ng/mL" and unit_si_existing in {None, "", "ng/mL"})
+        or (key in _MCHC and unit == "g/dL" and unit_si_existing in {None, "", "g/dL"})
+        or (
+            key in _CELL_THOUSAND
+            and unit == "cells/uL"
+            and unit_si_existing in {None, "", "cells/uL"}
+        )
     )
     if not needs_recompute and out.get("value_si") is not None and out.get("value_us") is not None:
         return out
@@ -610,17 +617,24 @@ def diagnostic_needs_unit_enrichment(row: dict[str, Any] | None) -> bool:
     key = _analyte_key(name)
     if canonical_lab_display_name(name) != name:
         return True
-    if key in _FOLATE | _MCHC and unit in {"ng/mL", "g/dL"}:
-        return True
-    if key in _CELL_THOUSAND and unit == "cells/uL":
-        return True
-    return (
+    missing_dual = (
         "value_si" not in row
         or "value_us" not in row
         or "unit_si" not in row
         or "unit_us" not in row
         or "unit_system_original" not in row
     )
+    if missing_dual:
+        return True
+    # Only re-enrich special US originals when SI side was never converted
+    unit_si = normalize_unit(row.get("unit_si"))
+    if key in _FOLATE and unit == "ng/mL":
+        return unit_si in {None, "", "ng/mL"}
+    if key in _MCHC and unit == "g/dL":
+        return unit_si in {None, "", "g/dL"}
+    if key in _CELL_THOUSAND and unit == "cells/uL":
+        return unit_si in {None, "", "cells/uL"}
+    return False
 
 
 def enrich_diagnostics_list(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
