@@ -12289,33 +12289,42 @@ function bmiSeriesFromProfile(profile) {
   };
 }
 
-function formatDiagDate(iso) {
+function formatDiagDate(iso, system = state.labUnitSystem) {
   const raw = String(iso || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || "—";
   const d = new Date(`${raw}T12:00:00`);
   if (Number.isNaN(d.getTime())) return raw;
   // Explicit parts avoid locale truncation in tight SVG/HTML layouts
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  const month = months[d.getMonth()];
+  const day = d.getDate();
+  const year = d.getFullYear();
+  // US conventional: Month Day, Year — Canadian SI: Day Month Year
+  if (system === "us") return `${month} ${day}, ${year}`;
+  return `${day} ${month} ${year}`;
 }
 
-/** Human date + ISO for hover / doctor reference (e.g. Jun 10, 2026 · 2026-06-10). */
-function formatDiagDatePrecise(iso) {
+/** Human date + ISO for hover / doctor reference (e.g. 10 Jun 2026 · 2026-06-10). */
+function formatDiagDatePrecise(iso, system = state.labUnitSystem) {
   const raw = String(iso || "").slice(0, 10);
-  const pretty = formatDiagDate(raw);
+  const pretty = formatDiagDate(raw, system);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return pretty;
   if (pretty === raw) return raw;
   return `${pretty} · ${raw}`;
 }
 
-function formatDiagDateAxis(iso) {
+function formatDiagDateAxis(iso, system = state.labUnitSystem) {
   const raw = String(iso || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || "—";
   const d = new Date(`${raw}T12:00:00`);
   if (Number.isNaN(d.getTime())) return raw;
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  // Compact: Jun 10 · '26 — shorter than full year to reduce axis collisions
-  return `${months[d.getMonth()]} ${d.getDate()} · '${String(d.getFullYear()).slice(2)}`;
+  const month = months[d.getMonth()];
+  const day = d.getDate();
+  const yy = String(d.getFullYear()).slice(2);
+  // Compact axis labels follow the active Canada/US date order
+  if (system === "us") return `${month} ${day} · '${yy}`;
+  return `${day} ${month} · '${yy}`;
 }
 
 function estimateAxisLabelWidth(label) {
@@ -12416,8 +12425,8 @@ function syncLabUnitToggleUi() {
   if (hint) {
     hint.textContent =
       system === "us"
-        ? "Showing United States (conventional) units. Tap Canada for SI (mmol/L, g/L). Original report values stay on each point."
-        : "Showing Canadian (SI) units. Tap United States for conventional (mg/dL, g/dL). Original report values stay on each point.";
+        ? "Showing United States units and Month Day, Year dates. Tap Canada for SI units and Day Month Year. Original report values stay on each point."
+        : "Showing Canadian SI units and Day Month Year dates. Tap United States for conventional units and Month Day, Year. Original report values stay on each point.";
   }
   const flipBtn = document.getElementById("btn-diag-table-flip");
   flipBtn?.classList.toggle("hidden", state.labsView !== "table");

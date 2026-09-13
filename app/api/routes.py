@@ -2774,6 +2774,7 @@ async def export_patient_diagnostics_pdf(
         patient_label=patient.get("label"),
         patient_subline=patient_subline,
         milestones=milestones,
+        unit_system=system,
     )
     filename = diagnostics_pdf_filename(
         patient_label=patient.get("label"),

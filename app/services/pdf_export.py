@@ -522,27 +522,42 @@ def _expand_appendix_with_scope_documents(
     return expanded
 
 
-def _format_diag_date_label(iso: str | None, *, compact: bool = False) -> str:
+def _format_diag_date_label(
+    iso: str | None,
+    *,
+    compact: bool = False,
+    unit_system: str = "si",
+) -> str:
     raw = str(iso or "")[:10]
     dt = _parse_iso_datetime(raw)
     if not dt:
         return raw or "-"
+    us = str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
     if compact:
-        # Short numeric form avoids same-month collisions on crowded axes
-        return f"{dt.month}/{dt.day}/{str(dt.year)[2:]}"
-    return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+        # Short numeric form: US m/d/yy, Canada d/m/yy
+        if us:
+            return f"{dt.month}/{dt.day}/{str(dt.year)[2:]}"
+        return f"{dt.day}/{dt.month}/{str(dt.year)[2:]}"
+    # US: Sep 12, 2026 — Canada: 12 Sep 2026
+    if us:
+        return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+    return f"{dt.day} {dt.strftime('%b')} {dt.year}"
 
 
-def _format_diag_date_precise(iso: str | None) -> str:
-    """Human date + ISO for doctor reference points (e.g. Jun 10, 2026 · 2026-06-10)."""
+def _format_diag_date_precise(iso: str | None, *, unit_system: str = "si") -> str:
+    """Human date + ISO for doctor reference points."""
     raw = str(iso or "")[:10]
-    pretty = _format_diag_date_label(raw, compact=False)
+    pretty = _format_diag_date_label(raw, compact=False, unit_system=unit_system)
     if not raw or pretty == raw:
         return pretty or "-"
     return f"{pretty} · {raw}"
 
 
-def _format_diag_points_reference(readings: list[dict[str, Any]] | None) -> str:
+def _format_diag_points_reference(
+    readings: list[dict[str, Any]] | None,
+    *,
+    unit_system: str = "si",
+) -> str:
     """Compact precise value@date list for PDF under each trend chart."""
     by_day: dict[str, tuple[str, Any]] = {}
     for row in readings or []:
@@ -553,7 +568,8 @@ def _format_diag_points_reference(readings: list[dict[str, Any]] | None) -> str:
     bits: list[str] = []
     for date in sorted(by_day):
         _d, value = by_day[date]
-        bits.append(f"{date}={_format_diag_value_label(value)}")
+        label = _format_diag_date_label(date, compact=True, unit_system=unit_system)
+        bits.append(f"{label}={_format_diag_value_label(value)}")
     return " · ".join(bits)
 
 
@@ -720,6 +736,7 @@ def _sparkline_png_bytes(
     title: str | None = None,
     unit: str | None = None,
     milestones: list[dict[str, Any]] | None = None,
+    unit_system: str = "si",
 ) -> bytes | None:
     """Render a print-quality diagnostic chart PNG for embedding in the PDF."""
     from app.services.medication_events import filter_events_for_range
@@ -1040,9 +1057,9 @@ def _sparkline_png_bytes(
     candidates: list[tuple[int, float, str, float, float, str]] = []
     for i, ((x, _y, _st), (date, _value, _status)) in enumerate(zip(coords, points)):
         date_label = _safe_text(
-            _format_diag_date_label(date, compact=use_compact)
+            _format_diag_date_label(date, compact=use_compact, unit_system=unit_system)
             if use_compact
-            else _format_diag_date_label(date, compact=False)
+            else _format_diag_date_label(date, compact=False, unit_system=unit_system)
         )
         if not date_label:
             continue
@@ -1122,6 +1139,7 @@ def _write_single_reading_rows(
     items: list[dict[str, Any]],
     *,
     usable_w: float,
+    unit_system: str = "si",
 ) -> None:
     """Compact two-column table for one-off lab values (no chart art)."""
     if not items:
@@ -1155,9 +1173,9 @@ def _write_single_reading_rows(
             latest = item.get("latest") or {}
             status = item.get("status") or latest.get("status")
             val = _format_diag_value_label(latest.get("value"))
-            date = str(latest.get("recorded_at") or "")[:10] or _format_diag_date_label(
-                latest.get("recorded_at"), compact=True
-            )
+            date = _format_diag_date_label(
+                latest.get("recorded_at"), compact=True, unit_system=unit_system
+            ) or str(latest.get("recorded_at") or "")[:10]
             unit_bit = f" {unit}" if unit else ""
             value_text = f"{val}{unit_bit}"
 
@@ -1494,11 +1512,22 @@ def build_diagnostics_pdf(
     patient_label: str | None = None,
     patient_subline: str | None = None,
     milestones: list[dict[str, Any]] | None = None,
+    unit_system: str = "si",
 ) -> bytes:
     """Diagnostics-only PDF with charts, traffic-light status, and export timestamp."""
     now = datetime.now(timezone.utc)
     exported_at = _format_timestamp(now.isoformat())
     report_date, report_time = _format_timestamp_parts(now.isoformat())
+    system = (
+        "us"
+        if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
+        else "si"
+    )
+    date_order = (
+        "Dates: Month Day, Year (US)"
+        if system == "us"
+        else "Dates: Day Month Year (Canada)"
+    )
 
     pdf = AssessmentPDF(
         report_date=report_date,
@@ -1525,13 +1554,14 @@ def build_diagnostics_pdf(
     meta = [f"Exported: {exported_at}"]
     if patient_subline:
         meta.append(_safe_text(patient_subline))
+    meta.append(date_order)
     pdf.cell(0, 4, _safe_text(" · ".join(meta)), new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_font("Helvetica", "", 8)
     legend = (
         "Green shaded zone = target. Line segments follow each reading (green / yellow / red). "
         "Gray = no reference yet. Dashed markers = med or lifestyle milestones. "
-        "Exact collection dates (YYYY-MM-DD) are listed under each trend. "
+        f"{date_order}; ISO (YYYY-MM-DD) also appears with latest values. "
         "Trend charts first; single readings in the compact table below."
     )
     if milestones:
@@ -1577,7 +1607,9 @@ def build_diagnostics_pdf(
 
         chart_h_mm = 58
         for index, item in enumerate(trends):
-            points_line = _format_diag_points_reference(item.get("readings") or [])
+            points_line = _format_diag_points_reference(
+                item.get("readings") or [], unit_system=system
+            )
             # title + pre-gap + chart + points line + post-gap (more air between metrics)
             points_h = 7.0 if points_line else 0.0
             gap_after = 8.0
@@ -1595,7 +1627,9 @@ def build_diagnostics_pdf(
             latest = item.get("latest") or {}
             status = item.get("status") or latest.get("status")
             latest_val = _format_diag_value_label(latest.get("value"))
-            latest_date = _format_diag_date_precise(latest.get("recorded_at"))
+            latest_date = _format_diag_date_precise(
+                latest.get("recorded_at"), unit_system=system
+            )
             unit_bit = f" {unit}" if unit else ""
             status_bit = f" | {str(status).capitalize()}" if status in _STATUS_RGB else ""
             ref = item.get("reference") or {}
@@ -1619,6 +1653,7 @@ def build_diagnostics_pdf(
                 unit=unit or None,
                 height=480,
                 milestones=milestones,
+                unit_system=system,
             )
             if png:
                 pdf.image(BytesIO(png), x=x, y=y_chart, w=usable_w, h=chart_h_mm)
@@ -1656,7 +1691,9 @@ def build_diagnostics_pdf(
                 new_y="NEXT",
             )
             pdf.ln(1)
-            _write_single_reading_rows(pdf, singles, usable_w=usable_w)
+            _write_single_reading_rows(
+                pdf, singles, usable_w=usable_w, unit_system=system
+            )
 
     buffer = BytesIO()
     pdf.output(buffer)
