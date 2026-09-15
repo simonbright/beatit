@@ -688,8 +688,36 @@
               </div>
               <span class="diag-unit-toggle-label">Units</span>
             </div>
-            <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-flip" title="Swap rows and columns">Flip table</button>
-            <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-expand" title="Expand table">Expand</button>
+            <label class="diag-filter-field" for="diag-date-range">
+              <span class="diag-filter-label">Dates</span>
+              <select id="diag-date-range" class="diag-filter-select" aria-label="Labs date range">
+                <option value="all" selected>All dates</option>
+                <option value="6m">Last 6 months</option>
+                <option value="12m">Last 12 months</option>
+                <option value="24m">Last 2 years</option>
+                <option value="custom">Custom range</option>
+              </select>
+            </label>
+            <div id="diag-date-custom" class="diag-date-custom hidden">
+              <label class="diag-filter-field" for="diag-date-from">
+                <span class="diag-filter-label">From</span>
+                <input type="date" id="diag-date-from" class="diag-filter-input" aria-label="Labs from date">
+              </label>
+              <label class="diag-filter-field" for="diag-date-to">
+                <span class="diag-filter-label">To</span>
+                <input type="date" id="diag-date-to" class="diag-filter-input" aria-label="Labs to date">
+              </label>
+            </div>
+            <label class="diag-filter-field" for="diag-panel-filter">
+              <span class="diag-filter-label">Type</span>
+              <select id="diag-panel-filter" class="diag-filter-select" aria-label="Labs type">
+                <option value="all" selected>All types</option>
+              </select>
+            </label>
+            <div class="diag-table-tools">
+              <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-flip" title="Swap rows and columns">Flip table</button>
+              <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-expand" title="Expand table">Expand</button>
+            </div>
           </div>
           <p class="muted small diag-unit-hint" id="diag-unit-hint">Showing Canadian SI units and Day Month Year dates. Original report values stay available on each point.</p>
           <details id="diagnostics-milestone-controls" class="diag-milestone-controls hidden">
@@ -724,12 +752,21 @@
             </div>
           </details>
           <div id="diagnostics-status-filter" class="diag-status-filter hidden" role="group" aria-label="Filter labs by target status"></div>
-          <div id="diagnostics-charts" class="diagnostics-charts">
-            <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Who profile.</p>
-          </div>
-          <div id="diagnostics-table-wrap" class="diagnostics-table-wrap hidden">
-            <div class="diagnostics-table-scroll">
-              <table id="diagnostics-table" class="diagnostics-matrix-table" aria-label="Lab results by date"></table>
+          <div class="diagnostics-body" id="diagnostics-body">
+            <div id="diagnostics-loading" class="diagnostics-loading hidden" role="status" aria-live="polite">
+              <img src="/static/favicon.svg" alt="" class="duck-spinner" width="36" height="36" aria-hidden="true">
+              <div>
+                <p class="diagnostics-loading-title" id="diagnostics-loading-title">Loading labs…</p>
+                <p class="muted small" id="diagnostics-loading-hint">Fetching blood-test trends for this person.</p>
+              </div>
+            </div>
+            <div id="diagnostics-charts" class="diagnostics-charts">
+              <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Who profile.</p>
+            </div>
+            <div id="diagnostics-table-wrap" class="diagnostics-table-wrap hidden">
+              <div class="diagnostics-table-scroll">
+                <table id="diagnostics-table" class="diagnostics-matrix-table" aria-label="Lab results by date"></table>
+              </div>
             </div>
           </div>
         </div>

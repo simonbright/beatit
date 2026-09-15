@@ -2618,8 +2618,8 @@ body {
 .diag-labs-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem 0.75rem;
-  align-items: center;
+  gap: 0.65rem 1rem;
+  align-items: flex-end;
   margin: 0.65rem 0 0.35rem;
   padding: 0.55rem 0.65rem;
   border: 1px solid var(--border);
@@ -2634,35 +2634,124 @@ body {
   display: inline-flex;
   gap: 0.25rem;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .diag-unit-toggle {
   display: inline-flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.18rem;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 0.22rem;
+  min-width: 11.5rem;
 }
 
 .diag-unit-toggle-btns {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.25rem;
-  align-items: center;
-  flex-wrap: wrap;
+  width: 100%;
+}
+
+.diag-unit-toggle-btns .diag-unit-btn {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
 }
 
 .diag-unit-toggle-label {
+  display: block;
   margin: 0;
-  font-size: 0.68rem;
-  line-height: 1;
-  font-weight: 550;
-  letter-spacing: 0.03em;
+  width: 100%;
+  font-size: 0.65rem;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
   text-align: center;
 }
 
+.diag-table-tools {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-left: auto;
+}
+
+.diag-filter-field {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.22rem;
+  min-width: 7.5rem;
+}
+
+.diag-filter-label {
+  font-size: 0.65rem;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.diag-filter-select,
+.diag-filter-input {
+  min-height: 2rem;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface-solid, var(--surface));
+  color: inherit;
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.diag-date-custom {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.55rem;
+  align-items: flex-end;
+}
+
+.diag-date-custom.hidden {
+  display: none;
+}
+
 .diag-unit-hint {
   margin: 0 0 0.65rem;
+}
+
+.diagnostics-body {
+  position: relative;
+  min-height: 8rem;
+}
+
+.diagnostics-loading {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+  min-height: 12rem;
+  padding: 2rem 1rem;
+}
+
+.diagnostics-loading-title {
+  margin: 0;
+  font-weight: 650;
+  font-size: 1rem;
+}
+
+.diagnostics-body.is-loading #diagnostics-loading {
+  display: flex;
+}
+
+.diagnostics-body.is-loading #diagnostics-charts,
+.diagnostics-body.is-loading #diagnostics-table-wrap {
+  display: none !important;
 }
 
 .diagnostics-table-wrap {
@@ -2758,6 +2847,10 @@ body {
 }
 
 .diag-unit-toggle .diag-unit-btn,
+.diag-view-toggle .diag-view-btn {
+  min-width: 0;
+}
+
 .diag-view-toggle .diag-view-btn {
   min-width: 5.2rem;
 }

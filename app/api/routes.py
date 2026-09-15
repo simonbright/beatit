@@ -1,11 +1,11 @@
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from collections.abc import AsyncIterator
 
 from app.ingest.text import ingest_text
@@ -190,7 +190,7 @@ from app.services.case_manager import (
     JOURNAL_PRESETS,
     COMMON_REMEDIES,
 )
-from app.services.patient_milestones import MILESTONE_PRESETS, all_chart_milestones
+from app.services.patient_milestones import MILESTONE_PRESETS, all_chart_milestones, filter_milestones_by_ids
 from app.services.patient_documents import (
     list_active_patient_document_index,
     list_active_patient_documents_page,
@@ -2744,6 +2744,13 @@ async def export_patient_diagnostics_pdf(
     request: Request,
     unit_system: str = "si",
     content: str = "full",
+    overlays: str = "1",
+    overlay_id: Annotated[list[str], Query()] = [],
+    note_id: Annotated[list[str], Query()] = [],
+    date_range: str = "all",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    panel: str = "all",
 ):
     patients = list_patients()
     patient = next((p for p in patients if p["id"] == patient_id), None)
@@ -2754,12 +2761,27 @@ async def export_patient_diagnostics_pdf(
     if not series:
         raise HTTPException(status_code=404, detail="No diagnostics to export")
 
+    from app.services.lab_panels import filter_labs_series, lab_panel_label
     from app.services.lab_units import project_series_for_unit_system
+    from app.services.medication_events import filter_events_for_range
 
     system = "us" if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"} else "si"
     series = project_series_for_unit_system(series, system)
+    series = filter_labs_series(
+        series,
+        range_key=date_range,
+        date_from=date_from,
+        date_to=date_to,
+        panel=panel,
+    )
+    if not series:
+        raise HTTPException(
+            status_code=404,
+            detail="No diagnostics match the selected date range or type filter",
+        )
     content_key = str(content or "full").strip().lower()
     table_only = content_key in {"table", "matrix", "results"}
+    overlays_on = str(overlays or "1").strip().lower() not in {"0", "false", "off", "none", "no"}
 
     sub_bits: list[str] = []
     age = age_years_from_dob(profile.get("date_of_birth"))
@@ -2769,7 +2791,48 @@ async def export_patient_diagnostics_pdf(
         sub_bits.append(str(profile["gender"]))
     system_label = "United States (conventional)" if system == "us" else "Canada (SI)"
     sub_bits.append(f"Units: {system_label}")
+    range_key = str(date_range or "all").strip().lower()
+    if range_key and range_key != "all":
+        if range_key == "custom":
+            span = "–".join(
+                x for x in (str(date_from or "")[:10], str(date_to or "")[:10]) if x
+            ) or "custom"
+            sub_bits.append(f"Dates: {span}")
+        elif range_key == "6m":
+            sub_bits.append("Dates: last 6 months")
+        elif range_key == "12m":
+            sub_bits.append("Dates: last 12 months")
+        elif range_key == "24m":
+            sub_bits.append("Dates: last 2 years")
+        else:
+            sub_bits.append(f"Dates: {range_key}")
+    panel_key = str(panel or "all").strip()
+    if panel_key and panel_key.lower() != "all":
+        sub_bits.append(f"Type: {lab_panel_label(panel_key)}")
     patient_subline = " · ".join(sub_bits) if sub_bits else None
+
+    days: list[str] = []
+    for item in series:
+        for row in item.get("readings") or []:
+            day = str(row.get("recorded_at") or "")[:10]
+            if len(day) == 10:
+                days.append(day)
+    start = min(days) if days else None
+    end = max(days) if days else None
+
+    all_ms = all_chart_milestones(profile)
+    in_span = filter_events_for_range(all_ms, start=start, end=end, pad_days=60)
+    overlay_ids = [str(x) for x in (overlay_id or []) if str(x).strip()]
+    note_ids = [str(x) for x in (note_id or []) if str(x).strip()]
+
+    # Charts: respect Labs overlay master toggle + checkbox selection from the client
+    if overlays_on:
+        chart_milestones = filter_milestones_by_ids(in_span, overlay_ids)
+    else:
+        chart_milestones = []
+
+    # Table notes: client sends explicit note_id list (selected, or all in-span when overlays off)
+    note_milestones = filter_milestones_by_ids(in_span, note_ids) if note_ids else []
 
     exported_at = datetime.now(timezone.utc)
     if table_only:
@@ -2778,14 +2841,14 @@ async def export_patient_diagnostics_pdf(
             patient_label=patient.get("label"),
             patient_subline=patient_subline,
             unit_system=system,
+            milestones=note_milestones,
         )
     else:
-        milestones = all_chart_milestones(profile)
         pdf_bytes = build_diagnostics_pdf(
             series,
             patient_label=patient.get("label"),
             patient_subline=patient_subline,
-            milestones=milestones,
+            milestones=chart_milestones,
             unit_system=system,
         )
     filename = diagnostics_pdf_filename(
@@ -2806,6 +2869,11 @@ async def export_patient_diagnostics_pdf(
             "series_count": len(series),
             "unit_system": system,
             "content": "table" if table_only else "full",
+            "overlays": overlays_on,
+            "overlay_count": len(chart_milestones),
+            "note_count": len(note_milestones) if table_only else 0,
+            "date_range": range_key,
+            "panel": panel_key,
         },
     )
     return FastAPIResponse(

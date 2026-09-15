@@ -129,4 +129,73 @@ def all_chart_milestones(profile: dict[str, Any] | None) -> list[dict[str, Any]]
     custom = custom_milestones_as_events(profile.get("milestones"))
     merged = [*med_events, *custom]
     merged.sort(key=lambda e: (str(e.get("date") or ""), str(e.get("label") or "")))
-    return colorize_milestone_events(merged)
+    return colorize_milestone_events(ensure_milestone_ids(merged))
+
+
+def ensure_milestone_ids(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Stable ids matching the Labs UI overlay checkboxes."""
+    out: list[dict[str, Any]] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        row = dict(ev)
+        if not str(row.get("id") or "").strip():
+            when = str(row.get("date") or "")[:10]
+            kind = str(row.get("kind") or "")
+            body = str(row.get("body") or row.get("label") or "")
+            if str(row.get("source") or "") == "custom" or kind not in {
+                "start",
+                "dose_change",
+                "stop",
+            }:
+                label_body = body.split(" — ", 1)[0].strip() or body
+                row["id"] = f"{when}|lifestyle|{label_body}"
+            else:
+                row["id"] = (
+                    f"{when}|{kind}|{row.get('medication_id') or ''}|{body}"
+                )
+        out.append(row)
+    return out
+
+
+def filter_milestones_by_ids(
+    events: list[dict[str, Any]] | None,
+    selected_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Keep events whose id is in selected_ids. Empty selected_ids → none.
+
+    Also matches medication events on ``date|kind|medication_id`` when the
+    full id body text differs slightly between client and server.
+    """
+    rows = ensure_milestone_ids(events)
+    if selected_ids is None:
+        return rows
+    wanted = {str(x) for x in selected_ids if str(x).strip()}
+    if not wanted:
+        return []
+    key_wanted: set[tuple[str, str, str]] = set()
+    for sid in wanted:
+        parts = str(sid).split("|")
+        if len(parts) >= 3 and parts[1] in {"start", "dose_change", "stop"}:
+            key_wanted.add((parts[0][:10], parts[1], parts[2]))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ev in rows:
+        eid = str(ev.get("id") or "")
+        keep = eid in wanted
+        if not keep:
+            key = (
+                str(ev.get("date") or "")[:10],
+                str(ev.get("kind") or ""),
+                str(ev.get("medication_id") or ""),
+            )
+            if key[2] and key in key_wanted:
+                keep = True
+        if not keep:
+            continue
+        dedupe = eid or f"{ev.get('date')}|{ev.get('kind')}|{ev.get('body')}"
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        out.append(ev)
+    return out

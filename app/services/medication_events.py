@@ -114,6 +114,11 @@ def _coalesce_stop_start_switches(
                 "medication_id": str(start.get("medication_id") or stop.get("medication_id") or ""),
                 "medication_name": name,
                 "coalesced_from": "stop_start",
+                "id": (
+                    f"{when}|dose_change|"
+                    f"{start.get('medication_id') or stop.get('medication_id') or ''}|"
+                    f"{body}"
+                ),
             }
         )
 
@@ -233,7 +238,16 @@ def medication_chart_events(
         if key in seen:
             continue
         seen.add(key)
-        unique.append(ev)
+        row = dict(ev)
+        if not row.get("id"):
+            body = str(row.get("body") or row.get("label") or "")
+            row["id"] = (
+                f"{row.get('date') or ''}|"
+                f"{row.get('kind') or ''}|"
+                f"{row.get('medication_id') or ''}|"
+                f"{body}"
+            )
+        unique.append(row)
     return unique[:max_events]
 
 

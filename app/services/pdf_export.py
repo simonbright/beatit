@@ -2009,7 +2009,7 @@ def build_diagnostics_pdf(
         "Gray = no reference yet. Letter ticks (A, B, …) at the top of a chart mark med/lifestyle "
         "changes in the lab date range — no vertical overlay lines through the trend. "
         f"{date_order}; ISO (YYYY-MM-DD) also appears with latest values. "
-        "Trend charts first, then a landscape results overview, then detailed table pages."
+        "Trend charts first, then a landscape results overview."
     )
     _pdf_multiline(pdf, _safe_text(legend), h=3.6)
     if chart_milestones:
@@ -2154,16 +2154,10 @@ def build_diagnostics_pdf(
                 pdf, singles, usable_w=usable_w, unit_system=system
             )
 
-        # Landscape overview (all dates), then detailed portrait pages
+        # Landscape results overview only (all dates across — no multi-page detailed split)
         _write_diagnostics_overview_pages(
             pdf,
             ranked,
-            unit_system=system,
-        )
-        _write_diagnostics_matrix_pages(
-            pdf,
-            ranked,
-            usable_w=usable_w,
             unit_system=system,
         )
 
@@ -2172,12 +2166,106 @@ def build_diagnostics_pdf(
     return buffer.getvalue()
 
 
+def _write_diagnostics_timeline_notes(
+    pdf: FPDF,
+    milestones: list[dict[str, Any]] | None,
+    *,
+    unit_system: str = "si",
+) -> None:
+    """Landscape notes page: med starts / dose changes / lifestyle in the lab window."""
+    rows = [ev for ev in (milestones or []) if isinstance(ev, dict)]
+    if not rows:
+        return
+    system = (
+        "us"
+        if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
+        else "si"
+    )
+    kind_label = {
+        "start": "Med start",
+        "dose_change": "Dose change",
+        "stop": "Stopped",
+    }
+
+    pdf.add_page(orientation="L")
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(14, 116, 144)
+    pdf.cell(0, 6.5, "Medication & lifestyle notes", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 7.2)
+    pdf.set_text_color(80, 80, 80)
+    pdf.cell(
+        0,
+        3.8,
+        _safe_text(
+            f"{len(rows)} event{'s' if len(rows) != 1 else ''} in the labs date range · "
+            f"{'US' if system == 'us' else 'Canada'} date order"
+        ),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    pdf.ln(2)
+
+    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+    date_w = min(36.0, usable_w * 0.16)
+    kind_w = min(28.0, usable_w * 0.12)
+    note_w = usable_w - date_w - kind_w
+    row_h = 5.4
+
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_fill_color(241, 245, 249)
+    pdf.set_text_color(15, 23, 42)
+    pdf.cell(date_w, row_h + 0.6, "Date", border=1, fill=True)
+    pdf.cell(kind_w, row_h + 0.6, "Type", border=1, fill=True)
+    pdf.cell(note_w, row_h + 0.6, "Note", border=1, fill=True)
+    pdf.ln(row_h + 0.6)
+
+    pdf.set_font("Helvetica", "", 7)
+    for i, ev in enumerate(rows):
+        if pdf.get_y() + row_h + 2 > pdf.h - pdf.b_margin:
+            pdf.add_page(orientation="L")
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(14, 116, 144)
+            pdf.cell(0, 5.5, "Medication & lifestyle notes (continued)", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_fill_color(241, 245, 249)
+            pdf.set_text_color(15, 23, 42)
+            pdf.cell(date_w, row_h + 0.6, "Date", border=1, fill=True)
+            pdf.cell(kind_w, row_h + 0.6, "Type", border=1, fill=True)
+            pdf.cell(note_w, row_h + 0.6, "Note", border=1, fill=True)
+            pdf.ln(row_h + 0.6)
+            pdf.set_font("Helvetica", "", 7)
+
+        if i % 2 == 0:
+            pdf.set_fill_color(248, 250, 252)
+        else:
+            pdf.set_fill_color(255, 255, 255)
+        when = _format_diag_date_label(
+            str(ev.get("date") or "")[:10],
+            compact=False,
+            unit_system=system,
+        )
+        kind = str(ev.get("kind") or "")
+        type_bit = kind_label.get(kind, "Milestone")
+        note = _short_milestone_legend_label(
+            ev.get("body") or ev.get("label"),
+            max_len=110,
+        ) or "—"
+        pdf.set_text_color(15, 23, 42)
+        pdf.cell(date_w, row_h, _safe_text(when), border=1, fill=True)
+        pdf.set_text_color(71, 85, 105)
+        pdf.cell(kind_w, row_h, _safe_text(type_bit), border=1, fill=True)
+        pdf.cell(note_w, row_h, _safe_text(note), border=1, fill=True)
+        pdf.ln(row_h)
+
+
 def build_diagnostics_table_pdf(
     series: list[dict[str, Any]],
     *,
     patient_label: str | None = None,
     patient_subline: str | None = None,
     unit_system: str = "si",
+    milestones: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Table-only diagnostics PDF (no trend charts)."""
     now = datetime.now(timezone.utc)
@@ -2187,11 +2275,6 @@ def build_diagnostics_table_pdf(
         "us"
         if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
         else "si"
-    )
-    date_order = (
-        "Dates: Month Day, Year (US)"
-        if system == "us"
-        else "Dates: Day Month Year (Canada)"
     )
 
     pdf = AssessmentPDF(
@@ -2212,7 +2295,6 @@ def build_diagnostics_table_pdf(
         pdf.set_text_color(100, 100, 100)
         pdf.cell(0, 8, "No diagnostic readings to export.", new_x="LMARGIN", new_y="NEXT")
     else:
-        usable_w = pdf.w - pdf.l_margin - pdf.r_margin
         ranked = sorted(
             series,
             key=lambda s: (
@@ -2227,21 +2309,10 @@ def build_diagnostics_table_pdf(
             ranked,
             unit_system=system,
         )
-        meta_bits = [f"Exported: {exported_at}"]
-        if patient_subline:
-            meta_bits.append(_safe_text(patient_subline))
-        meta_bits.append(date_order)
-        _write_diagnostics_matrix_pages(
+        _write_diagnostics_timeline_notes(
             pdf,
-            ranked,
-            usable_w=usable_w,
+            milestones,
             unit_system=system,
-            heading=(
-                f"Results table (detailed) - {_safe_text(patient_label)}"
-                if patient_label
-                else "Results table (detailed)"
-            ),
-            intro=" · ".join(meta_bits),
         )
 
     buffer = BytesIO()

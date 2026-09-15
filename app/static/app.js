@@ -67,6 +67,11 @@ const state = {
   labUnitSystem: "si",
   labsView: "charts",
   labsTableFlipped: false,
+  labsDateRange: "all",
+  labsDateFrom: "",
+  labsDateTo: "",
+  labsPanel: "all",
+  diagnosticsLoading: false,
   coverageReport: null,
   coverageView: "all",
   analysisJobId: null,
@@ -9104,6 +9109,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   state.patientProfileId = patientId || null;
   state.diagnosticSeriesCache = extras.diagnostic_series || series;
   if (extras.diagnostic_gaps) state.diagnosticGaps = extras.diagnostic_gaps;
+  setDiagnosticsLoading(false);
   refreshDiagnosticsViews();
   const journalSeries = extras.journal_series || groupJournalClient(profile);
   renderJournalHome(profile, journalSeries);
@@ -11229,6 +11235,7 @@ function clearPatientScopedLogState({ keepPatientId = false, deferRender = false
   if (recent) delete recent.dataset.logSig;
   syncMobileLogForLabel();
   syncMobileLogRangeControl();
+  syncDiagnosticsLoadingUi();
   if (deferRender) return;
   renderLogObservations([]);
   renderMobileLogRecent({ softObservations: false });
@@ -12433,6 +12440,46 @@ function syncLabUnitToggleUi() {
   document.getElementById("btn-diag-table-expand")?.classList.toggle("hidden", state.labsView !== "table");
 }
 
+function labsProfileReady() {
+  return Boolean(
+    state.activePatientId &&
+      state.patientProfileId &&
+      state.patientProfileId === state.activePatientId
+  );
+}
+
+function setDiagnosticsLoading(on, { title = null, hint = null } = {}) {
+  state.diagnosticsLoading = Boolean(on);
+  const titleEl = document.getElementById("diagnostics-loading-title");
+  const hintEl = document.getElementById("diagnostics-loading-hint");
+  if (titleEl && title) titleEl.textContent = title;
+  if (hintEl && hint) hintEl.textContent = hint;
+  syncDiagnosticsLoadingUi();
+}
+
+function syncDiagnosticsLoadingUi() {
+  const body = document.getElementById("diagnostics-body");
+  const loadingEl = document.getElementById("diagnostics-loading");
+  const waiting =
+    Boolean(state.diagnosticsLoading) ||
+    (Boolean(state.activePatientId) &&
+      Boolean(state.caseContextReady) &&
+      !labsProfileReady());
+  body?.classList.toggle("is-loading", waiting);
+  loadingEl?.classList.toggle("hidden", !waiting);
+  if (waiting) {
+    const titleEl = document.getElementById("diagnostics-loading-title");
+    const hintEl = document.getElementById("diagnostics-loading-hint");
+    const name = state.activePatientLabel || "this person";
+    if (titleEl && !state.diagnosticsLoading) {
+      titleEl.textContent = `Loading ${name}’s labs…`;
+    }
+    if (hintEl && !state.diagnosticsLoading) {
+      hintEl.textContent = "Fetching blood-test trends for this person.";
+    }
+  }
+}
+
 function syncLabsViewUi() {
   const view = state.labsView === "table" ? "table" : "charts";
   document.querySelectorAll(".diag-view-btn").forEach((btn) => {
@@ -12447,17 +12494,252 @@ function syncLabsViewUi() {
   document.getElementById("diagnostics-status-filter")?.classList.toggle("hidden", view === "table");
   document.getElementById("btn-diag-table-flip")?.classList.toggle("hidden", view !== "table");
   document.getElementById("btn-diag-table-expand")?.classList.toggle("hidden", view !== "table");
+  syncDiagnosticsLoadingUi();
 }
 
 function refreshDiagnosticsViews(opts = {}) {
   const profile = state.patientProfile;
-  const series = state.diagnosticSeriesCache || [];
+  const series = filteredLabsSeries(state.diagnosticSeriesCache || []);
   syncLabUnitToggleUi();
   syncLabsViewUi();
+  syncLabsFilterControls();
   if (state.labsView === "table") {
     renderDiagnosticsTable(series);
   } else {
     renderDiagnosticsCharts(profile, series, opts);
+  }
+}
+
+const LAB_PANEL_ORDER = [
+  "Lipids",
+  "Glucose",
+  "Kidney",
+  "Liver",
+  "CBC",
+  "Electrolytes",
+  "Iron & vitamins",
+  "Thyroid",
+  "Inflammation",
+  "Prostate",
+  "Hormones",
+  "Vitals",
+  "Imaging",
+  "Other",
+];
+const LAB_PANEL_LABELS = {
+  Lipids: "Cholesterol",
+  "Iron & vitamins": "Iron & vitamins",
+};
+const LAB_PANEL_NAME_MAP = {
+  "ldl cholesterol": "Lipids",
+  "non-hdl cholesterol": "Lipids",
+  "total cholesterol": "Lipids",
+  "hdl cholesterol": "Lipids",
+  triglyceride: "Lipids",
+  "cholesterol/hdl ratio": "Lipids",
+  hba1c: "Glucose",
+  "glucose fasting": "Glucose",
+  glucose: "Glucose",
+  creatinine: "Kidney",
+  egfr: "Kidney",
+  alt: "Liver",
+  ast: "Liver",
+  "bilirubin total": "Liver",
+  "alkaline phosphatase": "Liver",
+  albumin: "Liver",
+  hemoglobin: "CBC",
+  haematocrit: "CBC",
+  hematocrit: "CBC",
+  wbc: "CBC",
+  rbc: "CBC",
+  platelets: "CBC",
+  mcv: "CBC",
+  neutrophils: "CBC",
+  lymphocytes: "CBC",
+  sodium: "Electrolytes",
+  potassium: "Electrolytes",
+  magnesium: "Electrolytes",
+  ferritin: "Iron & vitamins",
+  iron: "Iron & vitamins",
+  tibc: "Iron & vitamins",
+  "transferrin saturation": "Iron & vitamins",
+  "vitamin b12": "Iron & vitamins",
+  "vitamin d 25-oh": "Iron & vitamins",
+  "vitamin d": "Iron & vitamins",
+  tsh: "Thyroid",
+  crp: "Inflammation",
+  "total psa": "Prostate",
+  psa: "Prostate",
+  testosterone: "Hormones",
+  "systolic bp": "Vitals",
+  "diastolic bp": "Vitals",
+  "coronary calcium score": "Imaging",
+};
+
+function labPanelLabel(panel) {
+  return LAB_PANEL_LABELS[panel] || panel || "Other";
+}
+
+function labPanelForSeries(item) {
+  const cat = String(item?.category || "").toLowerCase();
+  if (cat === "vital") return "Vitals";
+  if (cat === "imaging") return "Imaging";
+  const key = String(item?.name || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (LAB_PANEL_NAME_MAP[key]) return LAB_PANEL_NAME_MAP[key];
+  const heuristics = [
+    [["ldl", "hdl", "non-hdl", "triglyceride", "triglyc", "cholesterol"], "Lipids"],
+    [["hba1c", "a1c", "glucose"], "Glucose"],
+    [["creatinine", "egfr", "gfr", "bun", "urea"], "Kidney"],
+    [["alt", "ast", "bilirubin", "alp", "alkaline", "albumin"], "Liver"],
+    [["hemoglobin", "haematocrit", "hematocrit", "wbc", "rbc", "platelet", "mcv", "neutrophil", "lymphocyte"], "CBC"],
+    [["sodium", "potassium", "magnesium", "chloride"], "Electrolytes"],
+    [["ferritin", "iron", "tibc", "transferrin", "b12", "folate", "vitamin d"], "Iron & vitamins"],
+    [["tsh", "thyroid"], "Thyroid"],
+    [["crp", "esr", "sedimentation"], "Inflammation"],
+    [["psa"], "Prostate"],
+    [["testosterone", "estradiol", "cortisol"], "Hormones"],
+    [["systolic", "diastolic", "blood pressure", "bmi", "weight"], "Vitals"],
+    [["calcium score", "agatston", "bi-rads", "birads"], "Imaging"],
+  ];
+  for (const [aliases, group] of heuristics) {
+    if (aliases.some((a) => key.includes(a))) return group;
+  }
+  return "Other";
+}
+
+function panelsPresentInSeries(series) {
+  const found = new Set((series || []).map((s) => labPanelForSeries(s)));
+  const ordered = LAB_PANEL_ORDER.filter((p) => found.has(p));
+  for (const p of [...found].sort()) {
+    if (!ordered.includes(p)) ordered.push(p);
+  }
+  return ordered;
+}
+
+function resolveLabsDateBounds({
+  rangeKey = state.labsDateRange,
+  dateFrom = state.labsDateFrom,
+  dateTo = state.labsDateTo,
+} = {}) {
+  const key = String(rangeKey || "all").toLowerCase();
+  if (!key || key === "all") return { from: null, to: null };
+  const today = new Date();
+  const iso = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const end = iso(today);
+  if (key === "6m") {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 183);
+    return { from: iso(d), to: end };
+  }
+  if (key === "12m") {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 365);
+    return { from: iso(d), to: end };
+  }
+  if (key === "24m") {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 730);
+    return { from: iso(d), to: end };
+  }
+  let from = String(dateFrom || "").slice(0, 10) || null;
+  let to = String(dateTo || "").slice(0, 10) || null;
+  if (from && to && from > to) [from, to] = [to, from];
+  return { from, to };
+}
+
+function filterSeriesByDate(series, { from = null, to = null } = {}) {
+  if (!from && !to) return [...(series || [])];
+  const out = [];
+  for (const item of series || []) {
+    const readings = (item.readings || []).filter((r) => {
+      const day = String(r.recorded_at || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+      if (from && day < from) return false;
+      if (to && day > to) return false;
+      return true;
+    });
+    if (!readings.length) continue;
+    const clone = { ...item, readings, point_count: readings.length, latest: readings[readings.length - 1] };
+    if (clone.latest?.status) clone.status = clone.latest.status;
+    out.push(clone);
+  }
+  return out;
+}
+
+function filterSeriesByPanel(series, panel = state.labsPanel) {
+  const key = String(panel || "all");
+  if (!key || key === "all") return [...(series || [])];
+  return (series || []).filter((s) => labPanelForSeries(s) === key);
+}
+
+function filteredLabsSeries(series = state.diagnosticSeriesCache || []) {
+  const bounds = resolveLabsDateBounds();
+  return filterSeriesByPanel(filterSeriesByDate(series, bounds), state.labsPanel);
+}
+
+function syncLabsFilterControls() {
+  const rangeEl = document.getElementById("diag-date-range");
+  const customWrap = document.getElementById("diag-date-custom");
+  const fromEl = document.getElementById("diag-date-from");
+  const toEl = document.getElementById("diag-date-to");
+  const panelEl = document.getElementById("diag-panel-filter");
+  if (rangeEl && rangeEl.value !== state.labsDateRange) rangeEl.value = state.labsDateRange || "all";
+  customWrap?.classList.toggle("hidden", state.labsDateRange !== "custom");
+  if (fromEl && fromEl.value !== (state.labsDateFrom || "")) fromEl.value = state.labsDateFrom || "";
+  if (toEl && toEl.value !== (state.labsDateTo || "")) toEl.value = state.labsDateTo || "";
+
+  const present = panelsPresentInSeries(state.diagnosticSeriesCache || []);
+  if (panelEl) {
+    const cur = state.labsPanel || "all";
+    const options = [
+      `<option value="all">All types</option>`,
+      ...present.map(
+        (p) =>
+          `<option value="${escapeHtml(p)}">${escapeHtml(labPanelLabel(p))}</option>`
+      ),
+    ];
+    const nextHtml = options.join("");
+    if (panelEl.dataset.optionsSig !== nextHtml) {
+      panelEl.innerHTML = nextHtml;
+      panelEl.dataset.optionsSig = nextHtml;
+    }
+    if (cur !== "all" && !present.includes(cur)) {
+      state.labsPanel = "all";
+    }
+    panelEl.value = state.labsPanel || "all";
+  }
+
+  const hint = document.getElementById("diag-unit-hint");
+  if (hint) {
+    const unitPart =
+      state.labUnitSystem === "us"
+        ? "Showing United States units and Month Day, Year dates."
+        : "Showing Canadian SI units and Day Month Year dates.";
+    const bounds = resolveLabsDateBounds();
+    const datePart =
+      state.labsDateRange === "all"
+        ? "All dates."
+        : state.labsDateRange === "custom"
+          ? `Dates ${bounds.from || "…"} → ${bounds.to || "…"}.`
+          : rangeEl?.selectedOptions?.[0]?.text
+            ? `${rangeEl.selectedOptions[0].text}.`
+            : "";
+    const typePart =
+      state.labsPanel && state.labsPanel !== "all"
+        ? `Type: ${labPanelLabel(state.labsPanel)}.`
+        : "All types.";
+    hint.textContent = `${unitPart} ${datePart} ${typePart} Original report values stay available on each point.`.replace(
+      /\s+/g,
+      " "
+    ).trim();
   }
 }
 
@@ -12499,7 +12781,10 @@ function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system =
     system,
   });
   if (!matrix.dates.length || !matrix.tests.length) {
-    tableEl.innerHTML = `<tbody><tr><td class="muted small">No lab readings yet.</td></tr></tbody>`;
+    const hasAny = (state.diagnosticSeriesCache || []).length > 0;
+    tableEl.innerHTML = hasAny
+      ? `<tbody><tr><td class="muted small">No labs match the current Dates / Type filters.</td></tr></tbody>`
+      : `<tbody><tr><td class="muted small">No lab readings yet.</td></tr></tbody>`;
     return matrix;
   }
   const unitBadge = system === "us" ? "US" : "Canada";
@@ -12570,7 +12855,7 @@ function renderDiagnosticsTable(series) {
 }
 
 function openDiagTableExpand() {
-  const series = state.diagnosticSeriesCache || [];
+  const series = filteredLabsSeries(state.diagnosticSeriesCache || []);
   const table = document.getElementById("diagnostics-table-expand");
   const matrix = fillDiagnosticsMatrixTable(table, series, {
     flipped: state.labsTableFlipped,
@@ -13247,8 +13532,9 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   const displaySeries = seriesForLabUnitSystem(series || state.diagnosticSeriesCache || []);
   const bloodFirst = [...displaySeries];
   const extras = [];
-  const weight = weightSeriesFromProfile(profile);
-  const bmi = bmiSeriesFromProfile(profile);
+  const allowVitals = !state.labsPanel || state.labsPanel === "all" || state.labsPanel === "Vitals";
+  const weight = allowVitals ? weightSeriesFromProfile(profile) : null;
+  const bmi = allowVitals ? bmiSeriesFromProfile(profile) : null;
   if (weight && weight.point_count >= 2) extras.push({ ...weight, category: "vital" });
   if (bmi && bmi.point_count >= 2) {
     const ref = {
@@ -13284,7 +13570,10 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
   }
   if (!cards.length && !(gaps?.total_count > 0)) {
     renderDiagnosticsStatusFilter([], gaps);
-    wrap.innerHTML = `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
+    const hasAny = (state.diagnosticSeriesCache || []).length > 0;
+    wrap.innerHTML = hasAny
+      ? `<p class="muted small" id="diagnostics-empty">No labs match the current Dates / Type filters. Choose All dates and All types to see everything.</p>`
+      : `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
     state.diagExpandCache = {};
     return;
   }
@@ -13515,12 +13804,21 @@ async function refreshActivePatientProfile({ background = false } = {}) {
   if (!state.activePatientId) {
     state.patientProfile = null;
     state.patientProfileId = null;
+    setDiagnosticsLoading(false);
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
     renderMedicationsHome(null);
+    syncDiagnosticsLoadingUi();
     return;
   }
   const patientId = state.activePatientId;
+  const name = state.activePatientLabel || "this person";
+  if (!background && !labsProfileReady()) {
+    setDiagnosticsLoading(true, {
+      title: `Loading ${name}’s labs…`,
+      hint: "Fetching blood-test trends for this person.",
+    });
+  }
   if (profileRefreshPromise && profileRefreshPatientId === patientId) {
     await profileRefreshPromise;
     // A shared in-flight background fetch can finish without painting. Ensure Log UI recovers.
@@ -13534,6 +13832,8 @@ async function refreshActivePatientProfile({ background = false } = {}) {
       syncPatientSpecificLogTiles();
       syncMobileLogForLabel();
     }
+    if (labsProfileReady()) setDiagnosticsLoading(false);
+    else syncDiagnosticsLoadingUi();
     return;
   }
   profileRefreshPatientId = patientId;
@@ -13551,6 +13851,11 @@ async function refreshActivePatientProfile({ background = false } = {}) {
       if (profileRefreshPatientId === patientId) {
         profileRefreshPromise = null;
         profileRefreshPatientId = null;
+      }
+      if (state.activePatientId === patientId && labsProfileReady()) {
+        setDiagnosticsLoading(false);
+      } else {
+        syncDiagnosticsLoadingUi();
       }
     }
   })();
@@ -15286,6 +15591,25 @@ document.getElementById("diag-view-table")?.addEventListener("click", () => {
   state.labsView = "table";
   refreshDiagnosticsViews();
 });
+document.getElementById("diag-date-range")?.addEventListener("change", (e) => {
+  state.labsDateRange = e.target?.value || "all";
+  syncLabsFilterControls();
+  refreshDiagnosticsViews();
+});
+document.getElementById("diag-date-from")?.addEventListener("change", (e) => {
+  state.labsDateFrom = e.target?.value || "";
+  if (state.labsDateRange !== "custom") state.labsDateRange = "custom";
+  refreshDiagnosticsViews();
+});
+document.getElementById("diag-date-to")?.addEventListener("change", (e) => {
+  state.labsDateTo = e.target?.value || "";
+  if (state.labsDateRange !== "custom") state.labsDateRange = "custom";
+  refreshDiagnosticsViews();
+});
+document.getElementById("diag-panel-filter")?.addEventListener("change", (e) => {
+  state.labsPanel = e.target?.value || "all";
+  refreshDiagnosticsViews();
+});
 document.getElementById("btn-diag-table-flip")?.addEventListener("click", () => {
   state.labsTableFlipped = !state.labsTableFlipped;
   refreshDiagnosticsViews();
@@ -15313,10 +15637,38 @@ async function exportDiagnosticsPdf({ tableOnly = false, triggerBtn = null } = {
     b.disabled = true;
   });
   if (triggerBtn) triggerBtn.disabled = true;
+  setDiagnosticsLoading(true, {
+    title: tableOnly ? "Preparing labs table PDF…" : "Preparing diagnostics PDF…",
+    hint: "Building charts and results overview.",
+  });
   try {
     const system = state.labUnitSystem === "us" ? "us" : "si";
     const qs = new URLSearchParams({ unit_system: system });
     if (tableOnly) qs.set("content", "table");
+    qs.set("date_range", state.labsDateRange || "all");
+    if (state.labsDateRange === "custom") {
+      if (state.labsDateFrom) qs.set("date_from", state.labsDateFrom);
+      if (state.labsDateTo) qs.set("date_to", state.labsDateTo);
+    }
+    qs.set("panel", state.labsPanel || "all");
+
+    // Match Labs timeline overlay checkboxes (and notes for table export)
+    const profile = state.patientProfile;
+    const series = filteredLabsSeries(state.diagnosticSeriesCache || []);
+    const allEvents = allChartMilestones(profile);
+    const inSpan = milestonesForLabSpan(allEvents, seriesDateSpan(series));
+    const prefs =
+      state.diagMilestonePrefs || loadDiagMilestonePrefs(patientId, inSpan);
+    const selected = visibleDiagMilestones(inSpan, prefs);
+    qs.set("overlays", prefs.enabled ? "1" : "0");
+    for (const ev of selected) {
+      if (ev?.id) qs.append("overlay_id", String(ev.id));
+    }
+    const noteEvents = prefs.enabled ? selected : inSpan;
+    for (const ev of noteEvents) {
+      if (ev?.id) qs.append("note_id", String(ev.id));
+    }
+
     const res = await fetch(
       `/api/patients/${patientId}/diagnostics/export.pdf?${qs.toString()}`,
       { credentials: "include" }
@@ -15347,6 +15699,7 @@ async function exportDiagnosticsPdf({ tableOnly = false, triggerBtn = null } = {
       b.disabled = false;
     });
     if (triggerBtn) triggerBtn.disabled = false;
+    setDiagnosticsLoading(false);
   }
 }
 
