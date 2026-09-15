@@ -444,6 +444,7 @@
           <p class="muted small" id="diag-table-expand-subtitle"></p>
         </div>
         <div class="diag-table-expand-actions">
+          <button type="button" class="btn ghost btn-sm" id="btn-diag-table-expand-download" title="Download results table PDF">Download</button>
           <button type="button" class="btn ghost btn-sm" id="btn-diag-table-expand-flip" title="Swap rows and columns">Flip</button>
           <button type="button" class="btn ghost btn-sm" id="btn-close-diag-table-expand" aria-label="Close">Close</button>
         </div>
@@ -670,7 +671,8 @@
               <p class="muted small">Blood-test trends with collection dates. Green shaded zone = on-target range (or the safe side of a one-sided bound). Trend line segments follow each reading (green / yellow / red). Gray values have no reference yet. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones. Toggle <strong>Canada</strong> or <strong>United States</strong> units when sharing with clinicians in either system — originals from each lab report are kept.</p>
             </div>
             <div class="diagnostics-actions">
-              <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with date and time stamp">Export PDF</button>
+              <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with charts and results table">Export PDF</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-export-diagnostics-table-pdf" title="Download results table only">Export table</button>
               <button type="button" class="btn ghost btn-sm" id="btn-diagnostics-settings" data-nav-settings>Add in Settings</button>
             </div>
           </div>
@@ -680,9 +682,11 @@
               <button type="button" class="btn ghost btn-sm diag-view-btn" id="diag-view-table" data-labs-view="table">Table</button>
             </div>
             <div class="diag-unit-toggle" role="group" aria-label="Lab unit system">
-              <span class="diag-unit-toggle-label muted small">Units</span>
-              <button type="button" class="btn secondary btn-sm diag-unit-btn active" id="diag-unit-si" data-lab-unit="si" title="Canadian SI units (mmol/L, g/L)">Canada</button>
-              <button type="button" class="btn ghost btn-sm diag-unit-btn" id="diag-unit-us" data-lab-unit="us" title="US conventional units (mg/dL, g/dL)">United States</button>
+              <div class="diag-unit-toggle-btns">
+                <button type="button" class="btn secondary btn-sm diag-unit-btn active" id="diag-unit-si" data-lab-unit="si" title="Canadian SI units (mmol/L, g/L)">Canada</button>
+                <button type="button" class="btn ghost btn-sm diag-unit-btn" id="diag-unit-us" data-lab-unit="us" title="US conventional units (mg/dL, g/dL)">United States</button>
+              </div>
+              <span class="diag-unit-toggle-label">Units</span>
             </div>
             <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-flip" title="Swap rows and columns">Flip table</button>
             <button type="button" class="btn ghost btn-sm hidden" id="btn-diag-table-expand" title="Expand table">Expand</button>

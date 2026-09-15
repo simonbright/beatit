@@ -2630,8 +2630,21 @@ body {
   z-index: 5;
 }
 
-.diag-view-toggle,
+.diag-view-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .diag-unit-toggle {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.18rem;
+}
+
+.diag-unit-toggle-btns {
   display: inline-flex;
   gap: 0.25rem;
   align-items: center;
@@ -2639,7 +2652,13 @@ body {
 }
 
 .diag-unit-toggle-label {
-  margin-right: 0.15rem;
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1;
+  font-weight: 550;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  text-align: center;
 }
 
 .diag-unit-hint {

@@ -73,6 +73,7 @@ from app.services.pdf_export import (
     assessment_pdf_filename,
     build_assessment_pdf,
     build_diagnostics_pdf,
+    build_diagnostics_table_pdf,
     build_document_coverage_pdf,
     build_journal_pdf,
     build_medications_pdf,
@@ -2742,6 +2743,7 @@ async def export_patient_diagnostics_pdf(
     patient_id: str,
     request: Request,
     unit_system: str = "si",
+    content: str = "full",
 ):
     patients = list_patients()
     patient = next((p for p in patients if p["id"] == patient_id), None)
@@ -2756,6 +2758,8 @@ async def export_patient_diagnostics_pdf(
 
     system = "us" if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"} else "si"
     series = project_series_for_unit_system(series, system)
+    content_key = str(content or "full").strip().lower()
+    table_only = content_key in {"table", "matrix", "results"}
 
     sub_bits: list[str] = []
     age = age_years_from_dob(profile.get("date_of_birth"))
@@ -2768,17 +2772,26 @@ async def export_patient_diagnostics_pdf(
     patient_subline = " · ".join(sub_bits) if sub_bits else None
 
     exported_at = datetime.now(timezone.utc)
-    milestones = all_chart_milestones(profile)
-    pdf_bytes = build_diagnostics_pdf(
-        series,
-        patient_label=patient.get("label"),
-        patient_subline=patient_subline,
-        milestones=milestones,
-        unit_system=system,
-    )
+    if table_only:
+        pdf_bytes = build_diagnostics_table_pdf(
+            series,
+            patient_label=patient.get("label"),
+            patient_subline=patient_subline,
+            unit_system=system,
+        )
+    else:
+        milestones = all_chart_milestones(profile)
+        pdf_bytes = build_diagnostics_pdf(
+            series,
+            patient_label=patient.get("label"),
+            patient_subline=patient_subline,
+            milestones=milestones,
+            unit_system=system,
+        )
     filename = diagnostics_pdf_filename(
         patient_label=patient.get("label"),
         exported_at=exported_at,
+        table_only=table_only,
     )
     db, _, _, _, _ = await _get_services()
     await _audit(
@@ -2789,9 +2802,10 @@ async def export_patient_diagnostics_pdf(
         resource_id=patient_id,
         metadata={
             "filename": filename,
-            "export_kind": "diagnostics",
+            "export_kind": "diagnostics_table" if table_only else "diagnostics",
             "series_count": len(series),
             "unit_system": system,
+            "content": "table" if table_only else "full",
         },
     )
     return FastAPIResponse(

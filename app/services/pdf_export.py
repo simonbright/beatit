@@ -211,20 +211,22 @@ class AssessmentPDF(FPDF):
         subtitle = self.patient_label or "Patient Care Workspace"
         self.cell(0, 5, _safe_text(subtitle), new_x="LMARGIN", new_y="NEXT")
 
-        self.set_xy(118, 11)
+        right_w = 74.0
+        right_x = max(self.l_margin + 90, self.w - self.r_margin - right_w)
+        self.set_xy(right_x, 11)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(30, 30, 30)
         self.multi_cell(
-            74,
+            right_w,
             4,
             _safe_text(self.report_date),
             align="R",
             new_x="LMARGIN",
             new_y="NEXT",
         )
-        self.set_x(118)
+        self.set_x(right_x)
         self.multi_cell(
-            74,
+            right_w,
             4,
             _safe_text(self.report_time),
             align="R",
@@ -232,16 +234,16 @@ class AssessmentPDF(FPDF):
             new_y="NEXT",
         )
         if self.report_type:
-            self.set_x(118)
+            self.set_x(right_x)
             self.set_font("Helvetica", "I", 8)
             self.set_text_color(80, 80, 80)
-            self.cell(74, 4, _safe_text(self.report_type), align="R")
+            self.cell(right_w, 4, _safe_text(self.report_type), align="R")
 
         self.set_y(34)
         self.set_x(self.l_margin)
         self.set_draw_color(14, 165, 233)
         self.set_line_width(0.4)
-        self.line(16, self.get_y(), self.w - 16, self.get_y())
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
         self.ln(6)
 
     def footer(self) -> None:
@@ -622,6 +624,22 @@ def _short_milestone_legend_label(label: str | None, *, max_len: int = 42) -> st
     return out
 
 
+def _assign_milestone_codes(
+    milestones: list[dict[str, Any]] | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Attach A/B/C codes for chart ticks + PDF legend (keeps print charts uncluttered)."""
+    out: list[dict[str, Any]] = []
+    for i, ev in enumerate(milestones or []):
+        if i >= limit:
+            break
+        row = dict(ev)
+        row["code"] = chr(ord("A") + i)
+        out.append(row)
+    return out
+
+
 def _format_diag_points_reference(
     readings: list[dict[str, Any]] | None,
     *,
@@ -846,11 +864,11 @@ def _sparkline_png_bytes(
     img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    # Room on the left for Y-axis; extra bottom for non-overlapping dates + drop lines
-    pad_l, pad_r, pad_t, pad_b = 78, 48, 20, 64
+    # Room on the left for Y-axis; extra bottom so staggered dates never clip
+    pad_l, pad_r, pad_t, pad_b = 78, 56, 22, 94
     if title:
         draw.text((pad_l, 6), _safe_text(title), fill=(15, 23, 42, 255), font=font_title, anchor="lt")
-        pad_t = 44
+        pad_t = 46
 
     chart_w = width - pad_l - pad_r
     chart_h = height - pad_t - pad_b
@@ -1016,11 +1034,11 @@ def _sparkline_png_bytes(
         y = y_for(value)
         coords.append((x, y, status))
 
-    # 3) Very light drop-lines from each reading down through the plot (date↔point mapping)
+    # 3) Very light drop-lines from each reading (date↔point) — keep quiet vs letter ticks
     for x, y, _status in coords:
         draw.line(
             (x, y + 8, x, plot_bottom),
-            fill=(100, 116, 139, 120),
+            fill=(148, 163, 184, 70),
             width=1,
         )
 
@@ -1065,7 +1083,7 @@ def _sparkline_png_bytes(
                 anchor=anchor,
             )
 
-    # 5) Milestone markers in the foreground (above band + trend)
+    # 5) Milestone letter-ticks at the TOP edge only (no full-height lines through the trend)
     marker_fill = (100, 116, 139)
     by_day: dict[str, list[dict[str, Any]]] = {}
     for ev in range_events:
@@ -1073,8 +1091,8 @@ def _sparkline_png_bytes(
         if not d:
             continue
         by_day.setdefault(d, []).append(ev)
-    milestone_marks: list[tuple[float, tuple[int, int, int]]] = []
-    for _mi, (d, day_events) in enumerate(list(by_day.items())[:4]):
+    milestone_marks: list[tuple[float, tuple[int, int, int], str]] = []
+    for _mi, (d, day_events) in enumerate(list(by_day.items())[:8]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
         except ValueError:
@@ -1082,7 +1100,9 @@ def _sparkline_png_bytes(
         if day < t_min or day > t_max:
             continue
         x = x_for_day(day)
-        hex_color = str((day_events[0] or {}).get("color") or "")
+        lead = day_events[0] or {}
+        hex_color = str(lead.get("color") or "")
+        code = str(lead.get("code") or "").strip().upper()[:1] or chr(ord("A") + _mi)
         try:
             if hex_color.startswith("#") and len(hex_color) >= 7:
                 fill = (
@@ -1094,25 +1114,66 @@ def _sparkline_png_bytes(
                 fill = marker_fill
         except ValueError:
             fill = marker_fill
-        milestone_marks.append((x, fill))
+        milestone_marks.append((x, fill, code))
 
     def _draw_milestones() -> None:
-        for x, fill in milestone_marks:
-            y0, y1 = pad_t + 4, pad_t + chart_h - 4
-            # Quiet dashed markers only — no triangle tips / white underlays
-            dash = 6
-            yy = y0
-            while yy < y1:
-                draw.line((x, yy, x, min(yy + dash, y1)), fill=(*fill, 140), width=1)
-                yy += dash * 2
-            # Small top tick so the date is findable without crowding the plot
-            draw.line((x - 3, y0, x + 3, y0), fill=(*fill, 180), width=1)
+        if not milestone_marks:
+            return
+        # Sort and force readable horizontal spacing for clusters (true dates stay in Timeline)
+        ordered = sorted(milestone_marks, key=lambda t: t[0])
+        min_sep = 52.0
+        xs = [float(m[0]) for m in ordered]
+        spread = [xs[0]]
+        for i in range(1, len(xs)):
+            spread.append(max(xs[i], spread[-1] + min_sep))
+        # If the forced spread ran past the plot, pull the whole cluster left
+        overflow = spread[-1] - (pad_l + chart_w - 14)
+        if overflow > 0:
+            spread = [x - overflow for x in spread]
+        if spread[0] < pad_l + 14:
+            shift = (pad_l + 14) - spread[0]
+            spread = [x + shift for x in spread]
+        for i, ((orig_x, fill, code), draw_x) in enumerate(zip(ordered, spread)):
+            draw_x = max(pad_l + 14, min(pad_l + chart_w - 14, draw_x))
+            row = i % 2
+            y0 = pad_t + 2 + row * 17
+            # Short stub toward the true date (not a full-height overlay line)
+            stub_to = min(orig_x, pad_l + chart_w - 4)
+            stub_to = max(pad_l + 4, stub_to)
+            draw.line(
+                (draw_x, y0 + 18, stub_to, pad_t + 36),
+                fill=(*fill, 120),
+                width=1,
+            )
+            draw.polygon(
+                [
+                    (draw_x, y0 + 8),
+                    (draw_x - 5, y0),
+                    (draw_x + 5, y0),
+                ],
+                fill=(*fill, 235),
+            )
+            # White halo behind letter for contrast when near other marks
+            draw.text(
+                (draw_x + 1, y0 + 11),
+                code,
+                fill=(255, 255, 255, 220),
+                font=font_small,
+                anchor="mt",
+            )
+            draw.text(
+                (draw_x, y0 + 10),
+                code,
+                fill=(*fill, 255),
+                font=font_small,
+                anchor="mt",
+            )
 
     _draw_milestones()
 
     # 6) Axis dates — non-overlapping, with light connectors from plot to label
-    axis_y_top = height - 36
-    axis_y_bot = height - 16
+    axis_y_top = height - 62
+    axis_y_bot = height - 34
     n_pts = len(coords)
     # Prefer short labels; precise ISO stays in the Points line under the chart
     use_compact = n_pts > 2
@@ -1135,6 +1196,21 @@ def _sparkline_png_bytes(
         else:
             anchor = "mt"
             left, right = x - est_w / 2, x + est_w / 2
+        # Keep estimated bounds inside the image so labels are never clipped
+        if left < 6:
+            shift = 6 - left
+            left += shift
+            right += shift
+            x = x + shift
+            if anchor == "mt":
+                anchor = "lt"
+        if right > width - 6:
+            shift = right - (width - 6)
+            left -= shift
+            right -= shift
+            x = x - shift
+            if anchor == "mt":
+                anchor = "rt"
         candidates.append((i, x, date_label, left, right, anchor))
 
     kept: list[tuple[int, float, str, float, float, str, int]] = []
@@ -1143,7 +1219,7 @@ def _sparkline_png_bytes(
         for _ki, _kx, _kl, kleft, kright, _ka, krow in kept:
             if krow != row:
                 continue
-            if left < kright + 12 and right > kleft - 12:
+            if left < kright + 18 and right > kleft - 18:
                 return False
         return True
 
@@ -1176,7 +1252,7 @@ def _sparkline_png_bytes(
         # Light connector from plot bottom to the date label
         draw.line(
             (x, plot_bottom, x, axis_y - 4),
-            fill=(100, 116, 139, 130),
+            fill=(148, 163, 184, 110),
             width=1,
         )
         draw.text(
@@ -1186,9 +1262,6 @@ def _sparkline_png_bytes(
             font=font_small,
             anchor=anchor,
         )
-
-    # Redraw milestones last so they stay above drop-lines / labels near the frame
-    _draw_milestones()
 
     buf = BytesIO()
     # Flatten to RGB for smaller PDFs / broader compatibility
@@ -1555,6 +1628,7 @@ def diagnostics_pdf_filename(
     *,
     patient_label: str | None = None,
     exported_at: datetime | None = None,
+    table_only: bool = False,
 ) -> str:
     stamp = _format_filename_stamp(
         (exported_at or datetime.now(timezone.utc)).isoformat()
@@ -1563,25 +1637,20 @@ def diagnostics_pdf_filename(
     if patient_label:
         slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
+    kind = "diagnostics-table" if table_only else "diagnostics"
     if slug:
-        return f"beatit-diagnostics-{slug}-{stamp}.pdf"
-    return f"beatit-diagnostics-{stamp}.pdf"
+        return f"beatit-{kind}-{slug}-{stamp}.pdf"
+    return f"beatit-{kind}-{stamp}.pdf"
 
 
-def _write_diagnostics_matrix_pages(
-    pdf: FPDF,
-    series: list[dict[str, Any]],
-    *,
-    usable_w: float,
-    unit_system: str = "si",
-) -> None:
-    """Always-on results matrix (tests × dates), paginated by date columns."""
-    if not series:
-        return
+def _diagnostics_matrix_data(
+    series: list[dict[str, Any]] | None,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Collect sorted dates + tests×by_date for PDF matrix pages."""
     dates: list[str] = []
     seen_dates: set[str] = set()
     tests: list[dict[str, Any]] = []
-    for item in series:
+    for item in series or []:
         name = str(item.get("name") or "").strip()
         if not name:
             continue
@@ -1595,84 +1664,244 @@ def _write_diagnostics_matrix_pages(
                 seen_dates.add(day)
                 dates.append(day)
         if by_date:
-            tests.append(
-                {
-                    "name": name,
-                    "unit": item.get("unit") or "",
-                    "by_date": by_date,
-                }
-            )
+            unit = ""
+            sample = next(iter(by_date.values()))
+            unit = str(sample.get("unit") or item.get("unit") or "").strip()
+            tests.append({"name": name, "unit": unit, "by_date": by_date})
     dates.sort()
+    return dates, tests
+
+
+def _matrix_value_only(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "—"
+    val = _format_diag_value_label(row.get("value"))
+    return val if val else "—"
+
+
+def _matrix_test_label(test: dict[str, Any], *, max_len: int = 36) -> str:
+    name = _safe_text(test.get("name") or "Test")
+    unit = _safe_text(test.get("unit") or "")
+    label = f"{name} ({unit})" if unit else name
+    if len(label) > max_len:
+        return label[: max_len - 1].rstrip() + "…"
+    return label
+
+
+def _status_fill_rgb(status: str | None) -> tuple[int, int, int] | None:
+    key = str(status or "").strip().lower()
+    if key == "green":
+        return (220, 252, 231)
+    if key == "yellow":
+        return (254, 249, 195)
+    if key == "red":
+        return (254, 226, 226)
+    return None
+
+
+def _write_diagnostics_overview_pages(
+    pdf: FPDF,
+    series: list[dict[str, Any]],
+    *,
+    unit_system: str = "si",
+) -> None:
+    """Landscape consolidated results grid: all dates across, values only."""
+    dates, tests = _diagnostics_matrix_data(series)
     if not dates or not tests:
         return
 
-    # Prefer fewer date columns so values stay readable; paginate the rest
+    system = (
+        "us"
+        if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
+        else "si"
+    )
+    # Fit as many date columns as practical on landscape (~12–14)
+    max_date_cols = min(len(dates), 12)
+    row_h = 4.8
+
+    def _write_chunk(chunk: list[str], *, first: bool) -> None:
+        pdf.add_page(orientation="L")
+        usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+        name_w = min(46.0, usable_w * 0.22)
+        value_w = (usable_w - name_w) / max(len(chunk), 1)
+
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(14, 116, 144)
+        title = "Results overview (all dates)" if first else "Results overview (continued)"
+        pdf.cell(0, 6.5, title, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 7.2)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(
+            0,
+            3.8,
+            _safe_text(
+                f"Landscape view · values only (units in Test column) · "
+                f"{len(tests)} tests · {len(dates)} dates · "
+                f"{'US' if system == 'us' else 'Canada'} units"
+            ),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        pdf.ln(1.5)
+
+        pdf.set_font("Helvetica", "B", 6.2)
+        pdf.set_fill_color(241, 245, 249)
+        pdf.set_text_color(15, 23, 42)
+        pdf.cell(name_w, row_h + 0.8, "Test (unit)", border=1, fill=True)
+        for day in chunk:
+            label = _format_diag_date_label(day, compact=True, unit_system=system)
+            pdf.cell(value_w, row_h + 0.8, _safe_text(label), border=1, align="C", fill=True)
+        pdf.ln(row_h + 0.8)
+
+        pdf.set_font("Helvetica", "", 6.0)
+        for ti, test in enumerate(tests):
+            if pdf.get_y() + row_h + 2 > pdf.h - pdf.b_margin:
+                pdf.add_page(orientation="L")
+                usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+                name_w = min(46.0, usable_w * 0.22)
+                value_w = (usable_w - name_w) / max(len(chunk), 1)
+                pdf.set_font("Helvetica", "B", 11)
+                pdf.set_text_color(14, 116, 144)
+                pdf.cell(0, 5.5, "Results overview (continued)", new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(1)
+                pdf.set_font("Helvetica", "B", 6.2)
+                pdf.set_fill_color(241, 245, 249)
+                pdf.set_text_color(15, 23, 42)
+                pdf.cell(name_w, row_h + 0.8, "Test (unit)", border=1, fill=True)
+                for day in chunk:
+                    label = _format_diag_date_label(day, compact=True, unit_system=system)
+                    pdf.cell(
+                        value_w,
+                        row_h + 0.8,
+                        _safe_text(label),
+                        border=1,
+                        align="C",
+                        fill=True,
+                    )
+                pdf.ln(row_h + 0.8)
+                pdf.set_font("Helvetica", "", 6.0)
+
+            if ti % 2 == 0:
+                pdf.set_fill_color(248, 250, 252)
+            else:
+                pdf.set_fill_color(255, 255, 255)
+            pdf.set_text_color(15, 23, 42)
+            pdf.cell(
+                name_w,
+                row_h,
+                _matrix_test_label(test, max_len=40),
+                border=1,
+                fill=True,
+            )
+            for day in chunk:
+                row = test["by_date"].get(day)
+                fill_rgb = _status_fill_rgb(row.get("status") if row else None)
+                if fill_rgb:
+                    pdf.set_fill_color(*fill_rgb)
+                elif ti % 2 == 0:
+                    pdf.set_fill_color(248, 250, 252)
+                else:
+                    pdf.set_fill_color(255, 255, 255)
+                pdf.set_text_color(30, 41, 59)
+                pdf.cell(
+                    value_w,
+                    row_h,
+                    _safe_text(_matrix_value_only(row)),
+                    border=1,
+                    align="C",
+                    fill=True,
+                )
+            pdf.ln(row_h)
+
+    for col_start in range(0, len(dates), max_date_cols):
+        chunk = dates[col_start : col_start + max_date_cols]
+        _write_chunk(chunk, first=(col_start == 0))
+
+
+def _write_diagnostics_matrix_pages(
+    pdf: FPDF,
+    series: list[dict[str, Any]],
+    *,
+    usable_w: float,
+    unit_system: str = "si",
+    heading: str = "Results table (detailed)",
+    intro: str | None = None,
+) -> None:
+    """Portrait detailed matrix: fewer date columns, units in the Test column."""
+    dates, tests = _diagnostics_matrix_data(series)
+    if not dates or not tests:
+        return
+
     max_date_cols = 5 if len(dates) > 5 else len(dates)
-    name_w = min(48.0, usable_w * 0.28)
+    name_w = min(52.0, usable_w * 0.30)
     value_w = (usable_w - name_w) / max(max_date_cols, 1)
     row_h = 5.6
+    system = (
+        "us"
+        if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
+        else "si"
+    )
+    date_order = (
+        "Dates: Month Day, Year (US)"
+        if system == "us"
+        else "Dates: Day Month Year (Canada)"
+    )
+    default_intro = (
+        f"Detailed pages · values only (unit in Test column) · {len(tests)} tests · "
+        f"{len(dates)} dates · {date_order}"
+    )
 
-    def _cell_text(row: dict[str, Any] | None) -> str:
-        if not row:
-            return "-"
-        val = _format_diag_value_label(row.get("value"))
-        unit = _safe_text(row.get("unit") or "")
-        if not val:
-            return "-"
-        return f"{val} {unit}".strip() if unit else val
+    pdf.add_page(orientation="P")
+    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+    name_w = min(52.0, usable_w * 0.30)
+    value_w = (usable_w - name_w) / max(max_date_cols, 1)
 
-    pdf.add_page()
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(14, 116, 144)
-    pdf.cell(0, 7, "Results table", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _safe_text(heading), new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 7.5)
     pdf.set_text_color(80, 80, 80)
-    pdf.cell(
-        0,
-        4,
-        _safe_text(
-            f"All charted readings in the active unit system · {len(tests)} tests · {len(dates)} dates"
-        ),
-        new_x="LMARGIN",
-        new_y="NEXT",
-    )
+    pdf.cell(0, 4, _safe_text(intro or default_intro), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     for col_start in range(0, len(dates), max_date_cols):
         chunk = dates[col_start : col_start + max_date_cols]
         if col_start > 0:
-            pdf.add_page()
+            pdf.add_page(orientation="P")
+            usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+            name_w = min(52.0, usable_w * 0.30)
+            value_w = (usable_w - name_w) / max(len(chunk), 1)
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(14, 116, 144)
-            pdf.cell(0, 6, "Results table (continued)", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 6, "Results table (detailed, continued)", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(2)
 
-        # Header
         pdf.set_font("Helvetica", "B", 7)
         pdf.set_fill_color(241, 245, 249)
         pdf.set_text_color(15, 23, 42)
-        pdf.cell(name_w, row_h + 1.2, "Test", border=1, fill=True)
+        pdf.cell(name_w, row_h + 1.2, "Test (unit)", border=1, fill=True)
         for day in chunk:
-            label = _format_diag_date_label(day, compact=True, unit_system=unit_system)
+            label = _format_diag_date_label(day, compact=True, unit_system=system)
             pdf.cell(value_w, row_h + 1.2, _safe_text(label), border=1, align="C", fill=True)
         pdf.ln(row_h + 1.2)
 
         pdf.set_font("Helvetica", "", 6.8)
         for ti, test in enumerate(tests):
             if pdf.get_y() + row_h + 2 > pdf.h - pdf.b_margin:
-                pdf.add_page()
+                pdf.add_page(orientation="P")
+                usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+                name_w = min(52.0, usable_w * 0.30)
+                value_w = (usable_w - name_w) / max(len(chunk), 1)
                 pdf.set_font("Helvetica", "B", 11)
                 pdf.set_text_color(14, 116, 144)
-                pdf.cell(0, 6, "Results table (continued)", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 6, "Results table (detailed, continued)", new_x="LMARGIN", new_y="NEXT")
                 pdf.ln(1.5)
                 pdf.set_font("Helvetica", "B", 7)
                 pdf.set_fill_color(241, 245, 249)
                 pdf.set_text_color(15, 23, 42)
-                pdf.cell(name_w, row_h + 1.2, "Test", border=1, fill=True)
+                pdf.cell(name_w, row_h + 1.2, "Test (unit)", border=1, fill=True)
                 for day in chunk:
-                    label = _format_diag_date_label(
-                        day, compact=True, unit_system=unit_system
-                    )
+                    label = _format_diag_date_label(day, compact=True, unit_system=system)
                     pdf.cell(
                         value_w,
                         row_h + 1.2,
@@ -1689,21 +1918,33 @@ def _write_diagnostics_matrix_pages(
             else:
                 pdf.set_fill_color(255, 255, 255)
             pdf.set_text_color(15, 23, 42)
-            name = _safe_text(test["name"])
-            if len(name) > 34:
-                name = name[:33] + "…"
-            pdf.cell(name_w, row_h, name, border=1, fill=True)
-            pdf.set_text_color(51, 65, 85)
+            pdf.cell(
+                name_w,
+                row_h,
+                _matrix_test_label(test, max_len=38),
+                border=1,
+                fill=True,
+            )
             for day in chunk:
+                row = test["by_date"].get(day)
+                fill_rgb = _status_fill_rgb(row.get("status") if row else None)
+                if fill_rgb:
+                    pdf.set_fill_color(*fill_rgb)
+                elif ti % 2 == 0:
+                    pdf.set_fill_color(248, 250, 252)
+                else:
+                    pdf.set_fill_color(255, 255, 255)
+                pdf.set_text_color(51, 65, 85)
                 pdf.cell(
                     value_w,
                     row_h,
-                    _safe_text(_cell_text(test["by_date"].get(day))),
+                    _safe_text(_matrix_value_only(row)),
                     border=1,
                     align="C",
                     fill=True,
                 )
             pdf.ln(row_h)
+
 
 
 def build_diagnostics_pdf(
@@ -1729,7 +1970,10 @@ def build_diagnostics_pdf(
         else "Dates: Day Month Year (Canada)"
     )
     # Only overlay milestones near the lab window — old starts (e.g. 2010) confuse the export
-    chart_milestones = _milestones_in_lab_span(milestones, series, pad_days=60)
+    chart_milestones = _assign_milestone_codes(
+        _milestones_in_lab_span(milestones, series, pad_days=60),
+        limit=8,
+    )
 
     pdf = AssessmentPDF(
         report_date=report_date,
@@ -1762,21 +2006,34 @@ def build_diagnostics_pdf(
     pdf.set_font("Helvetica", "", 8)
     legend = (
         "Green shaded zone = target. Line segments follow each reading (green / yellow / red). "
-        "Gray = no reference yet. Light dashed markers = med or lifestyle starts within the lab date range. "
+        "Gray = no reference yet. Letter ticks (A, B, …) at the top of a chart mark med/lifestyle "
+        "changes in the lab date range — no vertical overlay lines through the trend. "
         f"{date_order}; ISO (YYYY-MM-DD) also appears with latest values. "
-        "Trend charts first, then a full results table."
+        "Trend charts first, then a landscape results overview, then detailed table pages."
     )
-    if chart_milestones:
-        seen: list[str] = []
-        for ev in chart_milestones:
-            lab = _short_milestone_legend_label(ev.get("label") or ev.get("body"))
-            if lab and lab not in seen:
-                seen.append(lab)
-            if len(seen) >= 4:
-                break
-        if seen:
-            legend += " Overlays in range: " + " · ".join(seen) + "."
     _pdf_multiline(pdf, _safe_text(legend), h=3.6)
+    if chart_milestones:
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(71, 85, 105)
+        bits: list[str] = []
+        for ev in chart_milestones:
+            code = str(ev.get("code") or "").strip() or "?"
+            when = _format_diag_date_label(
+                str(ev.get("date") or "")[:10],
+                compact=False,
+                unit_system=system,
+            )
+            lab = _short_milestone_legend_label(ev.get("label") or ev.get("body"), max_len=36)
+            if lab:
+                bits.append(f"{code} · {when} · {lab}")
+            else:
+                bits.append(f"{code} · {when}")
+        if bits:
+            _pdf_multiline(
+                pdf,
+                _safe_text("Timeline: " + "  |  ".join(bits)),
+                h=3.3,
+            )
     pdf.set_draw_color(14, 165, 233)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
     pdf.ln(3.5)
@@ -1897,12 +2154,94 @@ def build_diagnostics_pdf(
                 pdf, singles, usable_w=usable_w, unit_system=system
             )
 
-        # Always include the matrix table (UI Table view equivalent)
+        # Landscape overview (all dates), then detailed portrait pages
+        _write_diagnostics_overview_pages(
+            pdf,
+            ranked,
+            unit_system=system,
+        )
         _write_diagnostics_matrix_pages(
             pdf,
             ranked,
             usable_w=usable_w,
             unit_system=system,
+        )
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()
+
+
+def build_diagnostics_table_pdf(
+    series: list[dict[str, Any]],
+    *,
+    patient_label: str | None = None,
+    patient_subline: str | None = None,
+    unit_system: str = "si",
+) -> bytes:
+    """Table-only diagnostics PDF (no trend charts)."""
+    now = datetime.now(timezone.utc)
+    exported_at = _format_timestamp(now.isoformat())
+    report_date, report_time = _format_timestamp_parts(now.isoformat())
+    system = (
+        "us"
+        if str(unit_system or "").strip().lower() in {"us", "usa", "conventional"}
+        else "si"
+    )
+    date_order = (
+        "Dates: Month Day, Year (US)"
+        if system == "us"
+        else "Dates: Day Month Year (Canada)"
+    )
+
+    pdf = AssessmentPDF(
+        report_date=report_date,
+        report_time=report_time,
+        report_type="Labs table export",
+        exported_at=exported_at,
+        patient_label=patient_label,
+        patient_subline=patient_subline,
+    )
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=26)
+    pdf.set_margins(14, 36, 14)
+
+    if not series:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 8, "No diagnostic readings to export.", new_x="LMARGIN", new_y="NEXT")
+    else:
+        usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+        ranked = sorted(
+            series,
+            key=lambda s: (
+                0 if (s.get("category") or "") == "blood" else 1,
+                0 if int(s.get("point_count") or 0) > 1 else 1,
+                -int(s.get("point_count") or 0),
+                str(s.get("name") or "").lower(),
+            ),
+        )
+        _write_diagnostics_overview_pages(
+            pdf,
+            ranked,
+            unit_system=system,
+        )
+        meta_bits = [f"Exported: {exported_at}"]
+        if patient_subline:
+            meta_bits.append(_safe_text(patient_subline))
+        meta_bits.append(date_order)
+        _write_diagnostics_matrix_pages(
+            pdf,
+            ranked,
+            usable_w=usable_w,
+            unit_system=system,
+            heading=(
+                f"Results table (detailed) - {_safe_text(patient_label)}"
+                if patient_label
+                else "Results table (detailed)"
+            ),
+            intro=" · ".join(meta_bits),
         )
 
     buffer = BytesIO()

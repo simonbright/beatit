@@ -15301,18 +15301,25 @@ document.getElementById("btn-diag-table-expand-flip")?.addEventListener("click",
 document.getElementById("btn-close-diag-table-expand")?.addEventListener("click", closeDiagTableExpand);
 document.getElementById("btn-close-diag-table-expand-footer")?.addEventListener("click", closeDiagTableExpand);
 
-document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", async () => {
+async function exportDiagnosticsPdf({ tableOnly = false, triggerBtn = null } = {}) {
   const patientId = state.activePatientId;
   if (!patientId) return toast("Select a patient first", "error");
-  const btn = document.getElementById("btn-export-diagnostics-pdf");
-  if (btn) btn.disabled = true;
+  const buttons = [
+    document.getElementById("btn-export-diagnostics-pdf"),
+    document.getElementById("btn-export-diagnostics-table-pdf"),
+    document.getElementById("btn-diag-table-expand-download"),
+  ].filter(Boolean);
+  buttons.forEach((b) => {
+    b.disabled = true;
+  });
+  if (triggerBtn) triggerBtn.disabled = true;
   try {
     const system = state.labUnitSystem === "us" ? "us" : "si";
+    const qs = new URLSearchParams({ unit_system: system });
+    if (tableOnly) qs.set("content", "table");
     const res = await fetch(
-      `/api/patients/${patientId}/diagnostics/export.pdf?unit_system=${encodeURIComponent(system)}`,
-      {
-        credentials: "include",
-      }
+      `/api/patients/${patientId}/diagnostics/export.pdf?${qs.toString()}`,
+      { credentials: "include" }
     );
     if (res.status === 401) {
       window.location.href = "/login";
@@ -15327,17 +15334,30 @@ document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click",
       .toISOString()
       .replace(/[:.]/g, "-")
       .slice(0, 19);
-    const filename = filenameFromContentDisposition(
-      res,
-      `beatit-diagnostics-${stamp}.pdf`
-    );
+    const fallback = tableOnly
+      ? `beatit-diagnostics-table-${stamp}.pdf`
+      : `beatit-diagnostics-${stamp}.pdf`;
+    const filename = filenameFromContentDisposition(res, fallback);
     triggerPdfDownload(blob, filename);
-    toast("Diagnostics PDF downloaded");
+    toast(tableOnly ? "Labs table PDF downloaded" : "Diagnostics PDF downloaded");
   } catch (err) {
     toast(err.message || "Export failed", "error");
   } finally {
-    if (btn) btn.disabled = false;
+    buttons.forEach((b) => {
+      b.disabled = false;
+    });
+    if (triggerBtn) triggerBtn.disabled = false;
   }
+}
+
+document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", (e) => {
+  exportDiagnosticsPdf({ tableOnly: false, triggerBtn: e.currentTarget });
+});
+document.getElementById("btn-export-diagnostics-table-pdf")?.addEventListener("click", (e) => {
+  exportDiagnosticsPdf({ tableOnly: true, triggerBtn: e.currentTarget });
+});
+document.getElementById("btn-diag-table-expand-download")?.addEventListener("click", (e) => {
+  exportDiagnosticsPdf({ tableOnly: true, triggerBtn: e.currentTarget });
 });
 
 function medicationExportScope() {
