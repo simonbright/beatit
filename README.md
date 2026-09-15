@@ -10,13 +10,16 @@ BeatIt supports research and case organization. It is **not** medical advice and
 
 ## Features
 
+Full product walkthrough: **[docs/APP_FUNCTIONALITY.md](docs/APP_FUNCTIONALITY.md)**
+
 - **Library ingest** — clinical notes, URLs, PDFs, YouTube transcripts, video files, Facebook links, DICOM imaging
 - **Home assessment** — baseline synthesis with executive summary, open items, and numbered source references
 - **Custom tasks** — focused queries with draft/refine workflow
 - **AI Chat** — multi-turn treatment-options discussion scoped to your library and current assessment
 - **Chat observations** — pin excerpts from chat into the next assessment or save them to the library
 - **Imaging vision** — optional slice-level reads via Ollama vision models
-- **PDF export** — download assessments with references
+- **Labs / Meds / Log** — patient-wide trends, medications, and self-reports with Canada/US lab units
+- **PDF export** — download assessments, logs, meds, labs, and coverage
 - **Deploy** — Render blueprint with optional auth and persistent disk
 
 ## Quick start

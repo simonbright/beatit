@@ -553,6 +553,75 @@ def _format_diag_date_precise(iso: str | None, *, unit_system: str = "si") -> st
     return f"{pretty} · {raw}"
 
 
+def _series_collection_span(
+    series: list[dict[str, Any]] | None,
+) -> tuple[str | None, str | None]:
+    """Earliest/latest collection dates across all readings in the series."""
+    days: list[str] = []
+    for item in series or []:
+        for row in item.get("readings") or []:
+            day = str(row.get("recorded_at") or "")[:10]
+            if len(day) == 10:
+                days.append(day)
+    if not days:
+        return None, None
+    return min(days), max(days)
+
+
+def _milestones_in_lab_span(
+    milestones: list[dict[str, Any]] | None,
+    series: list[dict[str, Any]] | None,
+    *,
+    pad_days: int = 60,
+) -> list[dict[str, Any]]:
+    """Keep only med/lifestyle markers near the lab date range (avoids 2010 starts on 2025 charts)."""
+    from app.services.medication_events import filter_events_for_range
+
+    start, end = _series_collection_span(series)
+    return filter_events_for_range(
+        milestones,
+        start=start,
+        end=end,
+        pad_days=pad_days,
+    )
+
+
+def _short_milestone_legend_label(label: str | None, *, max_len: int = 42) -> str:
+    """Drop leading dates and frequency tails for a readable PDF legend."""
+    text = " ".join(str(label or "").split())
+    if not text:
+        return ""
+    parts = [p.strip() for p in text.split("·") if p.strip()]
+    skip_freq = {
+        "daily",
+        "weekly",
+        "monthly",
+        "prn",
+        "bid",
+        "tid",
+        "qid",
+        "od",
+        "hs",
+        "am",
+        "pm",
+    }
+    cleaned: list[str] = []
+    for i, part in enumerate(parts):
+        low = part.lower()
+        if low in skip_freq:
+            continue
+        # Leading date fragments like "Jan 1, 2010"
+        if i == 0 and any(ch.isdigit() for ch in part) and any(
+            m in part for m in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        ):
+            continue
+        cleaned.append(part)
+    out = " · ".join(cleaned) if cleaned else text
+    if len(out) > max_len:
+        return out[: max_len - 1].rstrip() + "…"
+    return out
+
+
 def _format_diag_points_reference(
     readings: list[dict[str, Any]] | None,
     *,
@@ -854,12 +923,16 @@ def _sparkline_png_bytes(
             pre_days.append(day)
         if day > read_max:
             post_days.append(day)
+    # Only give a little headroom for markers just outside the lab window —
+    # never let distant milestones squash the actual trend.
     read_span = read_max - read_min or 1.0
+    headroom = max(min(read_span * 0.12, 45.0), 18.0)
     if pre_days:
-        t_min = min(min(pre_days), read_min - max(read_span * 0.18, 40.0))
+        nearest_pre = max(pre_days)  # closest before first lab
+        t_min = min(read_min - headroom, nearest_pre)
     if post_days:
-        # Visual headroom so a start a few days after the last lab isn't glued to it
-        t_max = max(max(post_days), read_max + max(read_span * 0.22, 50.0))
+        nearest_post = min(post_days)  # closest after last lab
+        t_max = max(read_max + headroom, nearest_post)
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)
@@ -1001,7 +1074,7 @@ def _sparkline_png_bytes(
             continue
         by_day.setdefault(d, []).append(ev)
     milestone_marks: list[tuple[float, tuple[int, int, int]]] = []
-    for _mi, (d, day_events) in enumerate(list(by_day.items())[:6]):
+    for _mi, (d, day_events) in enumerate(list(by_day.items())[:4]):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
         except ValueError:
@@ -1025,26 +1098,15 @@ def _sparkline_png_bytes(
 
     def _draw_milestones() -> None:
         for x, fill in milestone_marks:
-            y0, y1 = pad_t + 2, pad_t + chart_h - 2
-            # Soft white underlay so dashes stay visible over the green zone
-            dash = 10
+            y0, y1 = pad_t + 4, pad_t + chart_h - 4
+            # Quiet dashed markers only — no triangle tips / white underlays
+            dash = 6
             yy = y0
             while yy < y1:
-                draw.line((x, yy, x, min(yy + dash, y1)), fill=(255, 255, 255, 200), width=5)
+                draw.line((x, yy, x, min(yy + dash, y1)), fill=(*fill, 140), width=1)
                 yy += dash * 2
-            yy = y0
-            while yy < y1:
-                draw.line((x, yy, x, min(yy + dash, y1)), fill=(*fill, 255), width=3)
-                yy += dash * 2
-            tip = 9
-            draw.polygon(
-                [(x, y0 + tip), (x - tip, y0), (x + tip, y0)],
-                fill=(255, 255, 255, 255),
-            )
-            draw.polygon(
-                [(x, y0 + tip - 1), (x - tip + 1, y0 + 1), (x + tip - 1, y0 + 1)],
-                fill=(*fill, 255),
-            )
+            # Small top tick so the date is findable without crowding the plot
+            draw.line((x - 3, y0, x + 3, y0), fill=(*fill, 180), width=1)
 
     _draw_milestones()
 
@@ -1506,6 +1568,144 @@ def diagnostics_pdf_filename(
     return f"beatit-diagnostics-{stamp}.pdf"
 
 
+def _write_diagnostics_matrix_pages(
+    pdf: FPDF,
+    series: list[dict[str, Any]],
+    *,
+    usable_w: float,
+    unit_system: str = "si",
+) -> None:
+    """Always-on results matrix (tests × dates), paginated by date columns."""
+    if not series:
+        return
+    dates: list[str] = []
+    seen_dates: set[str] = set()
+    tests: list[dict[str, Any]] = []
+    for item in series:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        by_date: dict[str, dict[str, Any]] = {}
+        for row in item.get("readings") or []:
+            day = str(row.get("recorded_at") or "")[:10]
+            if len(day) != 10:
+                continue
+            by_date[day] = row
+            if day not in seen_dates:
+                seen_dates.add(day)
+                dates.append(day)
+        if by_date:
+            tests.append(
+                {
+                    "name": name,
+                    "unit": item.get("unit") or "",
+                    "by_date": by_date,
+                }
+            )
+    dates.sort()
+    if not dates or not tests:
+        return
+
+    # Prefer fewer date columns so values stay readable; paginate the rest
+    max_date_cols = 5 if len(dates) > 5 else len(dates)
+    name_w = min(48.0, usable_w * 0.28)
+    value_w = (usable_w - name_w) / max(max_date_cols, 1)
+    row_h = 5.6
+
+    def _cell_text(row: dict[str, Any] | None) -> str:
+        if not row:
+            return "-"
+        val = _format_diag_value_label(row.get("value"))
+        unit = _safe_text(row.get("unit") or "")
+        if not val:
+            return "-"
+        return f"{val} {unit}".strip() if unit else val
+
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(14, 116, 144)
+    pdf.cell(0, 7, "Results table", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(80, 80, 80)
+    pdf.cell(
+        0,
+        4,
+        _safe_text(
+            f"All charted readings in the active unit system · {len(tests)} tests · {len(dates)} dates"
+        ),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    pdf.ln(2)
+
+    for col_start in range(0, len(dates), max_date_cols):
+        chunk = dates[col_start : col_start + max_date_cols]
+        if col_start > 0:
+            pdf.add_page()
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(14, 116, 144)
+            pdf.cell(0, 6, "Results table (continued)", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+
+        # Header
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_fill_color(241, 245, 249)
+        pdf.set_text_color(15, 23, 42)
+        pdf.cell(name_w, row_h + 1.2, "Test", border=1, fill=True)
+        for day in chunk:
+            label = _format_diag_date_label(day, compact=True, unit_system=unit_system)
+            pdf.cell(value_w, row_h + 1.2, _safe_text(label), border=1, align="C", fill=True)
+        pdf.ln(row_h + 1.2)
+
+        pdf.set_font("Helvetica", "", 6.8)
+        for ti, test in enumerate(tests):
+            if pdf.get_y() + row_h + 2 > pdf.h - pdf.b_margin:
+                pdf.add_page()
+                pdf.set_font("Helvetica", "B", 11)
+                pdf.set_text_color(14, 116, 144)
+                pdf.cell(0, 6, "Results table (continued)", new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(1.5)
+                pdf.set_font("Helvetica", "B", 7)
+                pdf.set_fill_color(241, 245, 249)
+                pdf.set_text_color(15, 23, 42)
+                pdf.cell(name_w, row_h + 1.2, "Test", border=1, fill=True)
+                for day in chunk:
+                    label = _format_diag_date_label(
+                        day, compact=True, unit_system=unit_system
+                    )
+                    pdf.cell(
+                        value_w,
+                        row_h + 1.2,
+                        _safe_text(label),
+                        border=1,
+                        align="C",
+                        fill=True,
+                    )
+                pdf.ln(row_h + 1.2)
+                pdf.set_font("Helvetica", "", 6.8)
+
+            if ti % 2 == 0:
+                pdf.set_fill_color(248, 250, 252)
+            else:
+                pdf.set_fill_color(255, 255, 255)
+            pdf.set_text_color(15, 23, 42)
+            name = _safe_text(test["name"])
+            if len(name) > 34:
+                name = name[:33] + "…"
+            pdf.cell(name_w, row_h, name, border=1, fill=True)
+            pdf.set_text_color(51, 65, 85)
+            for day in chunk:
+                pdf.cell(
+                    value_w,
+                    row_h,
+                    _safe_text(_cell_text(test["by_date"].get(day))),
+                    border=1,
+                    align="C",
+                    fill=True,
+                )
+            pdf.ln(row_h)
+
+
 def build_diagnostics_pdf(
     series: list[dict[str, Any]],
     *,
@@ -1528,6 +1728,8 @@ def build_diagnostics_pdf(
         if system == "us"
         else "Dates: Day Month Year (Canada)"
     )
+    # Only overlay milestones near the lab window — old starts (e.g. 2010) confuse the export
+    chart_milestones = _milestones_in_lab_span(milestones, series, pad_days=60)
 
     pdf = AssessmentPDF(
         report_date=report_date,
@@ -1560,20 +1762,20 @@ def build_diagnostics_pdf(
     pdf.set_font("Helvetica", "", 8)
     legend = (
         "Green shaded zone = target. Line segments follow each reading (green / yellow / red). "
-        "Gray = no reference yet. Dashed markers = med or lifestyle milestones. "
+        "Gray = no reference yet. Light dashed markers = med or lifestyle starts within the lab date range. "
         f"{date_order}; ISO (YYYY-MM-DD) also appears with latest values. "
-        "Trend charts first; single readings in the compact table below."
+        "Trend charts first, then a full results table."
     )
-    if milestones:
+    if chart_milestones:
         seen: list[str] = []
-        for ev in milestones:
-            lab = str(ev.get("label") or "").strip()
+        for ev in chart_milestones:
+            lab = _short_milestone_legend_label(ev.get("label") or ev.get("body"))
             if lab and lab not in seen:
                 seen.append(lab)
-            if len(seen) >= 3:
+            if len(seen) >= 4:
                 break
         if seen:
-            legend += " Markers: " + " · ".join(seen) + "."
+            legend += " Overlays in range: " + " · ".join(seen) + "."
     _pdf_multiline(pdf, _safe_text(legend), h=3.6)
     pdf.set_draw_color(14, 165, 233)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
@@ -1652,7 +1854,7 @@ def build_diagnostics_pdf(
                 series_status=status if isinstance(status, str) else None,
                 unit=unit or None,
                 height=480,
-                milestones=milestones,
+                milestones=chart_milestones,
                 unit_system=system,
             )
             if png:
@@ -1694,6 +1896,14 @@ def build_diagnostics_pdf(
             _write_single_reading_rows(
                 pdf, singles, usable_w=usable_w, unit_system=system
             )
+
+        # Always include the matrix table (UI Table view equivalent)
+        _write_diagnostics_matrix_pages(
+            pdf,
+            ranked,
+            usable_w=usable_w,
+            unit_system=system,
+        )
 
     buffer = BytesIO()
     pdf.output(buffer)

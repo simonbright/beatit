@@ -12430,6 +12430,7 @@ function syncLabUnitToggleUi() {
   }
   const flipBtn = document.getElementById("btn-diag-table-flip");
   flipBtn?.classList.toggle("hidden", state.labsView !== "table");
+  document.getElementById("btn-diag-table-expand")?.classList.toggle("hidden", state.labsView !== "table");
 }
 
 function syncLabsViewUi() {
@@ -12445,6 +12446,7 @@ function syncLabsViewUi() {
   document.getElementById("diagnostics-table-wrap")?.classList.toggle("hidden", view !== "table");
   document.getElementById("diagnostics-status-filter")?.classList.toggle("hidden", view === "table");
   document.getElementById("btn-diag-table-flip")?.classList.toggle("hidden", view !== "table");
+  document.getElementById("btn-diag-table-expand")?.classList.toggle("hidden", view !== "table");
 }
 
 function refreshDiagnosticsViews(opts = {}) {
@@ -12490,26 +12492,20 @@ function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem
   return { dates, tests, flipped: Boolean(flipped) };
 }
 
-function renderDiagnosticsTable(series) {
-  const wrap = document.getElementById("diagnostics-table-wrap");
-  const table = document.getElementById("diagnostics-table");
-  if (!wrap || !table) return;
-  syncLabUnitToggleUi();
-  syncLabsViewUi();
+function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system = state.labUnitSystem } = {}) {
+  if (!tableEl) return null;
   const matrix = buildLabsMatrix(series || state.diagnosticSeriesCache || [], {
-    flipped: state.labsTableFlipped,
-    system: state.labUnitSystem,
+    flipped,
+    system,
   });
   if (!matrix.dates.length || !matrix.tests.length) {
-    table.innerHTML = `<tbody><tr><td class="muted small">No lab readings yet.</td></tr></tbody>`;
-    return;
+    tableEl.innerHTML = `<tbody><tr><td class="muted small">No lab readings yet.</td></tr></tbody>`;
+    return matrix;
   }
-  const unitBadge =
-    state.labUnitSystem === "us" ? "US" : "Canada";
+  const unitBadge = system === "us" ? "US" : "Canada";
   if (!matrix.flipped) {
-    // Rows = tests, columns = dates
     const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Test · ${escapeHtml(unitBadge)}</th>${matrix.dates
-      .map((d) => `<th scope="col">${escapeHtml(formatDiagDateAxis(d))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>`)
+      .map((d) => `<th scope="col">${escapeHtml(formatDiagDateAxis(d, system))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>`)
       .join("")}</tr></thead>`;
     const body = matrix.tests
       .map((t) => {
@@ -12517,19 +12513,16 @@ function renderDiagnosticsTable(series) {
           .map((d) => {
             const cell = t.byDate[d];
             if (!cell) return `<td class="diag-matrix-empty">—</td>`;
-            const st = cell.status
-              ? ` diag-matrix-cell-${cell.status}`
-              : "";
-            const tip = `${t.name} · ${formatDiagDate(d)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}${cell.reportedAside || ""}`;
+            const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
+            const tip = `${t.name} · ${formatDiagDate(d, system)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}${cell.reportedAside || ""}`;
             return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
           })
           .join("");
         return `<tr><th scope="row">${escapeHtml(t.name)}</th>${cells}</tr>`;
       })
       .join("");
-    table.innerHTML = `${head}<tbody>${body}</tbody>`;
+    tableEl.innerHTML = `${head}<tbody>${body}</tbody>`;
   } else {
-    // Flipped: rows = dates, columns = tests
     const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Date · ${escapeHtml(unitBadge)}</th>${matrix.tests
       .map((t) => `<th scope="col">${escapeHtml(t.name)}</th>`)
       .join("")}</tr></thead>`;
@@ -12540,15 +12533,63 @@ function renderDiagnosticsTable(series) {
             const cell = t.byDate[d];
             if (!cell) return `<td class="diag-matrix-empty">—</td>`;
             const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
-            const tip = `${t.name} · ${formatDiagDate(d)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}`;
+            const tip = `${t.name} · ${formatDiagDate(d, system)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}`;
             return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
           })
           .join("");
-        return `<tr><th scope="row">${escapeHtml(formatDiagDate(d))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>${cells}</tr>`;
+        return `<tr><th scope="row">${escapeHtml(formatDiagDate(d, system))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>${cells}</tr>`;
       })
       .join("");
-    table.innerHTML = `${head}<tbody>${body}</tbody>`;
+    tableEl.innerHTML = `${head}<tbody>${body}</tbody>`;
   }
+  return matrix;
+}
+
+function renderDiagnosticsTable(series) {
+  const wrap = document.getElementById("diagnostics-table-wrap");
+  const table = document.getElementById("diagnostics-table");
+  if (!wrap || !table) return;
+  syncLabUnitToggleUi();
+  syncLabsViewUi();
+  const matrix = fillDiagnosticsMatrixTable(table, series, {
+    flipped: state.labsTableFlipped,
+    system: state.labUnitSystem,
+  });
+  const expandTable = document.getElementById("diagnostics-table-expand");
+  if (expandTable && !document.getElementById("modal-diag-table-expand")?.classList.contains("hidden")) {
+    fillDiagnosticsMatrixTable(expandTable, series, {
+      flipped: state.labsTableFlipped,
+      system: state.labUnitSystem,
+    });
+    const sub = document.getElementById("diag-table-expand-subtitle");
+    if (sub && matrix) {
+      const unitLabel = state.labUnitSystem === "us" ? "United States" : "Canada";
+      sub.textContent = `${matrix.tests.length} tests · ${matrix.dates.length} dates · ${unitLabel} units`;
+    }
+  }
+}
+
+function openDiagTableExpand() {
+  const series = state.diagnosticSeriesCache || [];
+  const table = document.getElementById("diagnostics-table-expand");
+  const matrix = fillDiagnosticsMatrixTable(table, series, {
+    flipped: state.labsTableFlipped,
+    system: state.labUnitSystem,
+  });
+  const sub = document.getElementById("diag-table-expand-subtitle");
+  if (sub) {
+    if (!matrix?.dates?.length) {
+      sub.textContent = "No lab readings yet.";
+    } else {
+      const unitLabel = state.labUnitSystem === "us" ? "United States" : "Canada";
+      sub.textContent = `${matrix.tests.length} tests · ${matrix.dates.length} dates · ${unitLabel} units`;
+    }
+  }
+  showModal("modal-diag-table-expand");
+}
+
+function closeDiagTableExpand() {
+  hideModal("modal-diag-table-expand");
 }
 
 function seriesForLabUnitSystem(series, system = state.labUnitSystem) {
@@ -15249,6 +15290,16 @@ document.getElementById("btn-diag-table-flip")?.addEventListener("click", () => 
   state.labsTableFlipped = !state.labsTableFlipped;
   refreshDiagnosticsViews();
 });
+document.getElementById("btn-diag-table-expand")?.addEventListener("click", () => {
+  openDiagTableExpand();
+});
+document.getElementById("btn-diag-table-expand-flip")?.addEventListener("click", () => {
+  state.labsTableFlipped = !state.labsTableFlipped;
+  refreshDiagnosticsViews();
+  openDiagTableExpand();
+});
+document.getElementById("btn-close-diag-table-expand")?.addEventListener("click", closeDiagTableExpand);
+document.getElementById("btn-close-diag-table-expand-footer")?.addEventListener("click", closeDiagTableExpand);
 
 document.getElementById("btn-export-diagnostics-pdf")?.addEventListener("click", async () => {
   const patientId = state.activePatientId;
@@ -15423,8 +15474,16 @@ document.getElementById("btn-close-diag-expand-footer")?.addEventListener("click
 document.getElementById("modal-diag-chart-expand")?.addEventListener("click", (e) => {
   if (e.target?.id === "modal-diag-chart-expand") closeDiagChartExpand();
 });
+document.getElementById("modal-diag-table-expand")?.addEventListener("click", (e) => {
+  if (e.target?.id === "modal-diag-table-expand") closeDiagTableExpand();
+});
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  const tableModal = document.getElementById("modal-diag-table-expand");
+  if (tableModal && !tableModal.classList.contains("hidden")) {
+    closeDiagTableExpand();
+    return;
+  }
   const modal = document.getElementById("modal-diag-chart-expand");
   if (modal && !modal.classList.contains("hidden")) closeDiagChartExpand();
 });
