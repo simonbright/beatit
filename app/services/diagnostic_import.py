@@ -23,7 +23,10 @@ from app.services.case_manager import (
 )
 from app.services.lab_patient_identity import (
     compare_lab_patient_identity,
+    detect_lab_date_order,
     extract_lab_patient_identity,
+    parse_lab_date_to_iso,
+    prefer_plausible_lab_iso,
 )
 from app.services.llm import LLMClient
 
@@ -44,6 +47,8 @@ Return a JSON array. Each object may include:
 
 Rules:
 - Prefer collection / specimen / date of service over report print date.
+- Numeric dates: US labs (Quest, Labcorp, etc.) use **MM/DD/YYYY**; Canadian labs (LifeLabs, Dynacare) use **DD/MM/YYYY** or day-month-year text. Never swap month and day.
+- Collection dates must not be in the future. If ambiguous, choose the interpretation that is not after today.
 - If one collection date applies to the whole panel, use it for every row.
 - Historical / multi-visit exports (several "Date of Service" or Lab No. sections, or date columns): emit a **separate row for every analyte on every collection date**. Do not collapse history to the latest visit.
 - Do not invent values. Skip rows without a numeric result (ignore NEGATIVE / text-only).
@@ -210,7 +215,11 @@ def normalize_diagnostic_name(name: str) -> str:
     return cleaned[:120]
 
 
-def clamp_proposed_diagnostic(raw: Any) -> dict[str, Any] | None:
+def clamp_proposed_diagnostic(
+    raw: Any,
+    *,
+    date_order: str | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     name = normalize_diagnostic_name(str(raw.get("name") or ""))
@@ -222,17 +231,19 @@ def clamp_proposed_diagnostic(raw: Any) -> dict[str, Any] | None:
     recorded_raw = raw.get("recorded_at")
     recorded_at = None
     if recorded_raw not in (None, ""):
-        try:
-            recorded_at = _normalize_med_date(str(recorded_raw))
-        except ValueError:
-            recorded_at = None
+        raw_text = str(recorded_raw).strip()
+        # Prefer locale-aware lab date parse (handles 09/11/2026 vs DD/MM)
+        recorded_at = parse_lab_date_to_iso(raw_text, date_order=date_order)  # type: ignore[arg-type]
         if recorded_at is None:
-            from app.services.lab_patient_identity import parse_dob_to_iso
-
-            # LifeLabs-style dates (01-SEP-26, Jul 03 2026) and date+time stamps
-            date_token = str(recorded_raw).strip()
-            date_token = re.split(r"[T\s]\d{1,2}:", date_token, maxsplit=1)[0].strip()
-            recorded_at = parse_dob_to_iso(date_token)
+            try:
+                recorded_at = _normalize_med_date(raw_text)
+            except ValueError:
+                recorded_at = None
+        if recorded_at is not None:
+            recorded_at = prefer_plausible_lab_iso(
+                recorded_at,
+                date_order=date_order,  # type: ignore[arg-type]
+            )
     unit = _clamp_str(raw.get("unit"), 40)
     if not unit:
         for preset in DIAGNOSTIC_PRESETS:
@@ -252,7 +263,11 @@ def clamp_proposed_diagnostic(raw: Any) -> dict[str, Any] | None:
     }
 
 
-def parse_diagnostics_json(raw: str) -> tuple[list[dict[str, Any]], list[str]]:
+def parse_diagnostics_json(
+    raw: str,
+    *,
+    date_order: str | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
     payload = _strip_json_payload(raw)
     if not payload:
@@ -266,7 +281,7 @@ def parse_diagnostics_json(raw: str) -> tuple[list[dict[str, Any]], list[str]]:
     proposed: list[dict[str, Any]] = []
     skipped = 0
     for item in data:
-        clamped = clamp_proposed_diagnostic(item)
+        clamped = clamp_proposed_diagnostic(item, date_order=date_order)
         if clamped is None:
             skipped += 1
             continue
@@ -351,22 +366,19 @@ _LIFELABS_VALUE_TAIL = (
 )
 
 
-def _parse_lab_service_date(text: str) -> str | None:
-    from app.services.lab_patient_identity import parse_dob_to_iso
-
+def _parse_lab_service_date(text: str, *, date_order: str | None = None) -> str | None:
+    order = date_order or detect_lab_date_order(text)
     m = _SERVICE_DATE_RE.search(text or "")
     if not m:
         return None
-    return parse_dob_to_iso(m.group(1).strip())
+    return parse_lab_date_to_iso(m.group(1).strip(), date_order=order)  # type: ignore[arg-type]
 
 
 def _parse_lifelabs_dos(text: str) -> str | None:
-    from app.services.lab_patient_identity import parse_dob_to_iso
-
     m = _LIFELABS_DOS_RE.search(text or "")
     if m:
-        return parse_dob_to_iso(m.group(1).strip())
-    return _parse_lab_service_date(text)
+        return parse_lab_date_to_iso(m.group(1).strip(), date_order="dmy")
+    return _parse_lab_service_date(text, date_order="dmy")
 
 
 def _split_lifelabs_sections(text: str) -> list[str]:
@@ -702,7 +714,21 @@ async def _propose_from_text(
     if is_empty_med_extract(text):
         raise ValueError("No readable text found for lab import.")
 
+    date_order = detect_lab_date_order(text)
+    if date_order and meta is not None:
+        meta = {**(meta or {}), "lab_date_order": date_order}
+
     heuristic_full = heuristic_parse_lab_panel(text)
+    # Re-clamp heuristic rows with locale so US Quest dates stay MM/DD
+    if heuristic_full and date_order:
+        rescanned: list[dict[str, Any]] = []
+        for row in heuristic_full:
+            clamped = clamp_proposed_diagnostic(row, date_order=date_order)
+            if clamped:
+                rescanned.append(clamped)
+        if rescanned:
+            heuristic_full = rescanned
+
     heuristic_dates = {
         str(r.get("recorded_at") or "")[:10]
         for r in heuristic_full
@@ -745,7 +771,7 @@ async def _propose_from_text(
         except Exception as exc:
             raise ValueError(f"Could not parse lab results with LLM: {exc}") from exc
 
-        proposed, parse_warnings = parse_diagnostics_json(raw)
+        proposed, parse_warnings = parse_diagnostics_json(raw, date_order=date_order)
         warnings.extend(parse_warnings)
         if heuristic_full:
             before = len(proposed)
@@ -770,6 +796,15 @@ async def _propose_from_text(
                     }
         elif not proposed:
             warnings.append("No lab readings detected in the document")
+
+    # Final pass: fix future ambiguous ISOs (e.g. Quest 09/11/2026 → 2026-11-09)
+    for row in proposed:
+        fixed = prefer_plausible_lab_iso(
+            row.get("recorded_at"),
+            date_order=date_order,  # type: ignore[arg-type]
+        )
+        if fixed:
+            row["recorded_at"] = fixed
 
     proposed, overlap_warnings, _ = annotate_proposed_duplicates(proposed, patient_id)
     warnings.extend(overlap_warnings)

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Literal
 
 from app.services.case_manager import get_patient_profile, list_patients
+
+LabDateOrder = Literal["mdy", "dmy"]
 
 _NAME_STOP = {
     "mr",
@@ -181,6 +183,194 @@ def parse_dob_to_iso(raw: str | None) -> str | None:
     """Best-effort single ISO DOB. Prefer unambiguous; else first candidate."""
     cands = parse_dob_candidates(raw)
     return cands[0] if cands else None
+
+
+_US_LAB_MARKERS = re.compile(
+    r"(?i)\b(?:"
+    r"Quest\s+Diagnostics|QuestAssure|Labcorp|Lab\s*Corp|"
+    r"United\s+States|\bUSA\b|\bU\.S\.A\.?\b|"
+    r"Miami(?:\s+Beach)?|\bFL\b|Florida|"
+    r"CLIA\b|Medicare\s+#|"
+    r"mcg/dL|mg/dL|ng/mL|g/dL"
+    r")\b"
+)
+_CA_LAB_MARKERS = re.compile(
+    r"(?i)\b(?:"
+    r"LifeLabs|Dynacare|Gamma[- ]Dynacare|"
+    r"Ontario|Canada|Health\s+Card|\bHC\s*#|"
+    r"mmol/L|µmol/L|umol/L|x\s*E9/L|x\s*E12/L"
+    r")\b"
+)
+
+
+def detect_lab_date_order(text: str | None) -> LabDateOrder | None:
+    """Infer MM/DD vs DD/MM preference from lab report text. None if unclear."""
+    body = str(text or "")
+    if not body.strip():
+        return None
+    us_hits = len(_US_LAB_MARKERS.findall(body))
+    ca_hits = len(_CA_LAB_MARKERS.findall(body))
+    # Quest / Florida / conventional US units dominate → MDY
+    if us_hits >= ca_hits + 2 and us_hits >= 2:
+        return "mdy"
+    if ca_hits >= us_hits + 2 and ca_hits >= 2:
+        return "dmy"
+    if re.search(r"(?i)Quest\s+Diagnostics|\bLabcorp\b|\bLab\s*Corp\b", body):
+        return "mdy"
+    if re.search(r"(?i)\bLifeLabs\b|\bDynacare\b", body):
+        return "dmy"
+    return None
+
+
+def _lab_date_from_parts(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def parse_lab_date_candidates(
+    raw: str | None,
+    *,
+    date_order: LabDateOrder | None = None,
+) -> list[str]:
+    """ISO candidates for a lab collection / service date string.
+
+    Unlike DOB parsing, ambiguous numeric dates prefer ``date_order`` (MDY for
+    US labs, DMY for Canadian). When order is unknown, both interpretations are
+    returned with DMY first for backward compatibility.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    text = text.replace(",", " ").strip()
+    text = re.sub(r"\s+", " ", text)
+    # Strip trailing time: 09/11/2026 14:37
+    text = re.split(r"[T\s]\d{1,2}:", text, maxsplit=1)[0].strip()
+
+    # Already ISO
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            return [date.fromisoformat(text).isoformat()]
+        except ValueError:
+            return []
+
+    unambiguous = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%b %d %Y",
+        "%B %d %Y",
+        "%b %d %y",
+        "%B %d %y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%d %b %y",
+        "%d %B %y",
+        "%d-%b-%Y",
+        "%d-%B-%Y",
+        "%d-%b-%y",
+        "%d-%B-%y",
+        "%d/%b/%Y",
+        "%d/%b/%y",
+        "%m/%d/%Y",  # tried only after numeric branch when order known
+    ]
+    # Month-name forms first (unambiguous)
+    for fmt in unambiguous[:14]:
+        try:
+            dt = datetime.strptime(text, fmt)
+            if 1900 <= dt.year <= datetime.now().year + 1:
+                return [dt.date().isoformat()]
+        except ValueError:
+            continue
+
+    m = re.fullmatch(r"(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})", text)
+    if not m:
+        legacy = parse_dob_to_iso_legacy(text)
+        return [legacy] if legacy else []
+
+    a, _sep, b, y_raw = m.groups()
+    first, second = int(a), int(b)
+    year = _expand_two_digit_year(int(y_raw))
+    if year < 1900 or year > datetime.now().year + 1:
+        return []
+
+    dmy = _lab_date_from_parts(year, second, first) if 1 <= second <= 12 else None
+    mdy = _lab_date_from_parts(year, first, second) if 1 <= first <= 12 else None
+
+    ordered: list[date] = []
+    if date_order == "mdy":
+        ordered = [d for d in (mdy, dmy) if d]
+    elif date_order == "dmy":
+        ordered = [d for d in (dmy, mdy) if d]
+    else:
+        # Unknown locale: keep both when distinct (DMY first — LifeLabs default)
+        for d in (dmy, mdy):
+            if d and d not in ordered:
+                ordered.append(d)
+
+    return [d.isoformat() for d in ordered]
+
+
+def prefer_plausible_lab_iso(
+    iso: str | None,
+    *,
+    date_order: LabDateOrder | None = None,
+    today: date | None = None,
+) -> str | None:
+    """If an ISO lab date is in the future but swapping M/D is not, prefer the swap.
+
+    Catches Quest ``09/11/2026`` (Sep 11) mis-normalized as ``2026-11-09``.
+    """
+    text = str(iso or "").strip()[:10]
+    if not text:
+        return None
+    try:
+        primary = date.fromisoformat(text)
+    except ValueError:
+        return text
+
+    ref = today or date.today()
+    alt: date | None = None
+    if primary.day <= 12 and primary.month <= 12 and primary.day != primary.month:
+        alt = _lab_date_from_parts(primary.year, primary.day, primary.month)
+
+    if primary <= ref:
+        # Still prefer locale-consistent reading when order is known and primary
+        # looks like the opposite convention of an ambiguous past date — only when
+        # primary is future is the common bug; leave past dates alone.
+        return primary.isoformat()
+
+    if alt and alt <= ref:
+        return alt.isoformat()
+    if date_order == "mdy" and alt:
+        return alt.isoformat()
+    if date_order == "dmy":
+        return primary.isoformat()
+    return primary.isoformat()
+
+
+def parse_lab_date_to_iso(
+    raw: str | None,
+    *,
+    date_order: LabDateOrder | None = None,
+    today: date | None = None,
+) -> str | None:
+    """Best single ISO date for a lab collection / service timestamp."""
+    cands = parse_lab_date_candidates(raw, date_order=date_order)
+    if not cands:
+        return None
+    ref = today or date.today()
+    # Prefer non-future when multiple candidates
+    non_future = []
+    for c in cands:
+        try:
+            d = date.fromisoformat(c)
+        except ValueError:
+            continue
+        if d <= ref:
+            non_future.append(c)
+    chosen = (non_future or cands)[0]
+    return prefer_plausible_lab_iso(chosen, date_order=date_order, today=ref)
 
 
 def dobs_match(report_dob: str | None, profile_dob: str | None, *, raw_dob: str | None = None) -> bool:

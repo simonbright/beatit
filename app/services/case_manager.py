@@ -194,11 +194,23 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
         )
     diagnostics = data.get("diagnostics") or []
     units_changed = False
+    dates_changed = False
     if isinstance(diagnostics, list):
         from app.services.lab_units import enrich_diagnostics_list
+        from app.services.lab_patient_identity import prefer_plausible_lab_iso
 
         cleaned = [d for d in diagnostics if isinstance(d, dict)]
-        enriched, units_changed = enrich_diagnostics_list(cleaned)
+        fixed_dates: list[dict[str, Any]] = []
+        for row in cleaned:
+            item = dict(row)
+            raw_date = str(item.get("recorded_at") or "").strip()[:10]
+            if raw_date:
+                corrected = prefer_plausible_lab_iso(raw_date)
+                if corrected and corrected != raw_date:
+                    item["recorded_at"] = corrected
+                    dates_changed = True
+            fixed_dates.append(item)
+        enriched, units_changed = enrich_diagnostics_list(fixed_dates)
         profile["diagnostics"] = sorted(
             enriched,
             key=lambda d: str(d.get("recorded_at") or ""),
@@ -285,7 +297,7 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
-    if units_changed:
+    if units_changed or dates_changed:
         try:
             # Write without reloading — reload would re-enter this path.
             save_patient_profile(patient_id, profile, reload=False)

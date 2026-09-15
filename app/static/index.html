@@ -681,12 +681,12 @@
               <button type="button" class="btn secondary btn-sm diag-view-btn active" id="diag-view-charts" data-labs-view="charts">Charts</button>
               <button type="button" class="btn ghost btn-sm diag-view-btn" id="diag-view-table" data-labs-view="table">Table</button>
             </div>
-            <div class="diag-unit-toggle" role="group" aria-label="Lab unit system">
-              <div class="diag-unit-toggle-btns">
+            <div class="diag-unit-toggle diag-filter-field" role="group" aria-label="Lab unit system">
+              <span class="diag-filter-label" id="diag-unit-toggle-label">Units</span>
+              <div class="diag-unit-toggle-btns" aria-labelledby="diag-unit-toggle-label">
                 <button type="button" class="btn secondary btn-sm diag-unit-btn active" id="diag-unit-si" data-lab-unit="si" title="Canadian SI units (mmol/L, g/L)">Canada</button>
                 <button type="button" class="btn ghost btn-sm diag-unit-btn" id="diag-unit-us" data-lab-unit="us" title="US conventional units (mg/dL, g/dL)">United States</button>
               </div>
-              <span class="diag-unit-toggle-label">Units</span>
             </div>
             <label class="diag-filter-field" for="diag-date-range">
               <span class="diag-filter-label">Dates</span>

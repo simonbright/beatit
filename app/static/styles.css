@@ -2638,11 +2638,6 @@ body {
 }
 
 .diag-unit-toggle {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-end;
-  gap: 0.22rem;
   min-width: 11.5rem;
 }
 
@@ -2651,25 +2646,14 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 0.25rem;
   width: 100%;
+  min-height: 2rem;
 }
 
 .diag-unit-toggle-btns .diag-unit-btn {
   width: 100%;
   min-width: 0;
+  min-height: 2rem;
   justify-content: center;
-}
-
-.diag-unit-toggle-label {
-  display: block;
-  margin: 0;
-  width: 100%;
-  font-size: 0.65rem;
-  line-height: 1.1;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-  text-align: center;
 }
 
 .diag-table-tools {

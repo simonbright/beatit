@@ -3252,6 +3252,12 @@ async def api_confirm_patient_diagnostics_import(
         if clamped is None:
             errors.append("Skipped an invalid row")
             continue
+        if clamped.get("recorded_at"):
+            from app.services.lab_patient_identity import prefer_plausible_lab_iso
+
+            fixed = prefer_plausible_lab_iso(clamped.get("recorded_at"))
+            if fixed:
+                clamped["recorded_at"] = fixed
         if not clamped.get("recorded_at"):
             errors.append(f"Missing date for {clamped.get('name') or 'reading'}")
             continue
