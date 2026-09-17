@@ -67,43 +67,85 @@ Text:
 """
 
 _NAME_ALIASES = {
-    "ldl": "LDL cholesterol",
-    "ldl-c": "LDL cholesterol",
-    "ldl cholesterol": "LDL cholesterol",
-    "hdl": "HDL cholesterol",
-    "hdl-c": "HDL cholesterol",
-    "hdl cholesterol": "HDL cholesterol",
+    # Lipids — longer / more specific keys first in fuzzy pass (sorted by len)
+    "non-hdl cholesterol": "Non-HDL cholesterol",
+    "non hdl cholesterol": "Non-HDL cholesterol",
     "non-hdl": "Non-HDL cholesterol",
     "non hdl": "Non-HDL cholesterol",
-    "non-hdl cholesterol": "Non-HDL cholesterol",
+    "nonhdl": "Non-HDL cholesterol",
+    "non-hdlc": "Non-HDL cholesterol",
+    "ldl cholesterol": "LDL cholesterol",
+    "ldl-c": "LDL cholesterol",
+    "ldl": "LDL cholesterol",
+    "hdl cholesterol": "HDL cholesterol",
+    "hdl-c": "HDL cholesterol",
+    "hdl": "HDL cholesterol",
     "total cholesterol": "Total cholesterol",
     "cholesterol": "Total cholesterol",
     "triglycerides": "Triglyceride",
     "triglyceride": "Triglyceride",
     "trig": "Triglyceride",
-    "chol/hdl": "Cholesterol/HDL ratio",
-    "cholesterol/hdl": "Cholesterol/HDL ratio",
     "cholesterol/hdl ratio": "Cholesterol/HDL ratio",
+    "cholesterol/hdl": "Cholesterol/HDL ratio",
+    "chol/hdlc ratio": "Cholesterol/HDL ratio",
+    "chol/hdlc": "Cholesterol/HDL ratio",
+    "chol/hdl": "Cholesterol/HDL ratio",
     "tc/hdl": "Cholesterol/HDL ratio",
+    # Glucose / A1c
     "hba1c": "HbA1c",
     "a1c": "HbA1c",
-    "tsh": "TSH",
-    "thyroid stimulating hormone": "TSH",
-    "thyroid-stimulating hormone": "TSH",
-    "folate": "Folate",
-    "folate, serum": "Folate",
-    "serum folate": "Folate",
-    "folic acid": "Folate",
-    "glucose": "Glucose fasting",
-    "fasting glucose": "Glucose fasting",
+    "hemoglobin a1c": "HbA1c",
+    "haemoglobin a1c": "HbA1c",
+    "glycohemoglobin": "HbA1c",
+    "glycohaemoglobin": "HbA1c",
     "glucose fasting": "Glucose fasting",
+    "fasting glucose": "Glucose fasting",
+    "glucose, fasting": "Glucose fasting",
+    "glucose (fasting)": "Glucose fasting",
+    "glucose random": "Glucose random",
+    "glucose (random)": "Glucose random",
+    "glucose, random": "Glucose random",
+    "random glucose": "Glucose random",
+    # Kidney / liver
     "creatinine": "Creatinine",
+    "creatinine, serum": "Creatinine",
+    "serum creatinine": "Creatinine",
     "egfr": "eGFR",
+    "estimated gfr": "eGFR",
+    "estimated glomerular filtration rate": "eGFR",
+    "gfr estimated": "eGFR",
+    "glomerular filtration rate (egfr)": "eGFR",
     "alt": "ALT",
+    "alanine aminotransferase": "ALT",
+    "alanine transaminase": "ALT",
+    "alanine aminotransferase (alt)": "ALT",
+    "alanine transaminase (alt)": "ALT",
+    "sgpt": "ALT",
     "ast": "AST",
-    "bilirubin": "Bilirubin total",
-    "total bilirubin": "Bilirubin total",
+    "aspartate aminotransferase": "AST",
+    "aspartate transaminase": "AST",
+    "aspartate aminotransferase (ast)": "AST",
+    "aspartate transaminase (ast)": "AST",
+    "sgot": "AST",
+    "alkaline phosphatase": "Alkaline Phosphatase",
+    "alp": "Alkaline Phosphatase",
+    "alk phos": "Alkaline Phosphatase",
+    "alkaline phos": "Alkaline Phosphatase",
     "bilirubin total": "Bilirubin total",
+    "total bilirubin": "Bilirubin total",
+    "bilirubin, total": "Bilirubin total",
+    "bilirubin": "Bilirubin total",
+    "bilirubin direct": "Bilirubin direct",
+    "direct bilirubin": "Bilirubin direct",
+    "bilirubin, direct": "Bilirubin direct",
+    "bilirubin indirect": "Bilirubin indirect",
+    "indirect bilirubin": "Bilirubin indirect",
+    "bilirubin, indirect": "Bilirubin indirect",
+    "albumin": "Albumin",
+    "protein, total": "Total protein",
+    "total protein": "Total protein",
+    "protein total": "Total protein",
+    # CBC
     "hemoglobin": "Hemoglobin",
     "hgb": "Hemoglobin",
     "hb": "Hemoglobin",
@@ -131,19 +173,53 @@ _NAME_ALIASES = {
     "monocytes": "Monocytes",
     "eosinophils": "Eosinophils",
     "basophils": "Basophils",
-    "psa": "Total PSA",
-    "total psa": "Total PSA",
-    "prostate specific antigen": "Total PSA",
-    "testosterone": "Testosterone",
-    "crp": "CRP",
+    # Iron panel — keep TIBC / saturation distinct from Iron
+    "iron": "Iron",
+    "iron, total": "Iron",
+    "iron total": "Iron",
+    "serum iron": "Iron",
+    "iron, serum": "Iron",
+    "tibc": "TIBC",
+    "total iron binding capacity": "TIBC",
+    "iron binding capacity": "TIBC",
+    "iron-binding capacity": "TIBC",
+    "transferrin saturation": "Transferrin Saturation",
+    "tsat": "Transferrin Saturation",
+    "iron saturation": "Transferrin Saturation",
+    "transferrin % saturation": "Transferrin Saturation",
+    "% saturation": "Transferrin Saturation",
+    "% saturation (iron)": "Transferrin Saturation",
+    "ferritin": "Ferritin",
+    # Vitamins / hormones / markers
     "tsh": "TSH",
+    "thyroid stimulating hormone": "TSH",
+    "thyroid-stimulating hormone": "TSH",
+    "tsh w/reflex to ft4": "TSH",
+    "folate": "Folate",
+    "folate, serum": "Folate",
+    "serum folate": "Folate",
+    "folic acid": "Folate",
+    "vitamin d 25-oh": "Vitamin D 25-OH",
     "vitamin d": "Vitamin D 25-OH",
     "vit d": "Vitamin D 25-OH",
     "25-oh vitamin d": "Vitamin D 25-OH",
-    "vitamin d 25-oh": "Vitamin D 25-OH",
+    "25-hydroxy vitamin d": "Vitamin D 25-OH",
+    "25 hydroxy vitamin d": "Vitamin D 25-OH",
+    "vitamin d,25-oh,total,ia": "Vitamin D 25-OH",
+    "vitamin d, 25-oh, total, ia": "Vitamin D 25-OH",
     "vitamin b12": "Vitamin B12",
     "b12": "Vitamin B12",
-    "ferritin": "Ferritin",
+    "cobalamin": "Vitamin B12",
+    "cyanocobalamin": "Vitamin B12",
+    "crp": "CRP",
+    "c reactive protein": "CRP",
+    "c-reactive protein": "CRP",
+    "hs-crp": "CRP",
+    "high sensitivity crp": "CRP",
+    "total psa": "Total PSA",
+    "psa, total": "Total PSA",
+    "prostate specific antigen": "Total PSA",
+    "testosterone": "Testosterone",
     "ca19-9": "CA19-9",
     "cea": "CEA",
     "coronary calcium": "Coronary calcium score",
@@ -151,6 +227,92 @@ _NAME_ALIASES = {
     "agatston": "Coronary calcium score",
     "coronary calcium score": "Coronary calcium score",
 }
+
+# Exact-only: bare "glucose" → fasting (common CA panel wording). Random must use explicit keys.
+_NAME_ALIASES_EXACT_ONLY = {
+    "glucose": "Glucose fasting",
+    "psa": "Total PSA",
+}
+
+
+def _alias_fuzzy_blocked(lower: str, key: str, alias_name: str) -> bool:
+    """Reject unsafe substring alias hits (US/CA naming collisions)."""
+    if key == "hdl" and ("non-hdl" in lower or "non hdl" in lower or "nonhdl" in lower):
+        return True
+    if key in {"hdl", "hdl-c", "hdl cholesterol"} and (
+        "chol/hdl" in lower or "cholesterol/hdl" in lower or "tc/hdl" in lower
+    ):
+        return True
+    if alias_name == "Iron" and any(
+        t in lower for t in ("binding", "tibc", "saturation", "tsat", "% sat")
+    ):
+        return True
+    if alias_name == "Bilirubin total" and any(
+        t in lower for t in ("direct", "indirect", "conjugated", "unconjugated")
+    ):
+        return True
+    if alias_name == "Total PSA" and "free" in lower:
+        return True
+    if alias_name == "Hemoglobin" and any(
+        t in lower for t in ("a1c", "a1 c", "glyco", "glycated")
+    ):
+        return True
+    if alias_name == "Coronary calcium score" and "score" not in lower and "agatston" not in lower:
+        return True
+    if alias_name == "Albumin" and (
+        "globulin" in lower or "a/g" in lower or "a:g" in lower
+    ):
+        return True
+    if alias_name == "Vitamin D 25-OH" and ("1,25" in lower or "1.25" in lower):
+        return True
+    if alias_name == "LDL cholesterol" and "particle" in lower:
+        return True
+    if alias_name == "Glucose fasting" and "random" in lower:
+        return True
+    return False
+
+
+def normalize_diagnostic_name(name: str) -> str:
+    cleaned = " ".join((name or "").strip().split())
+    if not cleaned:
+        return ""
+    lower = cleaned.lower()
+    # Normalize Quest-style commas/spaces for exact lookup
+    compact = re.sub(r"\s*,\s*", ", ", lower)
+    compact = re.sub(r"\s+", " ", compact).strip()
+
+    for candidate in (lower, compact):
+        alias = _NAME_ALIASES.get(candidate) or _NAME_ALIASES_EXACT_ONLY.get(candidate)
+        if alias:
+            return alias
+    for preset in DIAGNOSTIC_PRESETS:
+        if preset["name"].lower() == lower:
+            return preset["name"]
+
+    # Fuzzy: longest alias key first so "non hdl" wins over "hdl"
+    for key, alias_name in sorted(_NAME_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if len(key) < 3 or key not in lower:
+            continue
+        if _alias_fuzzy_blocked(lower, key, alias_name):
+            continue
+        return alias_name
+
+    for preset in sorted(DIAGNOSTIC_PRESETS, key=lambda p: len(p["name"]), reverse=True):
+        pname = preset["name"].lower()
+        if len(pname) < 3:
+            continue
+        if pname in lower or lower in pname:
+            # Guard: bare "calcium" must not become coronary calcium score
+            if preset["name"] == "Coronary calcium score" and "score" not in lower and "agatston" not in lower:
+                continue
+            if preset["name"] == "Iron" and any(
+                t in lower for t in ("binding", "tibc", "saturation", "tsat")
+            ):
+                continue
+            if preset["name"] == "Albumin" and "globulin" in lower:
+                continue
+            return preset["name"]
+    return cleaned[:120]
 
 
 def _strip_json_payload(raw: str) -> str:
@@ -191,28 +353,6 @@ def _parse_float(value: Any) -> float | None:
     except ValueError:
         return None
     return n if n == n else None
-
-
-def normalize_diagnostic_name(name: str) -> str:
-    cleaned = " ".join((name or "").strip().split())
-    if not cleaned:
-        return ""
-    alias = _NAME_ALIASES.get(cleaned.lower())
-    if alias:
-        return alias
-    for preset in DIAGNOSTIC_PRESETS:
-        if preset["name"].lower() == cleaned.lower():
-            return preset["name"]
-    # Fuzzy contains: "LDL Cholesterol (calculated)" → LDL cholesterol
-    lower = cleaned.lower()
-    for key, alias_name in _NAME_ALIASES.items():
-        if key in lower and len(key) >= 3:
-            return alias_name
-    for preset in DIAGNOSTIC_PRESETS:
-        pname = preset["name"].lower()
-        if pname in lower or lower in pname:
-            return preset["name"]
-    return cleaned[:120]
 
 
 def clamp_proposed_diagnostic(

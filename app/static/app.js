@@ -1705,10 +1705,7 @@ function notifyLabImportResult(labImport, { fallbackToast, handling } = {}) {
         /* ignore */
       }
     }
-    switchTab("analyze");
-    if (typeof setHomeSection === "function") {
-      setHomeSection("diagnostics", { scroll: true });
-    }
+    switchTab("labs");
     refreshHandlingFlags().catch(() => {});
     return;
   }
@@ -1951,12 +1948,18 @@ function switchTab(name, options = {}) {
     loadLatestAssessment();
     loadChatObservations().catch(() => {});
     refreshHandlingFlags().catch(() => {});
-    setHomeSection(options.homeSection || state.homeSection || preferredHomeSection());
+    let home = options.homeSection || state.homeSection || preferredHomeSection();
+    // Labs is its own top-level tab — don't restore Home onto the old Labs sub-pane.
+    if (home === "diagnostics") home = preferredHomeSection();
+    setHomeSection(home);
     if (isMobileLogLayout() && state.homeSection === "log") {
       focusMobileLogViewport({ behavior: "auto" });
     }
   } else {
     syncHomeLogFocusClass();
+  }
+  if (name === "labs") {
+    refreshActivePatientProfile().catch(() => {});
   }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
@@ -2474,6 +2477,11 @@ function focusMobileLogViewport({ behavior = "auto" } = {}) {
 function setHomeSection(section, { scroll = false } = {}) {
   // Journal home view removed — keep Log as the place for recent entries.
   if (section === "journal") section = "log";
+  // Labs lives as its own top-level tab; Home → Labs is a shortcut.
+  if (section === "diagnostics") {
+    switchTab("labs");
+    return;
+  }
   const next = HOME_SECTIONS.has(section) ? section : preferredHomeSection();
   const changed = state.homeSection !== next;
   state.homeSection = next;
@@ -2495,7 +2503,7 @@ function setHomeSection(section, { scroll = false } = {}) {
   } else {
     stopLogLiveUpdates();
   }
-  if (changed && (next === "diagnostics" || next === "medications")) {
+  if (changed && next === "medications") {
     refreshActivePatientProfile().catch(() => {});
   }
   if (changed && next === "flagged") {
@@ -3473,6 +3481,7 @@ const ASSESSMENT_GUIDANCE_STORAGE_KEY = "beatit-assessment-guidance";
 const TAB_STORAGE_KEY = "beatit-active-tab";
 const VALID_TABS = new Set([
   "analyze",
+  "labs",
   "options-chat",
   "custom-tasks",
   "library",
@@ -3483,6 +3492,7 @@ const VALID_TABS = new Set([
 ]);
 const MAIN_NAV_TABS = new Set([
   "analyze",
+  "labs",
   "custom-tasks",
   "library",
   "settings",
@@ -10524,8 +10534,7 @@ async function confirmDiagImportAndShowCharts() {
     } else {
       toast("No lab readings added");
     }
-    switchTab("analyze");
-    setHomeSection("diagnostics", { scroll: true });
+    switchTab("labs");
     refreshHandlingFlags({ rescan: true }).catch(() => {});
   } catch (err) {
     toast(err.message || "Could not add lab readings", "error");
@@ -14287,8 +14296,7 @@ document.getElementById("btn-add-diagnostic")?.addEventListener("click", async (
   document.getElementById("diag-notes").value = "";
   applyProfileResponse(data);
   toast("Diagnostic reading added");
-  switchTab("analyze", { skipTabSave: false });
-  setHomeSection("diagnostics", { scroll: true });
+  switchTab("labs");
 });
 
 document.getElementById("diag-name")?.addEventListener("change", () => {
