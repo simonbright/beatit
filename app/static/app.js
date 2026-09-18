@@ -13398,7 +13398,9 @@ function buildSparklineSvg(
   let milestoneLayer = "";
   let milestoneLegend = "";
   if (inRange.length) {
-    const markers = inRange.slice(0, large ? 10 : 6).map((ev) => ({
+    const markerCap = large ? 12 : 8;
+    const markerSource = inRange.length > markerCap ? inRange.slice(-markerCap) : inRange;
+    const markers = markerSource.map((ev) => ({
       ...ev,
       x: xFor(ev.date),
     }));

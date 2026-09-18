@@ -627,13 +627,19 @@ def _short_milestone_legend_label(label: str | None, *, max_len: int = 42) -> st
 def _assign_milestone_codes(
     milestones: list[dict[str, Any]] | None,
     *,
-    limit: int = 8,
+    limit: int = 12,
 ) -> list[dict[str, Any]]:
-    """Attach A/B/C codes for chart ticks + PDF legend (keeps print charts uncluttered)."""
+    """Attach A/B/C codes for chart ticks + PDF legend.
+
+    When there are more markers than ``limit``, keep the most recent ones so a
+    new med/lifestyle change is not dropped in favor of older starts.
+    """
+    rows = [ev for ev in (milestones or []) if isinstance(ev, dict)]
+    rows.sort(key=lambda ev: (str(ev.get("date") or ""), str(ev.get("label") or "")))
+    if limit > 0 and len(rows) > limit:
+        rows = rows[-limit:]
     out: list[dict[str, Any]] = []
-    for i, ev in enumerate(milestones or []):
-        if i >= limit:
-            break
+    for i, ev in enumerate(rows):
         row = dict(ev)
         row["code"] = chr(ord("A") + i)
         out.append(row)
@@ -941,16 +947,15 @@ def _sparkline_png_bytes(
             pre_days.append(day)
         if day > read_max:
             post_days.append(day)
-    # Only give a little headroom for markers just outside the lab window —
-    # never let distant milestones squash the actual trend.
+    # Markers passed in are already limited to the lab window. Stretch the axis
+    # to the earliest and latest of those — not only the nearest — so a new
+    # milestone after the last draw still gets a letter tick.
     read_span = read_max - read_min or 1.0
-    headroom = max(min(read_span * 0.12, 45.0), 18.0)
+    headroom = max(min(read_span * 0.18, 70.0), 21.0)
     if pre_days:
-        nearest_pre = max(pre_days)  # closest before first lab
-        t_min = min(read_min - headroom, nearest_pre)
+        t_min = min(read_min - headroom, min(pre_days))
     if post_days:
-        nearest_post = min(post_days)  # closest after last lab
-        t_max = max(read_max + headroom, nearest_post)
+        t_max = max(read_max + headroom, max(post_days))
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)
@@ -1092,7 +1097,11 @@ def _sparkline_png_bytes(
             continue
         by_day.setdefault(d, []).append(ev)
     milestone_marks: list[tuple[float, tuple[int, int, int], str]] = []
-    for _mi, (d, day_events) in enumerate(list(by_day.items())[:8]):
+    # Prefer the latest dates if a chart somehow has more ticks than letters.
+    day_items = sorted(by_day.items(), key=lambda item: item[0])
+    if len(day_items) > 12:
+        day_items = day_items[-12:]
+    for _mi, (d, day_events) in enumerate(day_items):
         try:
             day = float(datetime.fromisoformat(d).toordinal())
         except ValueError:
