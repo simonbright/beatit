@@ -124,7 +124,12 @@ def verify_disk_password(username: str, password: str) -> bool:
     return secrets.compare_digest(digest, expected)
 
 
-def upsert_auth_user(username: str, password: str) -> dict[str, Any]:
+def upsert_auth_user(
+    username: str,
+    password: str,
+    *,
+    profiles: list[str] | None = None,
+) -> dict[str, Any]:
     cleaned = _normalize_username(username)
     if not cleaned or "@" not in cleaned:
         raise ValueError("Username must be an email address")
@@ -144,6 +149,8 @@ def upsert_auth_user(username: str, password: str) -> dict[str, Any]:
         existing["password_hash"] = digest
         existing["salt"] = salt
         existing["updated_at"] = now
+        if profiles is not None:
+            existing["profiles"] = _clean_profile_ids(profiles)
         entry = existing
     else:
         entry = {
@@ -152,10 +159,91 @@ def upsert_auth_user(username: str, password: str) -> dict[str, Any]:
             "salt": salt,
             "created_at": now,
             "updated_at": now,
+            # New sign-ins see no profiles until you assign them.
+            "profiles": _clean_profile_ids(profiles or []),
         }
         store.setdefault("users", []).append(entry)
     save_auth_users(store)
-    return {"username": cleaned, "updated_at": entry["updated_at"]}
+    return {
+        "username": cleaned,
+        "updated_at": entry["updated_at"],
+        "profiles": entry.get("profiles"),
+    }
+
+
+def set_user_profiles(username: str, profiles: list[str] | None) -> dict[str, Any] | None:
+    """Set which patient profiles a disk user may open.
+
+    ``None`` means every profile. A list (including empty) is an allowlist.
+    """
+    store = load_auth_users()
+    entry = _entry_for(store, username)
+    if not entry:
+        return None
+    if profiles is None:
+        entry.pop("profiles", None)
+    else:
+        entry["profiles"] = _clean_profile_ids(profiles)
+    entry["updated_at"] = _now_iso()
+    save_auth_users(store)
+    return {
+        "username": str(entry.get("username") or "").strip(),
+        "profiles": entry.get("profiles"),
+        "updated_at": entry["updated_at"],
+    }
+
+
+def _clean_profile_ids(profiles: list[str] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in profiles or []:
+        pid = str(raw or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid[:80])
+    return out[:40]
+
+
+def user_profile_allowlist(username: str) -> list[str] | None:
+    """Patient ids this user may open.
+
+    ``None`` means every profile (env admins, and older disk users with no
+    allowlist stored yet).
+    """
+    from app.config import settings
+
+    needle = _normalize_username(username).lower()
+    if not needle:
+        return []
+    if any(name.lower() == needle for name in settings.auth_usernames):
+        return None
+    entry = _entry_for(load_auth_users(), username)
+    if not entry:
+        return []
+    if str(entry.get("role") or "").strip().lower() == "admin":
+        return None
+    if "profiles" not in entry or entry.get("profiles") is None:
+        return None
+    raw = entry.get("profiles")
+    if not isinstance(raw, list):
+        return []
+    return _clean_profile_ids(raw)
+
+
+def user_is_admin(username: str | None) -> bool:
+    """Env bootstrap users (and disk users marked admin) manage access."""
+    from app.config import settings
+
+    if not settings.auth_enabled:
+        return True
+    needle = _normalize_username(username or "").lower()
+    if not needle or needle == "local":
+        return not settings.auth_enabled
+    if any(name.lower() == needle for name in settings.auth_usernames):
+        return True
+    entry = _entry_for(load_auth_users(), username or "")
+    return bool(entry and str(entry.get("role") or "").strip().lower() == "admin")
 
 
 def delete_auth_user(username: str) -> bool:

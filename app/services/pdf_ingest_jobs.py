@@ -162,7 +162,9 @@ async def _run_pdf_ingest_job(job_id: str) -> None:
         patient_id = job["patient_id"]
         case_id = job["case_id"]
         doc_id = job["document_id"]
+        from app.services.user_context import pin_active_scope, reset_pinned_scope
 
+        pin_token = pin_active_scope(patient_id, case_id)
         try:
             from app.api.routes import _finalize_clinical_report_document
             from app.ingest.pdf import reextract_pdf_document
@@ -247,6 +249,7 @@ async def _run_pdf_ingest_job(job_id: str) -> None:
             except Exception:
                 logger.exception("Could not clear ingest_processing flag")
         finally:
+            reset_pinned_scope(pin_token)
             _running_tasks.pop(job_id, None)
 
 

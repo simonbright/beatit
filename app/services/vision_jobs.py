@@ -19,36 +19,41 @@ async def _run_job(job_id: str) -> None:
     if not job or job["status"] not in {"pending", "running"}:
         return
 
-    db = Database()
-    store = DocumentStore(db)
-    job["status"] = "running"
+    from app.services.user_context import pin_active_scope, reset_pinned_scope
 
-    async def on_progress(update: dict[str, Any]) -> None:
-        job["progress"] = update
-
+    pin_token = pin_active_scope(job.get("patient_id"), job.get("case_id"))
     try:
-        from app.services.imaging_vision import analyze_imaging_slices
+        db = Database()
+        store = DocumentStore(db)
+        job["status"] = "running"
 
-        result = await analyze_imaging_slices(
-            store,
-            db,
-            document_ids=job["document_ids"],
-            created_by=job.get("requested_by"),
-            on_progress=on_progress,
-        )
-        job["status"] = "completed"
-        job["result"] = result
-        job["progress"] = None
-    except asyncio.CancelledError:
-        job["status"] = "cancelled"
-        job["error"] = "Cancelled by user"
-        raise
-    except Exception as exc:
-        logger.exception("Vision job %s failed", job_id)
-        job["status"] = "failed"
-        job["error"] = str(exc)
-        job["progress"] = None
+        async def on_progress(update: dict[str, Any]) -> None:
+            job["progress"] = update
+
+        try:
+            from app.services.imaging_vision import analyze_imaging_slices
+
+            result = await analyze_imaging_slices(
+                store,
+                db,
+                document_ids=job["document_ids"],
+                created_by=job.get("requested_by"),
+                on_progress=on_progress,
+            )
+            job["status"] = "completed"
+            job["result"] = result
+            job["progress"] = None
+        except asyncio.CancelledError:
+            job["status"] = "cancelled"
+            job["error"] = "Cancelled by user"
+            raise
+        except Exception as exc:
+            logger.exception("Vision job %s failed", job_id)
+            job["status"] = "failed"
+            job["error"] = str(exc)
+            job["progress"] = None
     finally:
+        reset_pinned_scope(pin_token)
         _running_tasks.pop(job_id, None)
 
 
@@ -57,11 +62,16 @@ def enqueue_vision_job(
     document_ids: list[str],
     requested_by: str | None = None,
 ) -> dict[str, Any]:
+    from app.services.case_manager import get_active_context
+
+    ctx = get_active_context()
     job_id = str(uuid.uuid4())
     _jobs[job_id] = {
         "id": job_id,
         "status": "pending",
         "document_ids": list(document_ids),
+        "patient_id": ctx.get("patient_id"),
+        "case_id": ctx.get("case_id"),
         "requested_by": requested_by,
         "progress": None,
         "result": None,

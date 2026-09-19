@@ -288,5 +288,6 @@ async def resolve_active_patient_document(doc_id: str) -> dict[str, Any] | None:
 
 
 def active_patient_id() -> str | None:
-    reg = load_registry()
-    return reg.get("active_patient")
+    from app.services.case_manager import get_active_context
+
+    return get_active_context().get("patient_id")

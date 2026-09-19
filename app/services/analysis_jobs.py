@@ -71,6 +71,9 @@ async def _run_job(
 
     patient_id = job.get("patient_id") or patient_id
     case_id = job.get("case_id") or case_id
+    from app.services.user_context import pin_active_scope, reset_pinned_scope
+
+    pin_token = pin_active_scope(patient_id, case_id)
     db = _db_for_scope(patient_id=patient_id, case_id=case_id)
 
     try:
@@ -180,6 +183,8 @@ async def _run_job(
                 "case_id": case_id,
             },
         )
+    finally:
+        reset_pinned_scope(pin_token)
 
 
 def _spawn_job(

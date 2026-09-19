@@ -2174,17 +2174,53 @@ def delete_case(patient_id: str, case_id: str) -> bool:
 # Activation
 # ------------------------------------------------------------------
 
+def _selection_ids(reg: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Active patient/case for this request.
+
+    Signed-in users each have their own selection. Local mode (auth off) keeps
+    using the shared registry default.
+    """
+    from app.services.user_context import (
+        current_actor,
+        get_saved_selection,
+        pinned_scope,
+        save_selection,
+    )
+
+    pinned = pinned_scope()
+    if pinned:
+        return pinned
+    actor = current_actor()
+    if not actor:
+        return reg.get("active_patient"), reg.get("active_case")
+    saved = get_saved_selection(actor)
+    if saved:
+        return saved
+    pid = reg.get("active_patient")
+    cid = reg.get("active_case")
+    if pid and cid:
+        from app.services.profile_access import can_access_patient
+
+        if can_access_patient(actor, pid):
+            save_selection(actor, pid, cid)
+            return pid, cid
+    return None, None
+
+
 def get_active_context() -> dict[str, Any]:
-    """Return active patient_id, case_id, and their labels."""
+    """Return active patient_id, case_id, and their labels for this session."""
     reg = load_registry()
-    patient_id = reg.get("active_patient")
-    case_id = reg.get("active_case")
+    patient_id, case_id = _selection_ids(reg)
     patient = _find_patient(reg, patient_id) if patient_id else None
     case = _find_case(patient, case_id) if patient and case_id else None
+    if patient and case_id and not case:
+        cases = patient.get("cases") or []
+        case = cases[0] if cases else None
+        case_id = case["id"] if case else None
     return {
-        "patient_id": patient_id,
+        "patient_id": patient["id"] if patient else None,
         "patient_label": patient["label"] if patient else None,
-        "case_id": case_id,
+        "case_id": case["id"] if case else None,
         "case_label": case["label"] if case else None,
         "has_photo": find_patient_photo(patient_id) is not None if patient_id else False,
         "photo_url": _photo_url(patient_id) if patient_id else None,
@@ -2201,6 +2237,12 @@ def activate_patient_case(patient_id: str, case_id: str) -> bool:
     case = _find_case(patient, case_id)
     if not case:
         return False
+    from app.services.user_context import current_actor, save_selection
+
+    actor = current_actor()
+    if actor:
+        save_selection(actor, patient_id, case_id)
+        return True
     reg["active_patient"] = patient_id
     reg["active_case"] = case_id
     save_registry(reg)
@@ -2212,11 +2254,10 @@ def activate_patient_case(patient_id: str, case_id: str) -> bool:
 # ------------------------------------------------------------------
 
 def active_case_dir() -> Path | None:
-    """Return path for the currently active case, or None if nothing is active."""
+    """Return path for this session's active case, or None if nothing is active."""
     reg = load_registry()
-    pid = reg.get("active_patient")
-    cid = reg.get("active_case")
-    if pid and cid:
+    pid, cid = _selection_ids(reg)
+    if pid and cid and _find_case(_find_patient(reg, pid), cid):
         return _case_dir(pid, cid)
     return None
 

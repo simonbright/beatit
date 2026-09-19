@@ -139,7 +139,10 @@ from app.services.auth_users import (
     all_allowed_usernames,
     delete_auth_user,
     list_auth_usernames,
+    set_user_profiles,
     upsert_auth_user,
+    user_is_admin,
+    user_profile_allowlist,
 )
 from app.config import settings
 from app.storage.database import Database
@@ -287,6 +290,14 @@ class LoginRequest(BaseModel):
 class AuthUserUpsertRequest(BaseModel):
     username: str = Field(min_length=3, max_length=200)
     password: str = Field(min_length=8, max_length=200)
+    patient_ids: list[str] | None = None
+
+
+class AuthUserProfilesRequest(BaseModel):
+    """``all_profiles`` true ignores ``patient_ids`` and grants every profile."""
+
+    all_profiles: bool = False
+    patient_ids: list[str] = Field(default_factory=list)
 
 
 def _cookie_secure() -> bool:
@@ -483,19 +494,38 @@ async def logout(response: Response, request: Request):
 @router.get("/auth/users")
 async def api_list_auth_users(request: Request):
     if not settings.auth_enabled:
-        return {"users": [], "auth": "disabled"}
+        return {"users": [], "auth": "disabled", "admin": True}
+    actor = _actor(request)
+    if not user_is_admin(actor):
+        raise HTTPException(status_code=403, detail="You can't manage sign-in access")
     env_set = {u.lower() for u in settings.auth_usernames}
     disk_set = {u.lower() for u in list_auth_usernames()}
+    patients = list_patients()
+    labels = {p["id"]: p.get("label") or p["id"] for p in patients}
     users = []
     for name in sorted(all_allowed_usernames(), key=str.lower):
+        allow = user_profile_allowlist(name)
         users.append(
             {
                 "username": name,
                 "source": "disk" if name.lower() in disk_set else "env",
                 "can_delete": name.lower() in disk_set and name.lower() not in env_set,
+                "admin": user_is_admin(name),
+                "all_profiles": allow is None,
+                "patient_ids": list(allow or []),
+                "profile_labels": (
+                    ["All profiles"]
+                    if allow is None
+                    else [labels.get(pid, pid) for pid in allow]
+                ),
             }
         )
-    return {"users": users, "actor": _actor(request)}
+    return {
+        "users": users,
+        "actor": actor,
+        "admin": True,
+        "patients": [{"id": p["id"], "label": p.get("label") or p["id"]} for p in patients],
+    }
 
 
 @router.post("/auth/users")
@@ -503,10 +533,14 @@ async def api_upsert_auth_user(body: AuthUserUpsertRequest, request: Request):
     if not settings.auth_enabled:
         raise HTTPException(status_code=400, detail="Auth is disabled")
     actor = _actor(request)
-    if not actor:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not user_is_admin(actor):
+        raise HTTPException(status_code=403, detail="You can't manage sign-in access")
     try:
-        saved = upsert_auth_user(body.username, body.password)
+        saved = upsert_auth_user(
+            body.username,
+            body.password,
+            profiles=body.patient_ids,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db, _, _, _, _ = await _get_services()
@@ -519,6 +553,30 @@ async def api_upsert_auth_user(body: AuthUserUpsertRequest, request: Request):
         resource_id=saved["username"],
         metadata={"action": "upsert_auth_user", "username": saved["username"]},
     )
+    return {"ok": True, "user": saved}
+
+
+@router.put("/auth/users/{username}/profiles")
+async def api_set_auth_user_profiles(
+    username: str,
+    body: AuthUserProfilesRequest,
+    request: Request,
+):
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=400, detail="Auth is disabled")
+    actor = _actor(request)
+    if not user_is_admin(actor):
+        raise HTTPException(status_code=403, detail="You can't manage sign-in access")
+    if username.strip().lower() in {u.lower() for u in settings.auth_usernames}:
+        raise HTTPException(
+            status_code=400,
+            detail="Env sign-in users always see every profile",
+        )
+    known = {p["id"] for p in list_patients()}
+    chosen = [pid for pid in body.patient_ids if pid in known]
+    saved = set_user_profiles(username, None if body.all_profiles else chosen)
+    if not saved:
+        raise HTTPException(status_code=404, detail="User not found")
     return {"ok": True, "user": saved}
 
 
@@ -558,7 +616,13 @@ async def auth_me(request: Request):
     username = verify_session_token(request.cookies.get(COOKIE_NAME))
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"authenticated": True, "username": username}
+    return {
+        "authenticated": True,
+        "username": username,
+        "admin": user_is_admin(username),
+        "all_profiles": user_profile_allowlist(username) is None,
+        "patient_ids": user_profile_allowlist(username) or [],
+    }
 
 
 @router.get("/health")
@@ -2655,9 +2719,26 @@ class ActivateCaseRequest(BaseModel):
 
 
 @router.get("/patients")
-async def api_list_patients():
+async def api_list_patients(request: Request):
+    from app.services.profile_access import can_access_patient
+
+    actor = _actor(request)
     patients = list_patients()
+    if settings.auth_enabled and not user_is_admin(actor):
+        patients = [p for p in patients if can_access_patient(actor, p.get("id"))]
     ctx = get_active_context()
+    if settings.auth_enabled and not can_access_patient(actor, ctx.get("patient_id")):
+        ctx = {
+            "patient_id": None,
+            "patient_label": None,
+            "case_id": None,
+            "case_label": None,
+            "has_photo": False,
+            "photo_url": None,
+            "cases": [],
+            "profile": None,
+            "needs_switch": True,
+        }
     return {"patients": patients, "active": ctx}
 
 
@@ -4314,7 +4395,12 @@ async def api_delete_case(patient_id: str, case_id: str):
 
 
 @router.put("/cases/activate")
-async def api_activate_case(body: ActivateCaseRequest):
+async def api_activate_case(body: ActivateCaseRequest, request: Request):
+    from app.services.profile_access import can_access_patient
+
+    actor = _actor(request)
+    if not can_access_patient(actor, body.patient_id):
+        raise HTTPException(status_code=403, detail="You don't have access to this profile")
     ok = activate_patient_case(body.patient_id, body.case_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Patient or case not found")
@@ -4325,8 +4411,14 @@ async def api_activate_case(body: ActivateCaseRequest):
 
 
 @router.get("/cases/active")
-async def api_active_context():
-    return get_active_context()
+async def api_active_context(request: Request):
+    from app.services.profile_access import can_access_patient
+
+    ctx = get_active_context()
+    actor = _actor(request)
+    if ctx.get("patient_id") and not can_access_patient(actor, ctx.get("patient_id")):
+        raise HTTPException(status_code=403, detail="Switch to a profile you can access")
+    return ctx
 
 
 @router.get("/cases/siblings")

@@ -2613,23 +2613,61 @@ function setSettingsSection(section, { scroll = false, focusSelector = null, pro
 
 async function loadAuthUsers() {
   const el = document.getElementById("auth-users-list");
+  const picks = document.getElementById("auth-user-profiles");
   if (!el) return;
   const data = await api("/api/auth/users");
   const users = data.users || [];
+  const patients = data.patients || [];
+  state.authPatients = patients;
+  if (picks) {
+    picks.innerHTML = patients.length
+      ? `<legend>Profiles they can see</legend><div class="auth-profile-options">${patients
+          .map(
+            (p) =>
+              `<label><input type="checkbox" name="auth-new-profile" value="${escapeHtml(p.id)}"> ${escapeHtml(p.label || p.id)}</label>`
+          )
+          .join("")}</div>`
+      : `<legend>Profiles they can see</legend><p class="muted small">No profiles yet.</p>`;
+  }
   if (!users.length) {
     el.innerHTML = `<p class="muted small">No sign-in users configured.</p>`;
     return;
   }
   el.innerHTML = users
     .map((u) => {
-      const source = u.source === "disk" ? "app user" : "env";
+      const source = u.admin ? "full access" : u.source === "disk" ? "limited" : "env";
+      const access = u.all_profiles
+        ? "All profiles"
+        : (u.profile_labels || []).length
+          ? (u.profile_labels || []).join(", ")
+          : "No profiles yet";
       const del = u.can_delete
         ? `<button type="button" class="btn ghost btn-sm btn-delete-auth-user" data-username="${escapeHtml(u.username)}">Remove</button>`
-        : `<span class="muted small">env</span>`;
-      return `<div class="food-drink-row" data-username="${escapeHtml(u.username)}">
-        <strong>${escapeHtml(u.username)}</strong>
-        <span class="muted small">${escapeHtml(source)}</span>
-        ${del}
+        : "";
+      const edit = u.source === "disk" && !u.admin
+        ? `<button type="button" class="btn ghost btn-sm btn-edit-auth-profiles" data-username="${escapeHtml(u.username)}">Edit profiles</button>`
+        : "";
+      const options = patients
+        .map((p) => {
+          const on = (u.patient_ids || []).includes(p.id);
+          return `<label><input type="checkbox" data-profile-id="${escapeHtml(p.id)}" ${on ? "checked" : ""}> ${escapeHtml(p.label || p.id)}</label>`;
+        })
+        .join("");
+      const editor =
+        u.source === "disk" && !u.admin
+          ? `<div class="auth-profile-editor hidden" data-editor-for="${escapeHtml(u.username)}">
+              <label><input type="checkbox" class="auth-all-profiles" ${u.all_profiles ? "checked" : ""}> All profiles</label>
+              <div class="auth-profile-options">${options}</div>
+              <button type="button" class="btn secondary btn-sm btn-save-auth-profiles" data-username="${escapeHtml(u.username)}">Save profiles</button>
+            </div>`
+          : "";
+      return `<div class="food-drink-row auth-user-row" data-username="${escapeHtml(u.username)}">
+        <div>
+          <strong>${escapeHtml(u.username)}</strong>
+          <div class="muted small">${escapeHtml(source)} · ${escapeHtml(access)}</div>
+        </div>
+        <div class="journal-actions">${edit}${del}</div>
+        ${editor}
       </div>`;
     })
     .join("");
@@ -2640,14 +2678,34 @@ async function saveAuthUser() {
   const passEl = document.getElementById("auth-user-password");
   const username = (emailEl?.value || "").trim();
   const password = passEl?.value || "";
+  const patientIds = [...document.querySelectorAll("#auth-user-profiles input[name='auth-new-profile']:checked")].map(
+    (el) => el.value
+  );
   if (!username) return toast("Email is required", "error");
   if (password.length < 8) return toast("Password must be at least 8 characters", "error");
+  if (!patientIds.length) return toast("Choose at least one profile they can see", "error");
   await api("/api/auth/users", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, patient_ids: patientIds }),
   });
   if (passEl) passEl.value = "";
   toast(`Saved sign-in for ${username}`);
+  await loadAuthUsers();
+}
+
+async function saveAuthUserProfiles(username) {
+  const row = document.querySelector(`.auth-user-row[data-username="${CSS.escape(username)}"]`);
+  if (!row) return;
+  const all = row.querySelector(".auth-all-profiles")?.checked;
+  const patientIds = [...row.querySelectorAll("[data-profile-id]:checked")].map(
+    (el) => el.getAttribute("data-profile-id")
+  );
+  if (!all && !patientIds.length) return toast("Choose at least one profile, or All profiles", "error");
+  await api(`/api/auth/users/${encodeURIComponent(username)}/profiles`, {
+    method: "PUT",
+    body: JSON.stringify({ all_profiles: !!all, patient_ids: patientIds }),
+  });
+  toast(`Updated profiles for ${username}`);
   await loadAuthUsers();
 }
 
@@ -8063,6 +8121,20 @@ $("#btn-save-auth-user")?.addEventListener("click", () =>
   saveAuthUser().catch((e) => toast(e.message, "error"))
 );
 document.getElementById("auth-users-list")?.addEventListener("click", (e) => {
+  const edit = e.target.closest(".btn-edit-auth-profiles");
+  if (edit) {
+    const username = edit.getAttribute("data-username");
+    document
+      .querySelector(`.auth-profile-editor[data-editor-for="${CSS.escape(username || "")}"]`)
+      ?.classList.toggle("hidden");
+    return;
+  }
+  const save = e.target.closest(".btn-save-auth-profiles");
+  if (save) {
+    const username = save.getAttribute("data-username");
+    if (username) saveAuthUserProfiles(username).catch((err) => toast(err.message || "Could not save profiles", "error"));
+    return;
+  }
   const btn = e.target.closest(".btn-delete-auth-user");
   if (!btn) return;
   const username = btn.getAttribute("data-username");
@@ -8720,12 +8792,24 @@ safeOn("#btn-options-chat-delete", "click", () =>
 async function initAuth() {
   try {
     const me = await api("/api/auth/me");
+    state.accessAdmin = me.auth === "disabled" || me.admin !== false;
+    applyAccessAdminUi();
     if (me.authenticated && me.username) {
       $("#btn-signout")?.classList.remove("hidden");
     }
   } catch {
     /* redirect handled in api() */
   }
+}
+
+function applyAccessAdminUi() {
+  const admin = state.accessAdmin !== false;
+  document.querySelectorAll("[data-admin-only]").forEach((el) => {
+    el.classList.toggle("hidden", !admin);
+  });
+  document.querySelectorAll(".js-new-patient").forEach((el) => {
+    el.classList.toggle("hidden", !admin);
+  });
 }
 
 $("#btn-signout")?.addEventListener("click", async () => {
@@ -8868,9 +8952,28 @@ async function loadCaseContext() {
   try {
     const r = await fetch("/api/patients");
     const data = await r.json();
+    const patients = data.patients || [];
+    if (
+      !state._switchingForAccess &&
+      data.active?.needs_switch &&
+      patients.length
+    ) {
+      const first = patients.find((p) => (p.cases || []).length) || patients[0];
+      const caseId = first?.cases?.[0]?.id;
+      if (first?.id && caseId) {
+        state._switchingForAccess = true;
+        try {
+          await activatePatientCase(first.id, caseId, {
+            label: first.label || "your profile",
+          });
+        } finally {
+          state._switchingForAccess = false;
+        }
+        return;
+      }
+    }
     state.caseContextReady = true;
     const ctx = data.active || {};
-    const patients = data.patients || [];
     const nameEl = document.getElementById("header-patient-name");
     const initialsEl = document.getElementById("header-patient-initials");
     const photoEl = document.getElementById("header-patient-photo");
