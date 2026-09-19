@@ -1938,11 +1938,44 @@ body {
   flex: 1 1 12rem;
 }
 
+.auth-user-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+  max-width: 36rem;
+  margin: 0.85rem 0 1.25rem;
+}
+
+.auth-user-form > label,
+.auth-edit-password-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.auth-user-form > label input,
+.auth-edit-password {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+}
+
+.auth-form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .auth-profile-picks {
   border: 1px solid var(--border);
   border-radius: 0.55rem;
-  padding: 0.55rem 0.7rem 0.7rem;
-  margin: 0.35rem 0 0.2rem;
+  padding: 0.65rem 0.8rem 0.8rem;
+  margin: 0;
 }
 
 .auth-profile-picks legend {
@@ -1951,35 +1984,82 @@ body {
   font-weight: 600;
 }
 
-.auth-profile-options {
+.auth-all-profiles-label {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.85rem;
-  margin-top: 0.35rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0.15rem;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.auth-profile-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+  gap: 0.4rem 0.85rem;
+  margin-top: 0.55rem;
 }
 
 .auth-user-row {
+  display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.45rem 0.75rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+
+.auth-user-main {
+  min-width: 0;
+  flex: 1 1 14rem;
+}
+
+.auth-user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.auth-user-actions .btn {
+  margin-top: 0;
 }
 
 .auth-profile-editor {
   flex: 1 1 100%;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding-top: 0.35rem;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface-2, transparent);
 }
 
 .auth-profile-editor.hidden {
   display: none;
 }
 
-.auth-profile-options label,
-.auth-profile-editor > label {
-  display: inline-flex;
+.auth-profile-options label {
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.86rem;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.auth-profile-options input,
+.auth-all-profiles-label input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  flex: 0 0 auto;
 }
 
 .food-drink-row {

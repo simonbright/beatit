@@ -139,6 +139,7 @@ from app.services.auth_users import (
     all_allowed_usernames,
     delete_auth_user,
     list_auth_usernames,
+    set_user_password,
     set_user_profiles,
     upsert_auth_user,
     user_is_admin,
@@ -291,6 +292,7 @@ class AuthUserUpsertRequest(BaseModel):
     username: str = Field(min_length=3, max_length=200)
     password: str = Field(min_length=8, max_length=200)
     patient_ids: list[str] | None = None
+    all_profiles: bool = False
 
 
 class AuthUserProfilesRequest(BaseModel):
@@ -298,6 +300,7 @@ class AuthUserProfilesRequest(BaseModel):
 
     all_profiles: bool = False
     patient_ids: list[str] = Field(default_factory=list)
+    password: str | None = Field(default=None, max_length=200)
 
 
 def _cookie_secure() -> bool:
@@ -505,12 +508,17 @@ async def api_list_auth_users(request: Request):
     users = []
     for name in sorted(all_allowed_usernames(), key=str.lower):
         allow = user_profile_allowlist(name)
+        master = user_is_admin(name)
         users.append(
             {
                 "username": name,
                 "source": "disk" if name.lower() in disk_set else "env",
-                "can_delete": name.lower() in disk_set and name.lower() not in env_set,
-                "admin": user_is_admin(name),
+                "can_delete": name.lower() in disk_set
+                and name.lower() not in env_set
+                and not master,
+                "admin": master,
+                "master": master,
+                "editable": not master,
                 "all_profiles": allow is None,
                 "patient_ids": list(allow or []),
                 "profile_labels": (
@@ -539,7 +547,8 @@ async def api_upsert_auth_user(body: AuthUserUpsertRequest, request: Request):
         saved = upsert_auth_user(
             body.username,
             body.password,
-            profiles=body.patient_ids,
+            profiles=None if body.all_profiles else body.patient_ids,
+            all_profiles=body.all_profiles,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -567,16 +576,21 @@ async def api_set_auth_user_profiles(
     actor = _actor(request)
     if not user_is_admin(actor):
         raise HTTPException(status_code=403, detail="You can't manage sign-in access")
-    if username.strip().lower() in {u.lower() for u in settings.auth_usernames}:
+    if user_is_admin(username):
         raise HTTPException(
             status_code=400,
-            detail="Env sign-in users always see every profile",
+            detail="The master admin always sees every profile",
         )
     known = {p["id"] for p in list_patients()}
     chosen = [pid for pid in body.patient_ids if pid in known]
     saved = set_user_profiles(username, None if body.all_profiles else chosen)
     if not saved:
         raise HTTPException(status_code=404, detail="User not found")
+    if body.password:
+        try:
+            set_user_password(username, body.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "user": saved}
 
 
@@ -585,8 +599,10 @@ async def api_delete_auth_user(username: str, request: Request):
     if not settings.auth_enabled:
         raise HTTPException(status_code=400, detail="Auth is disabled")
     actor = _actor(request)
-    if not actor:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not actor or not user_is_admin(actor):
+        raise HTTPException(status_code=403, detail="You can't manage sign-in access")
+    if user_is_admin(username):
+        raise HTTPException(status_code=400, detail="The master admin cannot be removed")
     # Never remove bootstrap env users from the allowlist via API
     if username.strip().lower() in {u.lower() for u in settings.auth_usernames}:
         raise HTTPException(

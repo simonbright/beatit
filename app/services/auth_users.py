@@ -129,6 +129,7 @@ def upsert_auth_user(
     password: str,
     *,
     profiles: list[str] | None = None,
+    all_profiles: bool = False,
 ) -> dict[str, Any]:
     cleaned = _normalize_username(username)
     if not cleaned or "@" not in cleaned:
@@ -149,7 +150,9 @@ def upsert_auth_user(
         existing["password_hash"] = digest
         existing["salt"] = salt
         existing["updated_at"] = now
-        if profiles is not None:
+        if all_profiles:
+            existing.pop("profiles", None)
+        elif profiles is not None:
             existing["profiles"] = _clean_profile_ids(profiles)
         entry = existing
     else:
@@ -159,9 +162,9 @@ def upsert_auth_user(
             "salt": salt,
             "created_at": now,
             "updated_at": now,
-            # New sign-ins see no profiles until you assign them.
-            "profiles": _clean_profile_ids(profiles or []),
         }
+        if not all_profiles:
+            entry["profiles"] = _clean_profile_ids(profiles or [])
         store.setdefault("users", []).append(entry)
     save_auth_users(store)
     return {
@@ -172,25 +175,57 @@ def upsert_auth_user(
 
 
 def set_user_profiles(username: str, profiles: list[str] | None) -> dict[str, Any] | None:
-    """Set which patient profiles a disk user may open.
+    """Set which patient profiles a user may open.
 
     ``None`` means every profile. A list (including empty) is an allowlist.
+    Creates a disk record for an env sign-in that did not have one yet, without
+    changing their password.
     """
-    store = load_auth_users()
-    entry = _entry_for(store, username)
-    if not entry:
+    if user_is_admin(username):
         return None
+    canonical = resolve_username(username)
+    if not canonical:
+        return None
+    store = load_auth_users()
+    entry = _entry_for(store, canonical)
+    now = _now_iso()
+    if not entry:
+        entry = {"username": canonical, "created_at": now}
+        store.setdefault("users", []).append(entry)
     if profiles is None:
         entry.pop("profiles", None)
     else:
         entry["profiles"] = _clean_profile_ids(profiles)
-    entry["updated_at"] = _now_iso()
+    entry["updated_at"] = now
     save_auth_users(store)
     return {
         "username": str(entry.get("username") or "").strip(),
         "profiles": entry.get("profiles"),
         "updated_at": entry["updated_at"],
     }
+
+
+def set_user_password(username: str, password: str) -> dict[str, Any] | None:
+    """Set or replace a disk password without changing profile access."""
+    cleaned = _normalize_username(username)
+    canonical = resolve_username(cleaned) or cleaned
+    if not canonical or "@" not in canonical:
+        return None
+    if not password or len(password) < 8 or len(password) > 200:
+        raise ValueError("Password must be at least 8 characters")
+    store = load_auth_users()
+    entry = _entry_for(store, canonical)
+    digest, salt = hash_password(password)
+    now = _now_iso()
+    if not entry:
+        entry = {"username": canonical, "created_at": now}
+        store.setdefault("users", []).append(entry)
+    entry["username"] = canonical
+    entry["password_hash"] = digest
+    entry["salt"] = salt
+    entry["updated_at"] = now
+    save_auth_users(store)
+    return {"username": canonical, "updated_at": now}
 
 
 def _clean_profile_ids(profiles: list[str] | None) -> list[str]:
@@ -205,45 +240,57 @@ def _clean_profile_ids(profiles: list[str] | None) -> list[str]:
     return out[:40]
 
 
-def user_profile_allowlist(username: str) -> list[str] | None:
-    """Patient ids this user may open.
+# Owner account. Override with AUTH_MASTER if this address is not the one
+# that should manage Access, LLM, and Audit.
+_DEFAULT_MASTER = "simon.brightman@gmail.com"
 
-    ``None`` means every profile (env admins, and older disk users with no
-    allowlist stored yet).
-    """
+
+def master_admin_username() -> str | None:
+    """The one sign-in that can manage users and always sees every profile."""
     from app.config import settings
 
-    needle = _normalize_username(username).lower()
-    if not needle:
-        return []
-    if any(name.lower() == needle for name in settings.auth_usernames):
-        return None
-    entry = _entry_for(load_auth_users(), username)
-    if not entry:
-        return []
-    if str(entry.get("role") or "").strip().lower() == "admin":
-        return None
-    if "profiles" not in entry or entry.get("profiles") is None:
-        return None
-    raw = entry.get("profiles")
-    if not isinstance(raw, list):
-        return []
-    return _clean_profile_ids(raw)
+    explicit = str(getattr(settings, "auth_master", "") or "").strip()
+    if explicit:
+        return resolve_username(explicit) or explicit
+    for name in all_allowed_usernames():
+        if name.lower() == _DEFAULT_MASTER:
+            return name
+    names = settings.auth_usernames
+    return names[0] if names else None
 
 
 def user_is_admin(username: str | None) -> bool:
-    """Env bootstrap users (and disk users marked admin) manage access."""
+    """Only the master admin manages access. Auth-off local mode is unrestricted."""
     from app.config import settings
 
     if not settings.auth_enabled:
         return True
     needle = _normalize_username(username or "").lower()
     if not needle or needle == "local":
-        return not settings.auth_enabled
-    if any(name.lower() == needle for name in settings.auth_usernames):
-        return True
-    entry = _entry_for(load_auth_users(), username or "")
-    return bool(entry and str(entry.get("role") or "").strip().lower() == "admin")
+        return False
+    master = master_admin_username()
+    return bool(master and needle == master.lower())
+
+
+def user_profile_allowlist(username: str) -> list[str] | None:
+    """Patient ids this user may open.
+
+    ``None`` means every profile (the master admin, and anyone not limited yet).
+    """
+    needle = _normalize_username(username).lower()
+    if not needle:
+        return []
+    if user_is_admin(username):
+        return None
+    entry = _entry_for(load_auth_users(), username)
+    if not entry:
+        return None if resolve_username(username) else []
+    if "profiles" not in entry or entry.get("profiles") is None:
+        return None
+    raw = entry.get("profiles")
+    if not isinstance(raw, list):
+        return []
+    return _clean_profile_ids(raw)
 
 
 def delete_auth_user(username: str) -> bool:

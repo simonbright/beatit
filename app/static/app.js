@@ -2618,15 +2618,19 @@ async function loadAuthUsers() {
   const data = await api("/api/auth/users");
   const users = data.users || [];
   const patients = data.patients || [];
+  const actor = String(data.actor || "").toLowerCase();
   state.authPatients = patients;
   if (picks) {
+    const options = patients
+      .map(
+        (p) =>
+          `<label><input type="checkbox" name="auth-new-profile" value="${escapeHtml(p.id)}"> <span>${escapeHtml(p.label || p.id)}</span></label>`
+      )
+      .join("");
     picks.innerHTML = patients.length
-      ? `<legend>Profiles they can see</legend><div class="auth-profile-options">${patients
-          .map(
-            (p) =>
-              `<label><input type="checkbox" name="auth-new-profile" value="${escapeHtml(p.id)}"> ${escapeHtml(p.label || p.id)}</label>`
-          )
-          .join("")}</div>`
+      ? `<legend>Profiles they can see</legend>
+         <label class="auth-all-profiles-label"><input type="checkbox" id="auth-new-all-profiles"> <span>All profiles</span></label>
+         <div class="auth-profile-options">${options}</div>`
       : `<legend>Profiles they can see</legend><p class="muted small">No profiles yet.</p>`;
   }
   if (!users.length) {
@@ -2635,38 +2639,43 @@ async function loadAuthUsers() {
   }
   el.innerHTML = users
     .map((u) => {
-      const source = u.admin ? "full access" : u.source === "disk" ? "limited" : "env";
+      const you = String(u.username || "").toLowerCase() === actor ? " · you" : "";
       const access = u.all_profiles
         ? "All profiles"
         : (u.profile_labels || []).length
           ? (u.profile_labels || []).join(", ")
           : "No profiles yet";
+      const kind = u.master ? "Master admin" : "Sign-in";
       const del = u.can_delete
         ? `<button type="button" class="btn ghost btn-sm btn-delete-auth-user" data-username="${escapeHtml(u.username)}">Remove</button>`
         : "";
-      const edit = u.source === "disk" && !u.admin
-        ? `<button type="button" class="btn ghost btn-sm btn-edit-auth-profiles" data-username="${escapeHtml(u.username)}">Edit profiles</button>`
+      const edit = u.editable
+        ? `<button type="button" class="btn ghost btn-sm btn-edit-auth-profiles" data-username="${escapeHtml(u.username)}">Edit</button>`
         : "";
       const options = patients
         .map((p) => {
           const on = (u.patient_ids || []).includes(p.id);
-          return `<label><input type="checkbox" data-profile-id="${escapeHtml(p.id)}" ${on ? "checked" : ""}> ${escapeHtml(p.label || p.id)}</label>`;
+          return `<label><input type="checkbox" data-profile-id="${escapeHtml(p.id)}" ${on ? "checked" : ""} ${u.all_profiles ? "disabled" : ""}> <span>${escapeHtml(p.label || p.id)}</span></label>`;
         })
         .join("");
-      const editor =
-        u.source === "disk" && !u.admin
-          ? `<div class="auth-profile-editor hidden" data-editor-for="${escapeHtml(u.username)}">
-              <label><input type="checkbox" class="auth-all-profiles" ${u.all_profiles ? "checked" : ""}> All profiles</label>
-              <div class="auth-profile-options">${options}</div>
-              <button type="button" class="btn secondary btn-sm btn-save-auth-profiles" data-username="${escapeHtml(u.username)}">Save profiles</button>
-            </div>`
-          : "";
-      return `<div class="food-drink-row auth-user-row" data-username="${escapeHtml(u.username)}">
-        <div>
-          <strong>${escapeHtml(u.username)}</strong>
-          <div class="muted small">${escapeHtml(source)} · ${escapeHtml(access)}</div>
+      const editor = u.editable
+        ? `<div class="auth-profile-editor hidden" data-editor-for="${escapeHtml(u.username)}">
+            <label class="auth-edit-password-label">New password
+              <input type="password" class="auth-edit-password" maxlength="200" placeholder="Leave blank to keep the current password" autocomplete="new-password">
+            </label>
+            <label class="auth-all-profiles-label"><input type="checkbox" class="auth-all-profiles" ${u.all_profiles ? "checked" : ""}> <span>All profiles</span></label>
+            <div class="auth-profile-options">${options}</div>
+            <div class="auth-form-actions">
+              <button type="button" class="btn secondary btn-sm btn-save-auth-profiles" data-username="${escapeHtml(u.username)}">Save</button>
+            </div>
+          </div>`
+        : "";
+      return `<div class="auth-user-row" data-username="${escapeHtml(u.username)}">
+        <div class="auth-user-main">
+          <strong>${escapeHtml(u.username)}${escapeHtml(you)}</strong>
+          <div class="muted small">${escapeHtml(kind)} · ${escapeHtml(access)}</div>
         </div>
-        <div class="journal-actions">${edit}${del}</div>
+        <div class="auth-user-actions">${edit}${del}</div>
         ${editor}
       </div>`;
     })
@@ -2678,16 +2687,18 @@ async function saveAuthUser() {
   const passEl = document.getElementById("auth-user-password");
   const username = (emailEl?.value || "").trim();
   const password = passEl?.value || "";
+  const all = !!document.getElementById("auth-new-all-profiles")?.checked;
   const patientIds = [...document.querySelectorAll("#auth-user-profiles input[name='auth-new-profile']:checked")].map(
     (el) => el.value
   );
   if (!username) return toast("Email is required", "error");
   if (password.length < 8) return toast("Password must be at least 8 characters", "error");
-  if (!patientIds.length) return toast("Choose at least one profile they can see", "error");
+  if (!all && !patientIds.length) return toast("Choose at least one profile, or All profiles", "error");
   await api("/api/auth/users", {
     method: "POST",
-    body: JSON.stringify({ username, password, patient_ids: patientIds }),
+    body: JSON.stringify({ username, password, patient_ids: all ? [] : patientIds, all_profiles: all }),
   });
+  if (emailEl) emailEl.value = "";
   if (passEl) passEl.value = "";
   toast(`Saved sign-in for ${username}`);
   await loadAuthUsers();
@@ -2697,15 +2708,21 @@ async function saveAuthUserProfiles(username) {
   const row = document.querySelector(`.auth-user-row[data-username="${CSS.escape(username)}"]`);
   if (!row) return;
   const all = row.querySelector(".auth-all-profiles")?.checked;
+  const password = row.querySelector(".auth-edit-password")?.value || "";
   const patientIds = [...row.querySelectorAll("[data-profile-id]:checked")].map(
     (el) => el.getAttribute("data-profile-id")
   );
+  if (password && password.length < 8) return toast("Password must be at least 8 characters", "error");
   if (!all && !patientIds.length) return toast("Choose at least one profile, or All profiles", "error");
   await api(`/api/auth/users/${encodeURIComponent(username)}/profiles`, {
     method: "PUT",
-    body: JSON.stringify({ all_profiles: !!all, patient_ids: patientIds }),
+    body: JSON.stringify({
+      all_profiles: !!all,
+      patient_ids: patientIds,
+      ...(password ? { password } : {}),
+    }),
   });
-  toast(`Updated profiles for ${username}`);
+  toast(`Updated ${username}`);
   await loadAuthUsers();
 }
 
@@ -8120,6 +8137,20 @@ $("#btn-save-patient")?.addEventListener("click", () =>
 $("#btn-save-auth-user")?.addEventListener("click", () =>
   saveAuthUser().catch((e) => toast(e.message, "error"))
 );
+document.getElementById("auth-user-profiles")?.addEventListener("change", (e) => {
+  if (e.target?.id !== "auth-new-all-profiles") return;
+  const on = !!e.target.checked;
+  document.querySelectorAll("#auth-user-profiles input[name='auth-new-profile']").forEach((el) => {
+    el.disabled = on;
+  });
+});
+document.getElementById("auth-users-list")?.addEventListener("change", (e) => {
+  if (!e.target?.classList?.contains("auth-all-profiles")) return;
+  const editor = e.target.closest(".auth-profile-editor");
+  editor?.querySelectorAll("[data-profile-id]").forEach((el) => {
+    el.disabled = !!e.target.checked;
+  });
+});
 document.getElementById("auth-users-list")?.addEventListener("click", (e) => {
   const edit = e.target.closest(".btn-edit-auth-profiles");
   if (edit) {

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # Secured access (required on Render — comma-separated usernames, shared password)
     auth_username: str = ""
     auth_password: str = ""
+    # Optional. When empty, simon.brightman@gmail.com is the master admin if
+    # that address can sign in; otherwise the first AUTH_USERNAME is.
+    auth_master: str = ""
     # Optional per-user passwords: email:password,email2:password2
     # Overrides AUTH_PASSWORD for those usernames only.
     auth_user_passwords: str = ""
