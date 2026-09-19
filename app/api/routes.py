@@ -153,6 +153,8 @@ from app.services.case_manager import (
     list_patients,
     create_patient,
     delete_patient,
+    ensure_owned_patient,
+    find_owned_patient,
     list_cases,
     create_case,
     delete_case,
@@ -301,6 +303,34 @@ class AuthUserProfilesRequest(BaseModel):
     all_profiles: bool = False
     patient_ids: list[str] = Field(default_factory=list)
     password: str | None = Field(default=None, max_length=200)
+
+
+def _apply_profile_selection(
+    username: str,
+    patient_ids: list[str] | None,
+    *,
+    all_profiles: bool,
+):
+    """Save who this sign-in may open.
+
+    No selected profiles means only their own. That profile is created if
+    needed, with an Ongoing Health case when they have none yet.
+    """
+    if all_profiles:
+        return set_user_profiles(username, None)
+    known = {p["id"] for p in list_patients()}
+    chosen: list[str] = []
+    for pid in patient_ids or []:
+        if pid in known and pid not in chosen:
+            chosen.append(pid)
+    if not chosen or (
+        find_owned_patient(username)
+        and chosen == [find_owned_patient(username)["id"]]
+    ):
+        own = ensure_owned_patient(username)
+        if not chosen:
+            chosen = [own["id"]]
+    return set_user_profiles(username, chosen)
 
 
 def _cookie_secure() -> bool:
@@ -509,6 +539,12 @@ async def api_list_auth_users(request: Request):
     for name in sorted(all_allowed_usernames(), key=str.lower):
         allow = user_profile_allowlist(name)
         master = user_is_admin(name)
+        owned = None if master else find_owned_patient(name)
+        own_id = owned.get("id") if owned else None
+        patient_ids = list(allow or [])
+        own_only = bool(
+            not master and allow is not None and own_id and patient_ids == [own_id]
+        )
         users.append(
             {
                 "username": name,
@@ -520,11 +556,14 @@ async def api_list_auth_users(request: Request):
                 "master": master,
                 "editable": not master,
                 "all_profiles": allow is None,
-                "patient_ids": list(allow or []),
+                "patient_ids": patient_ids,
+                "own_patient_id": own_id,
+                "own_patient_label": (owned.get("label") if owned else None),
+                "own_only": own_only,
                 "profile_labels": (
                     ["All profiles"]
                     if allow is None
-                    else [labels.get(pid, pid) for pid in allow]
+                    else [labels.get(pid, pid) for pid in patient_ids]
                 ),
             }
         )
@@ -550,6 +589,12 @@ async def api_upsert_auth_user(body: AuthUserUpsertRequest, request: Request):
             profiles=None if body.all_profiles else body.patient_ids,
             all_profiles=body.all_profiles,
         )
+        if not user_is_admin(saved["username"]):
+            _apply_profile_selection(
+                saved["username"],
+                [] if body.all_profiles else body.patient_ids,
+                all_profiles=body.all_profiles,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db, _, _, _, _ = await _get_services()
@@ -583,7 +628,14 @@ async def api_set_auth_user_profiles(
         )
     known = {p["id"] for p in list_patients()}
     chosen = [pid for pid in body.patient_ids if pid in known]
-    saved = set_user_profiles(username, None if body.all_profiles else chosen)
+    try:
+        saved = _apply_profile_selection(
+            username,
+            chosen,
+            all_profiles=body.all_profiles,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not saved:
         raise HTTPException(status_code=404, detail="User not found")
     if body.password:

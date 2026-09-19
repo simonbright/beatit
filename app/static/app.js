@@ -2629,9 +2629,10 @@ async function loadAuthUsers() {
       .join("");
     picks.innerHTML = patients.length
       ? `<legend>Profiles they can see</legend>
+         <p class="muted small auth-own-hint">Leave these unchecked to give them only their own profile. If they have no case yet, Ongoing Health is created.</p>
          <label class="auth-all-profiles-label"><input type="checkbox" id="auth-new-all-profiles"> <span>All profiles</span></label>
          <div class="auth-profile-options">${options}</div>`
-      : `<legend>Profiles they can see</legend><p class="muted small">No profiles yet.</p>`;
+      : `<legend>Profiles they can see</legend><p class="muted small">No profiles yet. Saving creates their own, with an Ongoing Health case.</p>`;
   }
   if (!users.length) {
     el.innerHTML = `<p class="muted small">No sign-in users configured.</p>`;
@@ -2642,9 +2643,11 @@ async function loadAuthUsers() {
       const you = String(u.username || "").toLowerCase() === actor ? " · you" : "";
       const access = u.all_profiles
         ? "All profiles"
-        : (u.profile_labels || []).length
-          ? (u.profile_labels || []).join(", ")
-          : "No profiles yet";
+        : u.own_only
+          ? `Own profile only${u.own_patient_label ? ` · ${u.own_patient_label}` : ""}`
+          : (u.profile_labels || []).length
+            ? (u.profile_labels || []).join(", ")
+            : "No profiles yet";
       const kind = u.master ? "Master admin" : "Sign-in";
       const del = u.can_delete
         ? `<button type="button" class="btn ghost btn-sm btn-delete-auth-user" data-username="${escapeHtml(u.username)}">Remove</button>`
@@ -2652,19 +2655,24 @@ async function loadAuthUsers() {
       const edit = u.editable
         ? `<button type="button" class="btn ghost btn-sm btn-edit-auth-profiles" data-username="${escapeHtml(u.username)}">Edit</button>`
         : "";
-      const options = patients
+      const shared = patients.filter((p) => p.id !== u.own_patient_id);
+      const options = shared
         .map((p) => {
           const on = (u.patient_ids || []).includes(p.id);
           return `<label><input type="checkbox" data-profile-id="${escapeHtml(p.id)}" ${on ? "checked" : ""} ${u.all_profiles ? "disabled" : ""}> <span>${escapeHtml(p.label || p.id)}</span></label>`;
         })
         .join("");
+      const ownHint = u.own_patient_label
+        ? `Their profile is ${escapeHtml(u.own_patient_label)}. Uncheck every other profile to leave them on that one only.`
+        : "Uncheck every profile to give them only their own. If they have no case yet, Ongoing Health is created.";
       const editor = u.editable
         ? `<div class="auth-profile-editor hidden" data-editor-for="${escapeHtml(u.username)}">
             <label class="auth-edit-password-label">New password
               <input type="password" class="auth-edit-password" maxlength="200" placeholder="Leave blank to keep the current password" autocomplete="new-password">
             </label>
+            <p class="muted small auth-own-hint">${ownHint}</p>
             <label class="auth-all-profiles-label"><input type="checkbox" class="auth-all-profiles" ${u.all_profiles ? "checked" : ""}> <span>All profiles</span></label>
-            <div class="auth-profile-options">${options}</div>
+            <div class="auth-profile-options">${options || `<p class="muted small">No other profiles.</p>`}</div>
             <div class="auth-form-actions">
               <button type="button" class="btn secondary btn-sm btn-save-auth-profiles" data-username="${escapeHtml(u.username)}">Save</button>
             </div>
@@ -2693,7 +2701,6 @@ async function saveAuthUser() {
   );
   if (!username) return toast("Email is required", "error");
   if (password.length < 8) return toast("Password must be at least 8 characters", "error");
-  if (!all && !patientIds.length) return toast("Choose at least one profile, or All profiles", "error");
   await api("/api/auth/users", {
     method: "POST",
     body: JSON.stringify({ username, password, patient_ids: all ? [] : patientIds, all_profiles: all }),
@@ -2713,7 +2720,6 @@ async function saveAuthUserProfiles(username) {
     (el) => el.getAttribute("data-profile-id")
   );
   if (password && password.length < 8) return toast("Password must be at least 8 characters", "error");
-  if (!all && !patientIds.length) return toast("Choose at least one profile, or All profiles", "error");
   await api(`/api/auth/users/${encodeURIComponent(username)}/profiles`, {
     method: "PUT",
     body: JSON.stringify({

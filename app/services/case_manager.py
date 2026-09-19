@@ -134,8 +134,9 @@ def _photo_url(patient_id: str) -> str | None:
 def _serialize_patient(patient: dict) -> dict[str, Any]:
     pid = patient["id"]
     profile = get_patient_profile(pid)
+    public = {key: value for key, value in patient.items() if key != "owner"}
     return {
-        **patient,
+        **public,
         "has_photo": find_patient_photo(pid) is not None,
         "photo_url": _photo_url(pid),
         "date_of_birth": profile.get("date_of_birth"),
@@ -2094,6 +2095,48 @@ def list_cases(patient_id: str) -> list[dict[str, Any]]:
     if not patient:
         return []
     return patient.get("cases", [])
+
+
+def _name_from_email(email: str) -> str:
+    local = (email or "").split("@", 1)[0]
+    local = local.replace(".", " ").replace("_", " ").replace("-", " ")
+    parts = [part for part in local.split() if part]
+    if not parts:
+        return (email or "").strip() or "New profile"
+    return " ".join(part[:1].upper() + part[1:] for part in parts)
+
+
+def find_owned_patient(username: str) -> dict[str, Any] | None:
+    """Patient profile that belongs to this sign-in, if one has been created."""
+    needle = (username or "").strip().lower()
+    if not needle:
+        return None
+    reg = load_registry()
+    for patient in reg.get("patients") or []:
+        if str(patient.get("owner") or "").strip().lower() == needle:
+            return patient
+    return None
+
+
+def ensure_owned_patient(username: str) -> dict[str, Any]:
+    """Return this sign-in's own profile, creating it and a default case if needed."""
+    email = (username or "").strip()
+    patient = find_owned_patient(email)
+    if patient is None:
+        created = create_patient(_name_from_email(email))
+        reg = load_registry()
+        patient = _find_patient(reg, created["id"])
+        if patient is None:
+            raise ValueError("Could not create a profile")
+        patient["owner"] = email
+        save_registry(reg)
+    if not patient.get("cases"):
+        created_case = create_case(patient["id"], "Ongoing Health")
+        if created_case is None:
+            raise ValueError("Could not create the Ongoing Health case")
+        reg = load_registry()
+        patient = _find_patient(reg, patient["id"]) or patient
+    return patient
 
 
 def create_case(patient_id: str, label: str) -> dict[str, Any] | None:
