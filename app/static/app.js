@@ -2240,7 +2240,11 @@ function isLogTileVisible(def) {
   return true;
 }
 
-function resolveLogTileOrder(profile = state.patientProfile) {
+function hiddenLogTileSet(profile = state.patientProfile) {
+  return new Set((profile?.log_tile_hidden || []).map((key) => String(key)));
+}
+
+function resolveLogTileOrder(profile = state.patientProfile, { includeHidden = false } = {}) {
   if (!state.activePatientId) return [];
   if (state.patientProfileId && state.patientProfileId !== state.activePatientId) return [];
   const source = profile || {};
@@ -2259,7 +2263,11 @@ function resolveLogTileOrder(profile = state.patientProfile) {
   for (const key of customKeys) {
     if (!ordered.includes(key)) ordered.push(key);
   }
-  return ordered.filter((key) => isLogTileVisible(resolveLogTileDef(key, source)));
+  return ordered.filter((key) => {
+    if (!isLogTileVisible(resolveLogTileDef(key, source))) return false;
+    if (!includeHidden && hiddenLogTileSet(source).has(key)) return false;
+    return true;
+  });
 }
 
 function emptyPatientCopy(readyCopy) {
@@ -2312,7 +2320,7 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
     return;
   }
   const who = state.activePatientLabel ? ` for ${state.activePatientLabel}` : " for this person";
-  const order = resolveLogTileOrder(profile);
+  const order = resolveLogTileOrder(profile, { includeHidden: true });
   if (!order.length) {
     el.innerHTML = `<p class="muted small">No tiles yet.</p>`;
     return;
@@ -2323,21 +2331,24 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
     .map((key, index) => {
       const def = resolveLogTileDef(key, profile);
       if (!def) return "";
+      const hidden = hiddenLogTileSet(profile).has(key);
       const meta = def.mode === "scale" ? "scale" : def.mode === "open" ? "choose" : "1 tap";
+      const hideBtn = `<button type="button" class="btn ghost btn-sm btn-hide-log-tile" data-key="${escapeHtml(key)}" data-hidden="${hidden ? "1" : "0"}">${hidden ? "Show" : "Hide"}</button>`;
       const removeBtn = def.custom
         ? `<button type="button" class="btn ghost btn-sm btn-rename-log-tile" data-id="${escapeHtml(def.customId)}" data-label="${escapeHtml(def.label)}">Rename</button>
            <button type="button" class="btn ghost btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">Remove</button>`
         : "";
-      return `<div class="log-tile-order-row" data-key="${escapeHtml(key)}">
+      return `<div class="log-tile-order-row${hidden ? " is-hidden" : ""}" data-key="${escapeHtml(key)}">
         <div class="log-tile-order-main">
           <strong>${escapeHtml(def.label)}</strong>
-          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}</span>
+          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}${hidden ? " · hidden" : ""}</span>
         </div>
         <div class="log-tile-order-actions">
           <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="top" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move to top" title="Move to top">⤒</button>
           <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move up" title="Move up">↑</button>
           <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move down" title="Move down">↓</button>
           <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="bottom" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move to bottom" title="Move to bottom">⤓</button>
+          ${hideBtn}
           ${removeBtn}
         </div>
       </div>`;
@@ -2423,7 +2434,7 @@ async function moveLogTile(key, dir) {
   if (!patientId) return;
   if (state.patientProfileId && state.patientProfileId !== patientId) return;
   const profile = state.patientProfile || {};
-  const order = resolveLogTileOrder(profile);
+  const order = resolveLogTileOrder(profile, { includeHidden: true });
   const idx = order.indexOf(key);
   if (idx < 0) return;
   const next = order.slice();
@@ -12290,7 +12301,8 @@ function logTilesFingerprint(profile) {
   if (!profile) return "";
   const order = profile.log_tile_order || [];
   const custom = profile.log_custom_tiles || [];
-  return `${JSON.stringify(order)}|${JSON.stringify(custom)}`;
+  const hidden = profile.log_tile_hidden || [];
+  return `${JSON.stringify(order)}|${JSON.stringify(custom)}|${JSON.stringify(hidden)}`;
 }
 
 function observationsFingerprint(observations) {
@@ -14743,6 +14755,25 @@ document.getElementById("add-log-option-label")?.addEventListener("keydown", (ev
 });
 
 document.getElementById("log-tiles-order-list")?.addEventListener("click", async (event) => {
+  const hideBtn = event.target.closest(".btn-hide-log-tile");
+  if (hideBtn) {
+    if (!state.activePatientId) return;
+    const key = hideBtn.getAttribute("data-key");
+    if (!key) return;
+    const hidden = hideBtn.getAttribute("data-hidden") !== "1";
+    const res = await fetch(`/api/patients/${state.activePatientId}/log-tiles/visibility`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, hidden }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return toast(err.detail || "Could not update tile", "error");
+    }
+    applyProfileResponse(await res.json());
+    toast(hidden ? "Hidden from Home Log" : "Shown on Home Log");
+    return;
+  }
   const moveBtn = event.target.closest(".btn-move-log-tile");
   if (moveBtn) {
     const key = moveBtn.getAttribute("data-key");

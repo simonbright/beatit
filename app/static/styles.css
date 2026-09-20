@@ -752,6 +752,10 @@ body {
   flex-shrink: 0;
 }
 
+.log-tile-order-row.is-hidden {
+  opacity: 0.72;
+}
+
 .log-tile-order-scope {
   margin: 0 0 0.55rem;
   width: 100%;

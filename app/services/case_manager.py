@@ -170,6 +170,7 @@ def _empty_profile() -> dict[str, Any]:
         "food_drinks": _default_food_drinks(),
         "log_custom_tiles": [],
         "log_tile_order": [],
+        "log_tile_hidden": [],
         "milestones": [],
         "medication_safety": None,
     }
@@ -288,6 +289,13 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
         ]
     else:
         profile["log_tile_order"] = []
+    hidden_raw = data.get("log_tile_hidden")
+    if isinstance(hidden_raw, list):
+        profile["log_tile_hidden"] = [
+            str(k).strip() for k in hidden_raw if isinstance(k, str) and str(k).strip()
+        ][:80]
+    else:
+        profile["log_tile_hidden"] = []
     milestones = data.get("milestones") or []
     if isinstance(milestones, list):
         profile["milestones"] = sorted(
@@ -350,6 +358,11 @@ def save_patient_profile(
             for k in (profile.get("log_tile_order") or [])
             if isinstance(k, str) and str(k).strip()
         ],
+        "log_tile_hidden": [
+            str(k).strip()
+            for k in (profile.get("log_tile_hidden") or [])
+            if isinstance(k, str) and str(k).strip()
+        ][:80],
         "milestones": [
             m for m in (profile.get("milestones") or []) if isinstance(m, dict)
         ],
@@ -1486,6 +1499,9 @@ def delete_patient_log_tile(patient_id: str, tile_id: str) -> bool:
     profile["log_tile_order"] = [
         k for k in (profile.get("log_tile_order") or []) if k != custom_key
     ]
+    profile["log_tile_hidden"] = [
+        k for k in (profile.get("log_tile_hidden") or []) if k != custom_key
+    ]
     save_patient_profile(patient_id, profile)
     return True
 
@@ -1538,6 +1554,27 @@ def set_patient_log_tile_order(patient_id: str, order: list[str]) -> list[str] |
     profile["log_tile_order"] = cleaned
     saved = save_patient_profile(patient_id, profile)
     return list(saved.get("log_tile_order") or [])
+
+
+def set_patient_log_tile_hidden(patient_id: str, key: str, hidden: bool) -> list[str] | None:
+    """Hide a Home Log tile from display, or show it again. Does not delete it."""
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned = str(key or "").strip()
+    if not cleaned or len(cleaned) > 80:
+        raise ValueError("Tile is required")
+    profile = get_patient_profile(patient_id)
+    keys = [
+        str(k).strip()
+        for k in (profile.get("log_tile_hidden") or [])
+        if isinstance(k, str) and str(k).strip() and str(k).strip() != cleaned
+    ]
+    if hidden:
+        keys.append(cleaned)
+    profile["log_tile_hidden"] = keys[:80]
+    saved = save_patient_profile(patient_id, profile)
+    return list(saved.get("log_tile_hidden") or [])
 
 
 def group_journal_for_charts(

@@ -188,6 +188,7 @@ from app.services.case_manager import (
     delete_patient_log_tile,
     rename_patient_log_tile,
     set_patient_log_tile_order,
+    set_patient_log_tile_hidden,
     add_patient_milestone,
     update_patient_milestone,
     delete_patient_milestone,
@@ -4260,6 +4261,11 @@ class PatientLogTileOrderRequest(BaseModel):
     order: list[str] = Field(default_factory=list, max_length=80)
 
 
+class PatientLogTileVisibilityRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=80)
+    hidden: bool = True
+
+
 class PatientLogTileRenameRequest(BaseModel):
     label: str = Field(min_length=1, max_length=80)
 
@@ -4306,6 +4312,22 @@ async def api_set_patient_log_tile_order(patient_id: str, body: PatientLogTileOr
         raise HTTPException(status_code=404, detail="Patient not found")
     payload = _patient_profile_payload(patient_id)
     payload["order"] = order
+    return payload
+
+
+@router.put("/patients/{patient_id}/log-tiles/visibility")
+async def api_set_patient_log_tile_visibility(
+    patient_id: str,
+    body: PatientLogTileVisibilityRequest,
+):
+    try:
+        hidden = set_patient_log_tile_hidden(patient_id, body.key, body.hidden)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if hidden is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    payload = _patient_profile_payload(patient_id)
+    payload["hidden"] = hidden
     return payload
 
 
