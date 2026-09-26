@@ -2320,34 +2320,44 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
     return;
   }
   const who = state.activePatientLabel ? ` for ${state.activePatientLabel}` : " for this person";
-  const order = resolveLogTileOrder(profile, { includeHidden: true });
+  const hidden = hiddenLogTileSet(profile);
+  const all = resolveLogTileOrder(profile, { includeHidden: true });
+  const order = [
+    ...all.filter((key) => !hidden.has(key)),
+    ...all.filter((key) => hidden.has(key)),
+  ];
   if (!order.length) {
     el.innerHTML = `<p class="muted small">No tiles yet.</p>`;
     return;
   }
+  const visibleCount = order.filter((key) => !hidden.has(key)).length;
   el.innerHTML =
-    `<p class="muted small log-tile-order-scope">Order is saved per person${escapeHtml(who)}.</p>` +
+    `<p class="muted small log-tile-order-scope">Order is saved per person${escapeHtml(who)}. Hidden tiles stay below and do not appear on Home Log.</p>` +
     order
     .map((key, index) => {
       const def = resolveLogTileDef(key, profile);
       if (!def) return "";
-      const hidden = hiddenLogTileSet(profile).has(key);
+      const isHidden = hidden.has(key);
       const meta = def.mode === "scale" ? "scale" : def.mode === "open" ? "choose" : "1 tap";
-      const hideBtn = `<button type="button" class="btn ghost btn-sm btn-hide-log-tile" data-key="${escapeHtml(key)}" data-hidden="${hidden ? "1" : "0"}">${hidden ? "Show" : "Hide"}</button>`;
+      const hideBtn = `<button type="button" class="btn ghost btn-sm btn-hide-log-tile" data-key="${escapeHtml(key)}" data-hidden="${isHidden ? "1" : "0"}">${isHidden ? "Show" : "Hide"}</button>`;
       const removeBtn = def.custom
         ? `<button type="button" class="btn ghost btn-sm btn-rename-log-tile" data-id="${escapeHtml(def.customId)}" data-label="${escapeHtml(def.label)}">Rename</button>
            <button type="button" class="btn ghost btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">Remove</button>`
         : "";
-      return `<div class="log-tile-order-row${hidden ? " is-hidden" : ""}" data-key="${escapeHtml(key)}">
+      const group = isHidden ? order.slice(visibleCount) : order.slice(0, visibleCount);
+      const groupIdx = group.indexOf(key);
+      const atTop = groupIdx <= 0;
+      const atBottom = groupIdx < 0 || groupIdx >= group.length - 1;
+      return `<div class="log-tile-order-row${isHidden ? " is-hidden" : ""}" data-key="${escapeHtml(key)}">
         <div class="log-tile-order-main">
           <strong>${escapeHtml(def.label)}</strong>
-          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}${hidden ? " · hidden" : ""}</span>
+          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}${isHidden ? " · hidden" : ""}</span>
         </div>
         <div class="log-tile-order-actions">
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="top" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move to top" title="Move to top">⤒</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${index === 0 ? "disabled" : ""} aria-label="Move up" title="Move up">↑</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move down" title="Move down">↓</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="bottom" data-key="${escapeHtml(key)}" ${index === order.length - 1 ? "disabled" : ""} aria-label="Move to bottom" title="Move to bottom">⤓</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="top" data-key="${escapeHtml(key)}" ${atTop ? "disabled" : ""} aria-label="Move to top" title="Move to top">⤒</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${atTop ? "disabled" : ""} aria-label="Move up" title="Move up">↑</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${atBottom ? "disabled" : ""} aria-label="Move down" title="Move down">↓</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="bottom" data-key="${escapeHtml(key)}" ${atBottom ? "disabled" : ""} aria-label="Move to bottom" title="Move to bottom">⤓</button>
           ${hideBtn}
           ${removeBtn}
         </div>
@@ -2434,26 +2444,37 @@ async function moveLogTile(key, dir) {
   if (!patientId) return;
   if (state.patientProfileId && state.patientProfileId !== patientId) return;
   const profile = state.patientProfile || {};
-  const order = resolveLogTileOrder(profile, { includeHidden: true });
-  const idx = order.indexOf(key);
+  const hidden = hiddenLogTileSet(profile);
+  const all = resolveLogTileOrder(profile, { includeHidden: true });
+  // Reorder within visible or hidden only. Swapping past a hidden tile was a
+  // no-op on Home Log, so the saved order looked ignored.
+  const movingHidden = hidden.has(key);
+  const group = all.filter((k) => hidden.has(k) === movingHidden);
+  const idx = group.indexOf(key);
   if (idx < 0) return;
-  const next = order.slice();
+  const nextGroup = group.slice();
   if (dir === "top") {
     if (idx === 0) return;
-    next.splice(idx, 1);
-    next.unshift(key);
+    nextGroup.splice(idx, 1);
+    nextGroup.unshift(key);
   } else if (dir === "bottom") {
-    if (idx >= order.length - 1) return;
-    next.splice(idx, 1);
-    next.push(key);
+    if (idx >= group.length - 1) return;
+    nextGroup.splice(idx, 1);
+    nextGroup.push(key);
   } else {
     const swap = dir === "up" ? idx - 1 : idx + 1;
-    if (swap < 0 || swap >= order.length) return;
-    [next[idx], next[swap]] = [next[swap], next[idx]];
+    if (swap < 0 || swap >= group.length) return;
+    [nextGroup[idx], nextGroup[swap]] = [nextGroup[swap], nextGroup[idx]];
   }
+  const visible = movingHidden
+    ? all.filter((k) => !hidden.has(k))
+    : nextGroup;
+  const hiddenKeys = movingHidden
+    ? nextGroup
+    : all.filter((k) => hidden.has(k));
   const customKeys = getCustomLogTiles(profile).map((t) => customLogTileKey(t.id));
   const known = [...DEFAULT_LOG_TILE_ORDER, ...customKeys];
-  const saved = [...next];
+  const saved = [...visible, ...hiddenKeys];
   for (const k of known) {
     if (!saved.includes(k)) saved.push(k);
   }
@@ -10912,6 +10933,36 @@ function actionSelected(label) {
   );
 }
 
+function orderJournalChipsByLogTiles(chips, { kinds } = {}) {
+  const list = Array.isArray(chips) ? chips.slice() : [];
+  if (!list.length) return list;
+  const byLabel = new Map();
+  for (const chip of list) {
+    const label = String(chip.label || "").trim().toLowerCase();
+    if (!label || byLabel.has(label)) continue;
+    byLabel.set(label, chip);
+  }
+  const ordered = [];
+  const used = new Set();
+  for (const key of resolveLogTileOrder(state.patientProfile, { includeHidden: true })) {
+    const def = resolveLogTileDef(key);
+    if (!def || def.mode === "open") continue;
+    if (kinds && !kinds.has(def.kind)) continue;
+    const label = String(def.label || "").trim().toLowerCase();
+    const hit = byLabel.get(label);
+    if (!hit || used.has(label)) continue;
+    ordered.push(hit);
+    used.add(label);
+  }
+  for (const chip of list) {
+    const label = String(chip.label || "").trim().toLowerCase();
+    if (!label || used.has(label)) continue;
+    ordered.push(chip);
+    used.add(label);
+  }
+  return ordered;
+}
+
 function ensureJournalChips() {
   const feelingEl = document.getElementById("journal-feeling-chips");
   const actionEl = document.getElementById("journal-action-chips");
@@ -10921,10 +10972,19 @@ function ensureJournalChips() {
   const normalized = presets.map((p) =>
     p.label === "Ate" ? { ...p, label: "Ate/Drank" } : p
   );
-  const sig = normalized.map((p) => `${p.kind}:${p.label}`).join("|");
+  const feelings = orderJournalChipsByLogTiles(
+    normalized.filter((p) => p.kind === "symptom" || p.kind === "feeling"),
+    { kinds: new Set(["symptom", "feeling"]) }
+  );
+  const actions = orderJournalChipsByLogTiles(
+    normalized.filter((p) => p.kind === "medication" || p.kind === "note"),
+    { kinds: new Set(["medication", "note"]) }
+  );
+  const tileOrder = resolveLogTileOrder(state.patientProfile, { includeHidden: true }).join("|");
+  const sig = `${tileOrder}::${feelings.map((p) => `${p.kind}:${p.label}`).join("|")}::${actions
+    .map((p) => `${p.kind}:${p.label}`)
+    .join("|")}`;
   if (feelingEl.dataset.sig !== sig) {
-    const feelings = normalized.filter((p) => p.kind === "symptom" || p.kind === "feeling");
-    const actions = normalized.filter((p) => p.kind === "medication" || p.kind === "note");
     const chipHtml = (p) =>
       `<button type="button" class="journal-chip" data-kind="${escapeHtml(p.kind)}" data-label="${escapeHtml(p.label)}">${escapeHtml(p.label)}</button>`;
     feelingEl.innerHTML = feelings.map(chipHtml).join("");
@@ -10982,26 +11042,21 @@ function updateJournalAddToListHint() {
 function renderJournalMedChips() {
   const wrap = document.getElementById("journal-med-options");
   const el = document.getElementById("journal-med-chips");
-  const hiddenWrap = document.getElementById("journal-med-hidden");
-  const hiddenEl = document.getElementById("journal-med-hidden-chips");
   const hint = document.getElementById("journal-med-hint");
   if (!wrap || !el) return;
   const show = actionSelected("Took medication");
   wrap.classList.toggle("hidden", !show);
-  if (!show) {
-    hiddenWrap?.classList.add("hidden");
-    return;
-  }
+  if (!show) return;
 
   const onLogMeds = activePatientMedicationsForLog();
-  const hiddenMeds = activePatientMedicationsHiddenFromLog();
+  const hiddenCount = activePatientMedicationsHiddenFromLog().length;
   const draft = state.journalDraft || emptyJournalDraft();
 
-  // Only this person's meds with Show on Log — no shared quick-picks
+  // Only meds with Show on Log. Hidden ones stay in Settings — not here.
   const seen = new Set();
   const chips = [];
   for (const m of onLogMeds) {
-    const name = String(m.name || "").trim();
+    const name = medicationPreferredName(m);
     const key = name.toLowerCase();
     if (!name || seen.has(key)) continue;
     seen.add(key);
@@ -11011,33 +11066,13 @@ function renderJournalMedChips() {
   }
   el.innerHTML =
     chips.join("") ||
-    `<span class="muted small">None on Log for this person yet — type a name in Details and check Add to my medications list, or enable Show on Log in Settings.</span>`;
+    `<span class="muted small">None marked Show on Log yet. Use Manage meds &amp; Show on Log to choose which appear here.</span>`;
 
   if (hint) {
     const bits = [];
     if (onLogMeds.length) bits.push(`${chips.length} on Log`);
-    if (hiddenMeds.length) bits.push(`${hiddenMeds.length} on list but hidden`);
+    if (hiddenCount) bits.push(`${hiddenCount} hidden in Settings`);
     hint.textContent = bits.length ? `(${bits.join(" · ")})` : "";
-  }
-
-  if (hiddenWrap && hiddenEl) {
-    if (hiddenMeds.length) {
-      hiddenWrap.classList.remove("hidden");
-      const hiddenSeen = new Set();
-      hiddenEl.innerHTML = hiddenMeds
-        .map((m) => {
-          const name = String(m.name || "").trim();
-          const key = name.toLowerCase();
-          if (!name || hiddenSeen.has(key)) return "";
-          hiddenSeen.add(key);
-          return `<button type="button" class="journal-chip" data-enable-log="${escapeHtml(m.id || "")}" data-med-name="${escapeHtml(name)}" title="Show on Log and select">${escapeHtml(name)}</button>`;
-        })
-        .filter(Boolean)
-        .join("");
-    } else {
-      hiddenWrap.classList.add("hidden");
-      hiddenEl.innerHTML = "";
-    }
   }
 
   document.querySelectorAll("#journal-med-chips .journal-chip[data-med]").forEach((btn) => {
@@ -14896,12 +14931,8 @@ document.getElementById("journal-feeling-chips")?.addEventListener("click", (eve
   const chip = event.target.closest(".journal-chip");
   if (!chip) return;
   const label = chip.dataset.label || "";
-  const scaleKey = resolveQuickScaleKey(label);
-  // Scale-required items open the 1–5 severity bar immediately.
-  if (scaleKey) {
-    openQuickScale(scaleKey);
-    return;
-  }
+  // Stay in the Feel sheet so more than one chip can be selected. Home Log
+  // tiles that need a 1–5 scale still open the severity bar on their own.
   const draft = state.journalDraft || emptyJournalDraft();
   draft.feelings = toggleJournalSelection(draft.feelings || [], {
     kind: chip.dataset.kind || "feeling",
@@ -14939,38 +14970,6 @@ document.getElementById("journal-med-chips")?.addEventListener("click", (event) 
   draft.medChoices = toggleStringChoice(draft.medChoices || [], chip.dataset.med);
   state.journalDraft = draft;
   updateJournalDraftUi();
-});
-
-document.getElementById("journal-med-hidden-chips")?.addEventListener("click", async (event) => {
-  const chip = event.target.closest("[data-enable-log]");
-  if (!chip || !state.activePatientId) return;
-  const id = chip.dataset.enableLog;
-  const name = (chip.dataset.medName || "").trim();
-  if (!id) return;
-  chip.disabled = true;
-  try {
-    const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ show_on_log: true }),
-    });
-    if (!res.ok) {
-      toast("Could not show on Log", "error");
-      return;
-    }
-    applyProfileResponse(await res.json());
-    const draft = state.journalDraft || emptyJournalDraft();
-    if (name && !(draft.medChoices || []).includes(name)) {
-      draft.medChoices = [...(draft.medChoices || []), name];
-    }
-    state.journalDraft = draft;
-    updateJournalDraftUi();
-    toast(`${name || "Medication"} shown on Log`);
-  } catch (err) {
-    toast(err.message || "Could not update", "error");
-  } finally {
-    chip.disabled = false;
-  }
 });
 
 document.getElementById("btn-journal-meds-settings")?.addEventListener("click", () => {
