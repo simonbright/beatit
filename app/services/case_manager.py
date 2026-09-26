@@ -306,7 +306,15 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
-    if units_changed or dates_changed:
+    tiles_cleaned = False
+    for tile in list(profile.get("log_custom_tiles") or []):
+        if not isinstance(tile, dict):
+            continue
+        label = str(tile.get("label") or "")
+        if custom_log_tile_is_medication_duplicate(label, profile):
+            if _remove_custom_log_tiles_matching_label(profile, label):
+                tiles_cleaned = True
+    if units_changed or dates_changed or tiles_cleaned:
         try:
             # Write without reloading — reload would re-enter this path.
             save_patient_profile(patient_id, profile, reload=False)
@@ -1150,6 +1158,9 @@ def add_patient_medication(
 
     apply_identity_fields(entry)
     profile.setdefault("medications", []).append(entry)
+    _remove_custom_log_tiles_matching_label(profile, entry.get("name") or "")
+    if entry.get("official_name"):
+        _remove_custom_log_tiles_matching_label(profile, entry.get("official_name") or "")
     saved = save_patient_profile(patient_id, profile)
     return next((m for m in saved["medications"] if m["id"] == entry["id"]), entry)
 
@@ -1160,23 +1171,10 @@ def _sync_log_tiles_for_medication_rename(
     old_name: str,
     new_name: str,
 ) -> bool:
-    """Rename Home Log custom tiles that matched the old medication name."""
-    old_key = _normalize_log_tile_label(old_name).lower()
-    new_label = _normalize_log_tile_label(new_name)
-    if not old_key or not new_label or old_key == new_label.lower():
-        return False
-    tiles = list(profile.get("log_custom_tiles") or [])
-    changed = False
-    for tile in tiles:
-        if not isinstance(tile, dict):
-            continue
-        label = _normalize_log_tile_label(str(tile.get("label") or ""))
-        if label.lower() != old_key:
-            continue
-        tile["label"] = new_label
+    """Remove Home Log tiles that duplicated the medication name (legacy cleanup)."""
+    changed = _remove_custom_log_tiles_matching_label(profile, old_name)
+    if _remove_custom_log_tiles_matching_label(profile, new_name):
         changed = True
-    if changed:
-        profile["log_custom_tiles"] = tiles
     return changed
 
 
@@ -1275,12 +1273,11 @@ def update_patient_medication(
     apply_identity_fields(med)
     meds[idx] = med
     profile["medications"] = meds
-    if name is not None and old_name and old_name.lower() != str(med.get("name") or "").lower():
-        _sync_log_tiles_for_medication_rename(
-            profile,
-            old_name=old_name,
-            new_name=str(med.get("name") or ""),
-        )
+    # Medications belong under Meds / Show on Log — drop duplicate Home Log tiles.
+    _remove_custom_log_tiles_matching_label(profile, old_name)
+    _remove_custom_log_tiles_matching_label(profile, str(med.get("name") or ""))
+    if med.get("official_name"):
+        _remove_custom_log_tiles_matching_label(profile, str(med.get("official_name") or ""))
     saved = save_patient_profile(patient_id, profile)
     return next((m for m in saved["medications"] if m["id"] == medication_id), med)
 
@@ -1403,6 +1400,67 @@ def _normalize_log_tile_label(label: str) -> str:
     return cleaned[:80]
 
 
+def medication_home_log_labels(profile: dict[str, Any] | None = None) -> set[str]:
+    """Labels that belong under Meds (Show on Log), not as Home Log tiles."""
+    labels: set[str] = set()
+    for remedy in COMMON_REMEDIES:
+        name = _normalize_log_tile_label(str(remedy.get("name") or ""))
+        if name:
+            labels.add(name.lower())
+    for med in (profile or {}).get("medications") or []:
+        if not isinstance(med, dict):
+            continue
+        if (med.get("status") or "active") == "stopped" or med.get("ended_at"):
+            continue
+        for raw in (med.get("name"), med.get("official_name")):
+            name = _normalize_log_tile_label(str(raw or ""))
+            if name:
+                labels.add(name.lower())
+    return labels
+
+
+def custom_log_tile_is_medication_duplicate(
+    label: str,
+    profile: dict[str, Any] | None = None,
+) -> bool:
+    cleaned = _normalize_log_tile_label(label)
+    if not cleaned:
+        return False
+    return cleaned.lower() in medication_home_log_labels(profile)
+
+
+def _remove_custom_log_tiles_matching_label(
+    profile: dict[str, Any],
+    label: str,
+) -> bool:
+    """Drop Home Log custom tiles that duplicate a medication/remedy name."""
+    needle = _normalize_log_tile_label(label).lower()
+    if not needle:
+        return False
+    tiles = list(profile.get("log_custom_tiles") or [])
+    keep: list[dict[str, Any]] = []
+    removed_ids: list[str] = []
+    for tile in tiles:
+        if not isinstance(tile, dict):
+            continue
+        tile_label = _normalize_log_tile_label(str(tile.get("label") or ""))
+        if tile_label.lower() == needle:
+            removed_ids.append(str(tile.get("id") or ""))
+            continue
+        keep.append(tile)
+    if not removed_ids:
+        return False
+    profile["log_custom_tiles"] = keep
+    drop_keys = {f"custom:{tid}" for tid in removed_ids if tid}
+    profile["log_tile_order"] = [
+        k for k in (profile.get("log_tile_order") or []) if k not in drop_keys
+    ]
+    profile["log_tile_hidden"] = [
+        k for k in (profile.get("log_tile_hidden") or []) if k not in drop_keys
+    ]
+    return True
+
+
 def _normalize_log_custom_tiles(raw: Any) -> list[dict[str, Any]]:
     from uuid import uuid4
 
@@ -1453,6 +1511,10 @@ def add_patient_log_tile(
     if not cleaned:
         raise ValueError("Option name is required")
     profile = get_patient_profile(patient_id)
+    if custom_log_tile_is_medication_duplicate(cleaned, profile):
+        raise ValueError(
+            "That name is a medication or remedy. Add it under Medications and turn on Show on Log — it will appear under Meds, not as its own Home Log tile."
+        )
     tiles = list(profile.get("log_custom_tiles") or [])
     existing = next(
         (t for t in tiles if str(t.get("label") or "").lower() == cleaned.lower()),

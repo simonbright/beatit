@@ -2234,9 +2234,48 @@ function resolveLogTileDef(key, profile = state.patientProfile) {
   };
 }
 
-function isLogTileVisible(def) {
+function medicationHomeLogLabels(profile = state.patientProfile) {
+  const labels = new Set();
+  const remedies = Array.isArray(state.commonRemedies) ? state.commonRemedies : [];
+  for (const remedy of remedies) {
+    const name = String(remedy?.name || "").trim().toLowerCase();
+    if (name) labels.add(name);
+  }
+  // Fallback if remedies have not loaded yet — keep CBD / MoM etc. off Home Log.
+  for (const name of [
+    "cbd 1 drop",
+    "cbd 2 drops",
+    "magnesium",
+    "melatonin",
+    "mom (milk of magnesia)",
+    "ibuprofen",
+    "acetaminophen",
+    "vitamin d",
+  ]) {
+    labels.add(name);
+  }
+  for (const med of profile?.medications || []) {
+    if (!med || (med.status || "active") === "stopped" || med.ended_at) continue;
+    for (const raw of [med.name, med.official_name]) {
+      const name = String(raw || "").trim().toLowerCase();
+      if (name) labels.add(name);
+    }
+  }
+  return labels;
+}
+
+function customLogTileIsMedicationDuplicate(def, profile = state.patientProfile) {
+  if (!def?.custom) return false;
+  const label = String(def.label || "").trim().toLowerCase();
+  if (!label) return false;
+  return medicationHomeLogLabels(profile).has(label);
+}
+
+function isLogTileVisible(def, profile = state.patientProfile) {
   if (!def) return false;
   if (def.forPatient === "susan") return isSusanPatient();
+  // Medications / remedies belong under Meds with Show on Log — not as Home tiles.
+  if (customLogTileIsMedicationDuplicate(def, profile)) return false;
   return true;
 }
 
@@ -2244,7 +2283,10 @@ function hiddenLogTileSet(profile = state.patientProfile) {
   return new Set((profile?.log_tile_hidden || []).map((key) => String(key)));
 }
 
-function resolveLogTileOrder(profile = state.patientProfile, { includeHidden = false } = {}) {
+function resolveLogTileOrder(
+  profile = state.patientProfile,
+  { includeHidden = false, includeMedDuplicates = false } = {}
+) {
   if (!state.activePatientId) return [];
   if (state.patientProfileId && state.patientProfileId !== state.activePatientId) return [];
   const source = profile || {};
@@ -2264,7 +2306,10 @@ function resolveLogTileOrder(profile = state.patientProfile, { includeHidden = f
     if (!ordered.includes(key)) ordered.push(key);
   }
   return ordered.filter((key) => {
-    if (!isLogTileVisible(resolveLogTileDef(key, source))) return false;
+    const def = resolveLogTileDef(key, source);
+    if (!def) return false;
+    if (def.forPatient === "susan" && !isSusanPatient()) return false;
+    if (!includeMedDuplicates && customLogTileIsMedicationDuplicate(def, source)) return false;
     if (!includeHidden && hiddenLogTileSet(source).has(key)) return false;
     return true;
   });
@@ -2321,43 +2366,65 @@ function renderLogTilesOrderSettings(profile = state.patientProfile) {
   }
   const who = state.activePatientLabel ? ` for ${state.activePatientLabel}` : " for this person";
   const hidden = hiddenLogTileSet(profile);
-  const all = resolveLogTileOrder(profile, { includeHidden: true });
+  const all = resolveLogTileOrder(profile, { includeHidden: true, includeMedDuplicates: true });
+  const medDupKeys = new Set(
+    all.filter((key) => customLogTileIsMedicationDuplicate(resolveLogTileDef(key, profile), profile))
+  );
   const order = [
-    ...all.filter((key) => !hidden.has(key)),
-    ...all.filter((key) => hidden.has(key)),
+    ...all.filter((key) => !hidden.has(key) && !medDupKeys.has(key)),
+    ...all.filter((key) => medDupKeys.has(key)),
+    ...all.filter((key) => hidden.has(key) && !medDupKeys.has(key)),
   ];
   if (!order.length) {
     el.innerHTML = `<p class="muted small">No tiles yet.</p>`;
     return;
   }
-  const visibleCount = order.filter((key) => !hidden.has(key)).length;
+  const visibleCount = order.filter((key) => !hidden.has(key) && !medDupKeys.has(key)).length;
+  const medDupCount = medDupKeys.size;
   el.innerHTML =
-    `<p class="muted small log-tile-order-scope">Order is saved per person${escapeHtml(who)}. Hidden tiles stay below and do not appear on Home Log.</p>` +
+    `<p class="muted small log-tile-order-scope">Order is saved per person${escapeHtml(who)}. Medications and remedies (like CBD) belong under Medications with Show on Log — not as Home Log tiles.${
+      medDupCount
+        ? ` ${medDupCount} duplicate med tile${medDupCount === 1 ? "" : "s"} listed below — remove them.`
+        : ""
+    }</p>` +
     order
-    .map((key, index) => {
+    .map((key) => {
       const def = resolveLogTileDef(key, profile);
       if (!def) return "";
       const isHidden = hidden.has(key);
-      const meta = def.mode === "scale" ? "scale" : def.mode === "open" ? "choose" : "1 tap";
-      const hideBtn = `<button type="button" class="btn ghost btn-sm btn-hide-log-tile" data-key="${escapeHtml(key)}" data-hidden="${isHidden ? "1" : "0"}">${isHidden ? "Show" : "Hide"}</button>`;
+      const isMedDup = medDupKeys.has(key);
+      const meta = isMedDup
+        ? "use Meds · Show on Log"
+        : def.mode === "scale"
+          ? "scale"
+          : def.mode === "open"
+            ? "choose"
+            : "1 tap";
+      const hideBtn = isMedDup
+        ? ""
+        : `<button type="button" class="btn ghost btn-sm btn-hide-log-tile" data-key="${escapeHtml(key)}" data-hidden="${isHidden ? "1" : "0"}">${isHidden ? "Show" : "Hide"}</button>`;
       const removeBtn = def.custom
         ? `<button type="button" class="btn ghost btn-sm btn-rename-log-tile" data-id="${escapeHtml(def.customId)}" data-label="${escapeHtml(def.label)}">Rename</button>
-           <button type="button" class="btn ghost btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">Remove</button>`
+           <button type="button" class="btn ${isMedDup ? "secondary" : "ghost"} btn-sm btn-delete-log-tile" data-id="${escapeHtml(def.customId)}">${isMedDup ? "Remove duplicate" : "Remove"}</button>`
         : "";
-      const group = isHidden ? order.slice(visibleCount) : order.slice(0, visibleCount);
+      const group = isMedDup
+        ? order.filter((k) => medDupKeys.has(k))
+        : isHidden
+          ? order.filter((k) => hidden.has(k) && !medDupKeys.has(k))
+          : order.slice(0, visibleCount);
       const groupIdx = group.indexOf(key);
       const atTop = groupIdx <= 0;
       const atBottom = groupIdx < 0 || groupIdx >= group.length - 1;
-      return `<div class="log-tile-order-row${isHidden ? " is-hidden" : ""}" data-key="${escapeHtml(key)}">
+      return `<div class="log-tile-order-row${isHidden || isMedDup ? " is-hidden" : ""}${isMedDup ? " is-med-duplicate" : ""}" data-key="${escapeHtml(key)}">
         <div class="log-tile-order-main">
           <strong>${escapeHtml(def.label)}</strong>
-          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}${isHidden ? " · hidden" : ""}</span>
+          <span class="muted small">${escapeHtml(meta)}${def.custom ? " · custom" : ""}${isHidden && !isMedDup ? " · hidden" : ""}</span>
         </div>
         <div class="log-tile-order-actions">
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="top" data-key="${escapeHtml(key)}" ${atTop ? "disabled" : ""} aria-label="Move to top" title="Move to top">⤒</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${atTop ? "disabled" : ""} aria-label="Move up" title="Move up">↑</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${atBottom ? "disabled" : ""} aria-label="Move down" title="Move down">↓</button>
-          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="bottom" data-key="${escapeHtml(key)}" ${atBottom ? "disabled" : ""} aria-label="Move to bottom" title="Move to bottom">⤓</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="top" data-key="${escapeHtml(key)}" ${atTop || isMedDup ? "disabled" : ""} aria-label="Move to top" title="Move to top">⤒</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="up" data-key="${escapeHtml(key)}" ${atTop || isMedDup ? "disabled" : ""} aria-label="Move up" title="Move up">↑</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="down" data-key="${escapeHtml(key)}" ${atBottom || isMedDup ? "disabled" : ""} aria-label="Move down" title="Move down">↓</button>
+          <button type="button" class="btn ghost btn-sm btn-move-log-tile" data-dir="bottom" data-key="${escapeHtml(key)}" ${atBottom || isMedDup ? "disabled" : ""} aria-label="Move to bottom" title="Move to bottom">⤓</button>
           ${hideBtn}
           ${removeBtn}
         </div>
@@ -2393,6 +2460,12 @@ async function saveAddLogOption() {
     (t) => String(t.label || "").toLowerCase() === label.toLowerCase()
   );
   if (builtinMatch) return toast("That option already exists as a built-in tile", "error");
+  if (medicationHomeLogLabels().has(label.toLowerCase())) {
+    return toast(
+      "That name is a medication or remedy. Add it under Medications and turn on Show on Log — it appears under Meds, not as its own Home Log tile.",
+      "error"
+    );
+  }
   const scale =
     document.querySelector('input[name="add-log-option-scale"]:checked')?.value === "yes";
   const btn = document.getElementById("btn-save-add-log-option");

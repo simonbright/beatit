@@ -756,6 +756,11 @@ body {
   opacity: 0.72;
 }
 
+.log-tile-order-row.is-med-duplicate {
+  border-color: color-mix(in srgb, #ca8a04 45%, var(--border));
+  background: color-mix(in srgb, #fef3c7 55%, var(--surface, #fff));
+}
+
 .log-tile-order-scope {
   margin: 0 0 0.55rem;
   width: 100%;
