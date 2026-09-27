@@ -13,6 +13,7 @@ CLINICAL_REPORT_KINDS = (
     "mri",
     "ultrasound",
     "ct",
+    "mammogram",
     "pathology",
     "cardiology",
     "other_report",
@@ -24,6 +25,7 @@ CLINICAL_REPORT_KIND_LABELS: dict[str, str] = {
     "mri": "MRI report",
     "ultrasound": "Ultrasound report",
     "ct": "CT report",
+    "mammogram": "Mammogram",
     "pathology": "Pathology report",
     "cardiology": "Cardiology report",
     "other_report": "Clinical report",
@@ -37,6 +39,7 @@ DIAGNOSTIC_CITATION_KINDS = frozenset(
         "mri",
         "ultrasound",
         "ct",
+        "mammogram",
         "pathology",
         "cardiology",
         "other_report",
@@ -71,11 +74,15 @@ _HEURISTIC_RULES: list[tuple[str, tuple[str, ...]]] = [
     ),
     (
         "ultrasound",
-        ("ultrasound", "sonograph", "sonogram", "doppler us", " us "),
+        ("ultrasound", "sonograph", "sonogram", "doppler us", " us ", "breast us"),
     ),
     (
         "ct",
         (" ct ", "ct scan", "ct chest", "ct abdomen", "computed tomography", "cat scan"),
+    ),
+    (
+        "mammogram",
+        ("mammogram", "mammography", "screening mammo", "diagnostic mammo", "tomosynthesis"),
     ),
     (
         "pathology",
@@ -105,11 +112,11 @@ _CLASSIFY_SYSTEM = (
 _CLASSIFY_USER = """Classify this clinical document.
 
 Return JSON:
-{{"kind": "<one of: lab, mri, ultrasound, ct, pathology, cardiology, other_report, unknown>", "confidence": <0.0-1.0>}}
+{{"kind": "<one of: lab, mri, ultrasound, ct, mammogram, pathology, cardiology, other_report, unknown>", "confidence": <0.0-1.0>}}
 
 Rules:
 - lab: laboratory / blood / chemistry / lipid / panel results with numeric assays
-- mri / ultrasound / ct: imaging interpretation reports for that modality
+- mri / ultrasound / ct / mammogram: imaging interpretation reports for that modality
 - pathology: biopsy / histology / cytology reports
 - cardiology: ECG, echo, stress test, Holter, cardiac cath (not general labs)
 - other_report: other clinical diagnostic reports that are not plain notes
@@ -136,6 +143,8 @@ def normalize_clinical_report_kind(value: Any) -> str:
         "us": "ultrasound",
         "sonography": "ultrasound",
         "sonogram": "ultrasound",
+        "mammo": "mammogram",
+        "mammography": "mammogram",
         "echo": "cardiology",
         "ecg": "cardiology",
         "ekg": "cardiology",

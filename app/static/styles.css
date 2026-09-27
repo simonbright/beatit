@@ -2877,6 +2877,27 @@ body {
   font-size: 1rem;
 }
 
+.diag-study-result {
+  margin: 0.35rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.diag-study-card .diag-chart-latest {
+  max-width: min(100%, 22rem);
+  text-align: right;
+}
+
+.diag-matrix-cell-text .diag-matrix-result {
+  font-size: 0.78rem;
+  line-height: 1.25;
+  white-space: normal;
+  max-width: 12rem;
+  display: inline-block;
+}
+
 .diagnostics-body.is-loading #diagnostics-loading {
   display: flex;
 }
@@ -3558,6 +3579,33 @@ textarea { resize: vertical; min-height: 100px; }
 
 .library-summary {
   margin: 0;
+}
+
+.library-loading {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+  min-height: 12rem;
+  padding: 2rem 1rem;
+}
+
+.library-loading-title {
+  margin: 0;
+  font-weight: 650;
+  font-size: 1rem;
+}
+
+#panel-library.is-loading #library-loading {
+  display: flex;
+}
+
+#panel-library.is-loading #documents-list,
+#panel-library.is-loading #library-pagination,
+#panel-library.is-loading #cross-case-section {
+  display: none !important;
 }
 
 .library-selection-bar {

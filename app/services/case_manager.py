@@ -539,7 +539,37 @@ def _infer_diagnostic_category(name: str, explicit: str | None = None) -> str:
     for preset in DIAGNOSTIC_PRESETS:
         if preset["name"].lower() == lower:
             return preset.get("category") or "blood"
-    if "calcium score" in lower or "agatston" in lower:
+    imaging_bits = (
+        "calcium score",
+        "agatston",
+        "ultrasound",
+        "sonograph",
+        "sonogram",
+        "mammogram",
+        "mammography",
+        "mri",
+        "magnetic resonance",
+        "ct scan",
+        "ct ",
+        "computed tomography",
+        "x-ray",
+        "xray",
+        "radiograph",
+        "pet ",
+        "nuclear medicine",
+        "bone density",
+        "dexa",
+        "dxa",
+        "echo",
+        "echocardiogram",
+        "holter",
+        "stress test",
+        "biopsy",
+        "pathology",
+        "histology",
+        "cytology",
+    )
+    if any(bit in lower for bit in imaging_bits):
         return "imaging"
     if "bp" in lower or "blood pressure" in lower:
         return "vital"
@@ -550,10 +580,11 @@ def add_patient_diagnostic(
     patient_id: str,
     *,
     name: str,
-    value: float,
+    value: float | None = None,
     recorded_at: str,
     unit: str | None = None,
     notes: str | None = None,
+    result: str | None = None,
     category: str | None = None,
     source_document_id: str | None = None,
 ) -> dict[str, Any] | None:
@@ -565,8 +596,16 @@ def add_patient_diagnostic(
     cleaned_name = (name or "").strip()
     if not cleaned_name:
         raise ValueError("Diagnostic name is required")
-    if value is None:
-        raise ValueError("Diagnostic value is required")
+    result_clean = " ".join((result or "").strip().split())[:2000] or None
+    notes_clean = (notes or "").strip() or None
+    numeric: float | None = None
+    if value is not None and value != "":
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Diagnostic value must be a number") from exc
+    if numeric is None and not result_clean and not notes_clean:
+        raise ValueError("Diagnostic value or result text is required")
     date_raw = (recorded_at or "").strip()
     try:
         date_iso = datetime.fromisoformat(date_raw[:10]).date().isoformat()
@@ -574,7 +613,7 @@ def add_patient_diagnostic(
         raise ValueError("recorded_at must be YYYY-MM-DD") from exc
     profile = get_patient_profile(patient_id)
     unit_clean = (unit or "").strip() or None
-    if not unit_clean:
+    if numeric is not None and not unit_clean:
         for existing in profile.get("diagnostics") or []:
             if str(existing.get("name") or "").strip().lower() == cleaned_name.lower():
                 if existing.get("unit"):
@@ -589,11 +628,12 @@ def add_patient_diagnostic(
     entry = {
         "id": str(uuid4()),
         "name": cleaned_name,
-        "value": float(value),
+        "value": numeric,
         "unit": unit_clean,
         "recorded_at": date_iso,
         "category": cat,
-        "notes": (notes or "").strip() or None,
+        "notes": notes_clean,
+        "result": result_clean,
         "created_at": _now_iso(),
     }
     doc_id = (source_document_id or "").strip() or None
@@ -2034,11 +2074,15 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
     groups: dict[str, dict[str, Any]] = {}
     for row in (profile or {}).get("diagnostics") or []:
         name = (row.get("name") or "").strip()
-        if not name or row.get("value") is None:
+        if not name:
+            continue
+        has_value = row.get("value") is not None
+        has_text = bool(str(row.get("result") or "").strip() or str(row.get("notes") or "").strip())
+        if not has_value and not has_text:
             continue
         enriched = enrich_diagnostic_units(row)
         name = (enriched.get("name") or name).strip()
-        if not name or enriched.get("value") is None:
+        if not name:
             continue
         key = name.lower()
         group = groups.get(key)
@@ -2062,6 +2106,8 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
             group["unit_us"] = enriched["unit_us"]
         if category == "blood":
             group["category"] = "blood"
+        elif category == "imaging" and group.get("category") not in {"blood", "vital"}:
+            group["category"] = "imaging"
         # Prefer canonical display name (e.g. TSH over long form)
         if enriched.get("name") and len(str(enriched["name"])) <= len(str(group["name"])):
             group["name"] = enriched["name"]
@@ -2077,6 +2123,7 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
                 "unit_us": enriched.get("unit_us") or enriched.get("unit"),
                 "unit_system_original": enriched.get("unit_system_original"),
                 "notes": enriched.get("notes"),
+                "result": enriched.get("result"),
             }
         )
     series: list[dict[str, Any]] = []
@@ -2222,23 +2269,31 @@ def format_profile_for_prompt(
 
     for series in diag_series[:diag_limit]:
         latest_row = series.get("latest") or {}
-        if latest_row.get("value") is None and latest_row.get("value_si") is None:
+        result_text = str(
+            latest_row.get("result") or latest_row.get("notes") or ""
+        ).strip()
+        has_num = latest_row.get("value") is not None or latest_row.get("value_si") is not None
+        if not has_num and not result_text:
             continue
-        dual = format_dual_unit_text(
-            {
-                "name": series.get("name"),
-                "value": latest_row.get("value"),
-                "unit": latest_row.get("unit") or series.get("unit_original") or series.get("unit"),
-                "value_si": latest_row.get("value_si", latest_row.get("value")),
-                "unit_si": latest_row.get("unit_si") or series.get("unit_si") or series.get("unit"),
-                "value_us": latest_row.get("value_us", latest_row.get("value")),
-                "unit_us": latest_row.get("unit_us") or series.get("unit_us") or series.get("unit"),
-                "unit_system_original": latest_row.get("unit_system_original"),
-            },
-            prefer="si",
-        )
-        line = f"{series['name']}: {dual} ({latest_row.get('recorded_at') or '?'})"
-        if series["point_count"] > 1:
+        if has_num:
+            dual = format_dual_unit_text(
+                {
+                    "name": series.get("name"),
+                    "value": latest_row.get("value"),
+                    "unit": latest_row.get("unit") or series.get("unit_original") or series.get("unit"),
+                    "value_si": latest_row.get("value_si", latest_row.get("value")),
+                    "unit_si": latest_row.get("unit_si") or series.get("unit_si") or series.get("unit"),
+                    "value_us": latest_row.get("value_us", latest_row.get("value")),
+                    "unit_us": latest_row.get("unit_us") or series.get("unit_us") or series.get("unit"),
+                    "unit_system_original": latest_row.get("unit_system_original"),
+                },
+                prefer="si",
+            )
+            line = f"{series['name']}: {dual} ({latest_row.get('recorded_at') or '?'})"
+        else:
+            clipped = result_text if len(result_text) <= 220 else f"{result_text[:217]}…"
+            line = f"{series['name']}: {clipped} ({latest_row.get('recorded_at') or '?'})"
+        if series["point_count"] > 1 and has_num:
             trend_bits = []
             for r in (series.get("readings") or [])[-trend_n:]:
                 bit = format_dual_unit_text(

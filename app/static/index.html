@@ -898,23 +898,26 @@
       <div class="card diagnostics-card" id="diagnostics-card">
           <div class="row-between wrap">
             <div>
-              <h3>Key diagnostics</h3>
-              <p class="muted small">Blood-test trends with collection dates. Green shaded zone = on-target range (or the safe side of a one-sided bound). Trend line segments follow each reading (green / yellow / red). Gray values have no reference yet. Solid blue <strong>Today</strong> line marks the current day. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones. Toggle <strong>Canada</strong> or <strong>United States</strong> units when sharing with clinicians in either system — originals from each lab report are kept.</p>
+              <h3>Diagnostics</h3>
+              <p class="muted small">Blood tests, imaging reports, and other diagnostics with collection or study dates. Numeric trends show charts (green shaded zone = on-target). Imaging and other studies appear in the table even without a chart. Solid blue <strong>Today</strong> line marks the current day. Toggle <strong>Canada</strong> or <strong>United States</strong> units for lab values — originals from each report are kept.</p>
             </div>
             <div class="diagnostics-actions">
-              <button type="button" class="btn primary btn-sm" id="btn-labs-open-add" title="Add a lab reading">Add reading</button>
+              <button type="button" class="btn primary btn-sm" id="btn-labs-upload" title="Upload lab or imaging report PDFs">Upload file</button>
+              <input type="file" id="labs-upload-file" class="hidden" accept=".pdf,image/jpeg,image/png,image/webp,image/*,application/pdf" multiple>
+              <button type="button" class="btn secondary btn-sm" id="btn-labs-open-add" title="Add a diagnostic reading">Add reading</button>
               <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with charts and results table">Export PDF</button>
               <button type="button" class="btn ghost btn-sm" id="btn-export-diagnostics-table-pdf" title="Download results table only">Export table</button>
             </div>
           </div>
+          <p class="muted small hidden" id="labs-upload-status" role="status"></p>
           <details class="labs-add-details" id="labs-add-details">
-            <summary class="labs-add-summary">Add lab reading</summary>
+            <summary class="labs-add-summary">Add diagnostic reading</summary>
             <div class="patient-measurement-form patient-diagnostic-form labs-add-form">
               <label for="labs-diag-name">Name
-                <input type="text" id="labs-diag-name" list="diag-name-presets" placeholder="e.g. LDL cholesterol" maxlength="120">
+                <input type="text" id="labs-diag-name" list="diag-name-presets" placeholder="e.g. LDL cholesterol or Breast ultrasound" maxlength="120">
               </label>
               <label for="labs-diag-value">Value
-                <input type="number" id="labs-diag-value" step="any" placeholder="e.g. 2.1">
+                <input type="number" id="labs-diag-value" step="any" placeholder="Numeric (optional)">
               </label>
               <label for="labs-diag-unit">Unit
                 <input type="text" id="labs-diag-unit" list="diag-unit-presets" placeholder="e.g. mmol/L" maxlength="40">
@@ -922,12 +925,12 @@
               <label for="labs-diag-date">Date
                 <input type="date" id="labs-diag-date">
               </label>
-              <label for="labs-diag-notes">Notes
-                <input type="text" id="labs-diag-notes" maxlength="200" placeholder="Optional">
+              <label for="labs-diag-notes">Result / notes
+                <input type="text" id="labs-diag-notes" maxlength="500" placeholder="Impression or notes (required if no value)">
               </label>
               <button type="button" class="btn primary" id="btn-labs-add-diagnostic">Add reading</button>
             </div>
-            <p class="muted small">Imports and bulk edits stay in Settings → Who profile → Labs.</p>
+            <p class="muted small">Upload PDFs above to auto-capture labs and imaging. Bulk review also lives in Settings → Who profile → Labs.</p>
           </details>
           <div class="diag-labs-toolbar" id="diag-labs-toolbar">
             <div class="diag-view-toggle" role="group" aria-label="Labs view">
@@ -1009,8 +1012,8 @@
             <div id="diagnostics-loading" class="diagnostics-loading hidden" role="status" aria-live="polite">
               <img src="/static/favicon.svg" alt="" class="duck-spinner" width="36" height="36" aria-hidden="true">
               <div>
-                <p class="diagnostics-loading-title" id="diagnostics-loading-title">Loading labs…</p>
-                <p class="muted small" id="diagnostics-loading-hint">Fetching blood-test trends for this person.</p>
+                <p class="diagnostics-loading-title" id="diagnostics-loading-title">Loading diagnostics…</p>
+                <p class="muted small" id="diagnostics-loading-hint">Fetching lab and imaging results for this person.</p>
               </div>
             </div>
             <div id="diagnostics-charts" class="diagnostics-charts">
@@ -1399,6 +1402,13 @@
             <button type="button" class="btn ghost" id="btn-select-all-shown">Select all shown</button>
             <button type="button" class="btn ghost hidden" id="btn-scope-match-last-lib">Use same sources as last run</button>
             <button type="button" class="btn ghost" id="btn-clear-selection">Clear selection</button>
+          </div>
+        </div>
+        <div id="library-loading" class="library-loading hidden" role="status" aria-live="polite">
+          <img src="/static/favicon.svg" alt="" class="duck-spinner" width="36" height="36" aria-hidden="true">
+          <div>
+            <p class="library-loading-title">Loading library…</p>
+            <p class="muted small">Fetching stored documents for this case.</p>
           </div>
         </div>
         <div id="documents-list" class="documents-list"></div>

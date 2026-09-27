@@ -5706,9 +5706,20 @@ async function loadDocumentIndex() {
   }
 }
 
+function setLibraryLoading(on) {
+  state.libraryLoading = Boolean(on);
+  $("#panel-library")?.classList.toggle("is-loading", state.libraryLoading);
+  $("#library-loading")?.classList.toggle("hidden", !state.libraryLoading);
+}
+
 async function refreshLibrary(options = {}) {
-  await loadDocumentIndex();
-  await loadDocuments(options);
+  setLibraryLoading(true);
+  try {
+    await loadDocumentIndex();
+    await loadDocuments(options);
+  } finally {
+    setLibraryLoading(false);
+  }
 }
 
 async function openLibraryAfterIngest() {
@@ -5728,25 +5739,31 @@ async function loadDocuments(options = {}) {
   });
   if (sourceType) params.set("source_type", sourceType);
 
-  const data = await api(`/api/documents?${params}`);
-  state.documents = data.documents || [];
-  state.libraryPage = page;
-  state.libraryFilter = sourceType;
-  state.libraryTotal = data.total ?? 0;
-  state.libraryCounts = data.counts_by_type || state.libraryCounts;
-  if (data.source_legend) {
-    state.sourceLegend = data.source_legend;
-    renderSourceLegend(state.sourceLegend);
+  const showSpinner = options.showSpinner !== false && !state.libraryLoading;
+  if (showSpinner) setLibraryLoading(true);
+  try {
+    const data = await api(`/api/documents?${params}`);
+    state.documents = data.documents || [];
+    state.libraryPage = page;
+    state.libraryFilter = sourceType;
+    state.libraryTotal = data.total ?? 0;
+    state.libraryCounts = data.counts_by_type || state.libraryCounts;
+    if (data.source_legend) {
+      state.sourceLegend = data.source_legend;
+      renderSourceLegend(state.sourceLegend);
+    }
+    updateImagingFilterVisibility();
+    if (state.libraryCounts?.imaging > 0 && !state.imagingFacets && !state.imagingFacetsError) {
+      loadImagingFacets().catch(() => {});
+    }
+    renderLibraryTypeFilter();
+    renderLibrarySelectionControls();
+    renderDocuments();
+    updateSelectedLabel();
+    updateHomeWorkflow();
+  } finally {
+    if (showSpinner) setLibraryLoading(false);
   }
-  updateImagingFilterVisibility();
-  if (state.libraryCounts?.imaging > 0 && !state.imagingFacets && !state.imagingFacetsError) {
-    loadImagingFacets().catch(() => {});
-  }
-  renderLibraryTypeFilter();
-  renderLibrarySelectionControls();
-  renderDocuments();
-  updateSelectedLabel();
-  updateHomeWorkflow();
 }
 
 function analysisTypeLabel(type) {
@@ -12786,7 +12803,9 @@ function groupDiagnosticsClient(profile) {
   const groups = new Map();
   for (const row of profile.diagnostics || []) {
     const name = String(row.name || "").trim();
-    if (!name || row.value == null) continue;
+    const hasValue = row.value != null;
+    const hasText = Boolean(String(row.result || "").trim() || String(row.notes || "").trim());
+    if (!name || (!hasValue && !hasText)) continue;
     const key = name.toLowerCase();
     if (!groups.has(key)) {
       groups.set(key, {
@@ -12804,6 +12823,7 @@ function groupDiagnosticsClient(profile) {
     if (row.unit_si) g.unit_si = row.unit_si;
     if (row.unit_us) g.unit_us = row.unit_us;
     if (row.category === "blood") g.category = "blood";
+    else if (row.category === "imaging" && g.category !== "blood") g.category = "imaging";
     g.readings.push({
       id: row.id,
       recorded_at: String(row.recorded_at || "").slice(0, 10),
@@ -12815,6 +12835,7 @@ function groupDiagnosticsClient(profile) {
       unit_us: row.unit_us || row.unit,
       unit_system_original: row.unit_system_original,
       notes: row.notes,
+      result: row.result,
     });
   }
   return [...groups.values()]
@@ -13068,7 +13089,7 @@ function syncDiagnosticsLoadingUi() {
       titleEl.textContent = `Loading ${name}’s labs…`;
     }
     if (hintEl && !state.diagnosticsLoading) {
-      hintEl.textContent = "Fetching blood-test trends for this person.";
+      hintEl.textContent = "Fetching lab and imaging results for this person.";
     }
   }
 }
@@ -13338,7 +13359,11 @@ function syncLabsFilterControls() {
 
 function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem } = {}) {
   const display = seriesForLabUnitSystem(series, system).filter(
-    (s) => (s.category || "blood") === "blood" || s.category === "vital" || s.category === "imaging"
+    (s) =>
+      (s.category || "blood") === "blood" ||
+      s.category === "vital" ||
+      s.category === "imaging" ||
+      s.category === "other"
   );
   const dates = [
     ...new Set(
@@ -13357,6 +13382,7 @@ function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem
           {
             value: r.value,
             unit: r.unit || s.unit || "",
+            result: r.result || r.notes || "",
             reportedAside: formatReportedAside(r),
             status: r.status,
           },
@@ -13365,6 +13391,20 @@ function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return { dates, tests, flipped: Boolean(flipped) };
+}
+
+function formatDiagMatrixCell(cell, testName, date, system) {
+  if (!cell) return `<td class="diag-matrix-empty">—</td>`;
+  const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
+  const hasNum = cell.value != null && Number.isFinite(Number(cell.value));
+  if (hasNum) {
+    const tip = `${testName} · ${formatDiagDate(date, system)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}${cell.reportedAside || ""}`;
+    return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || "")}</span></td>`;
+  }
+  const text = String(cell.result || "").trim() || "Logged";
+  const short = text.length > 48 ? `${text.slice(0, 45)}…` : text;
+  const tip = `${testName} · ${formatDiagDate(date, system)} · ${text}`;
+  return `<td class="diag-matrix-cell diag-matrix-cell-text${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val diag-matrix-result">${escapeHtml(short)}</span></td>`;
 }
 
 function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system = state.labUnitSystem } = {}) {
@@ -13397,13 +13437,7 @@ function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system =
           ? `Latest ${formatDiagDate(latest, system)} (${latest}) · ${since}`
           : "No date";
         const cells = matrix.dates
-          .map((d) => {
-            const cell = t.byDate[d];
-            if (!cell) return `<td class="diag-matrix-empty">—</td>`;
-            const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
-            const tip = `${t.name} · ${formatDiagDate(d, system)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}${cell.reportedAside || ""}`;
-            return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
-          })
+          .map((d) => formatDiagMatrixCell(t.byDate[d], t.name, d, system))
           .join("");
         return `<tr><th scope="row">${escapeHtml(t.name)}</th><td class="diag-matrix-since-cell" title="${escapeHtml(sinceTip)}">${escapeHtml(since)}</td>${cells}</tr>`;
       })
@@ -13420,13 +13454,7 @@ function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system =
     const body = matrix.dates
       .map((d) => {
         const cells = matrix.tests
-          .map((t) => {
-            const cell = t.byDate[d];
-            if (!cell) return `<td class="diag-matrix-empty">—</td>`;
-            const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
-            const tip = `${t.name} · ${formatDiagDate(d, system)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}`;
-            return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
-          })
+          .map((t) => formatDiagMatrixCell(t.byDate[d], t.name, d, system))
           .join("");
         return `<tr><th scope="row">${escapeHtml(formatDiagDate(d, system))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>${cells}</tr>`;
       })
@@ -14239,8 +14267,8 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
     renderDiagnosticsStatusFilter([], gaps);
     const hasAny = (state.diagnosticSeriesCache || []).length > 0;
     wrap.innerHTML = hasAny
-      ? `<p class="muted small" id="diagnostics-empty">No labs match the current Dates / Type filters. Choose All dates and All types to see everything.</p>`
-      : `<p class="muted small" id="diagnostics-empty">No blood-test trends yet. Add lab readings in Settings using each report’s collection / date of service.</p>`;
+      ? `<p class="muted small" id="diagnostics-empty">No diagnostics match the current Dates / Type filters. Choose All dates and All types to see everything.</p>`
+      : `<p class="muted small" id="diagnostics-empty">No diagnostics yet. Upload a lab or imaging report, or add a reading manually.</p>`;
     state.diagExpandCache = {};
     return;
   }
@@ -14284,11 +14312,25 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
       const unit = s.unit ? ` ${s.unit}` : "";
       const latest = s.latest;
       const reportedAside = formatReportedAside(latest);
-      const latestLabel = latest
+      const numericReadings = (s.readings || []).filter(
+        (r) => r.value != null && Number.isFinite(Number(r.value))
+      );
+      const chartable = numericReadings.length > 0;
+      const resultText = String(latest?.result || latest?.notes || "").trim();
+      const latestLabel = chartable
         ? `${formatDiagValue(latest.value)}${unit}${reportedAside} · ${formatDiagDate(latest.recorded_at)}`
-        : "—";
+        : latest
+          ? `${resultText ? (resultText.length > 80 ? `${resultText.slice(0, 77)}…` : resultText) : "Logged"} · ${formatDiagDate(latest.recorded_at)}`
+          : "—";
       const stroke = statusColor(status);
-      const cat = s.category === "imaging" ? "Imaging" : s.category === "vital" ? "Vitals" : "Blood";
+      const cat =
+        s.category === "imaging"
+          ? "Imaging"
+          : s.category === "vital"
+            ? "Vitals"
+            : s.category === "other"
+              ? "Other"
+              : "Blood";
       const dateSpan =
         s.point_count > 1
           ? `${formatDiagDate(s.readings[0].recorded_at)} → ${formatDiagDate(s.readings[s.readings.length - 1].recorded_at)}`
@@ -14309,33 +14351,42 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
         : meaning
           ? `<span class="diag-chart-info-link muted" title="${escapeHtml(meaning)}">What is this?</span>`
           : "";
-      const unitSystemBit =
-        state.labUnitSystem === "us"
+      const unitSystemBit = chartable
+        ? state.labUnitSystem === "us"
           ? `<span class="diag-unit-pill" title="United States conventional units">US</span>`
-          : `<span class="diag-unit-pill" title="Canadian SI units">CA</span>`;
+          : `<span class="diag-unit-pill" title="Canadian SI units">CA</span>`
+        : `<span class="diag-unit-pill" title="Study log">Log</span>`;
       const expandKey = `${s.category || "blood"}::${s.name || "metric"}`;
-      expandCache[expandKey] = { series: s, milestones, status };
-      return `<article class="diag-chart-card diag-status-card-${status || "none"}" data-category="${escapeHtml(
+      expandCache[expandKey] = { series: s, milestones, status, chartable };
+      const body = chartable
+        ? buildSparklineSvg(numericReadings, { stroke, reference: ref, milestones })
+        : `<p class="diag-study-result">${escapeHtml(resultText || "Logged on Diagnostics (see table for details).")}</p>`;
+      const expandBtn = chartable
+        ? `<button type="button" class="btn ghost btn-sm diag-chart-expand-btn" data-diag-expand="${escapeHtml(
+            expandKey
+          )}" title="Expand chart" aria-label="Expand ${escapeHtml(s.name || "chart")}">
+            <svg class="diag-chart-expand-icon" viewBox="0 0 24 24" aria-hidden="true" width="16" height="16"><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 9l6-6M21 9l-6-6M3 15l6 6M21 15l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="diag-chart-expand-label">Expand</span>
+          </button>`
+        : "";
+      return `<article class="diag-chart-card diag-status-card-${status || "none"}${
+        chartable ? "" : " diag-study-card"
+      }" data-category="${escapeHtml(
         s.category || "blood"
       )}" data-diag-expand-key="${escapeHtml(expandKey)}" title="${escapeHtml(meaning || s.name)}">
       <div class="diag-chart-head">
         <h4 class="diag-chart-title">${escapeHtml(s.name)} ${unitSystemBit}</h4>
         <div class="diag-chart-head-actions">
           <span class="diag-chart-latest" style="color:${stroke}">${escapeHtml(latestLabel)}</span>
-          <button type="button" class="btn ghost btn-sm diag-chart-expand-btn" data-diag-expand="${escapeHtml(
-            expandKey
-          )}" title="Expand chart" aria-label="Expand ${escapeHtml(s.name || "chart")}">
-            <svg class="diag-chart-expand-icon" viewBox="0 0 24 24" aria-hidden="true" width="16" height="16"><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 9l6-6M21 9l-6-6M3 15l6 6M21 15l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span class="diag-chart-expand-label">Expand</span>
-          </button>
+          ${expandBtn}
         </div>
       </div>
-      ${buildSparklineSvg(s.readings || [], { stroke, reference: ref, milestones })}
+      ${body}
       <p class="diag-chart-meta">${statusBit ? `${statusBit} ` : ""}${escapeHtml(cat)} · ${s.point_count} reading${
         s.point_count === 1 ? "" : "s"
       } · ${escapeHtml(dateSpan)}</p>
       ${
-        ref
+        ref && chartable
           ? `<p class="diag-chart-ref">Ref: ${escapeHtml(ref.label || "")}${
               ref.note ? ` · ${escapeHtml(ref.note)}` : ""
             }</p>`
@@ -14355,6 +14406,7 @@ function closeDiagChartExpand() {
 function openDiagChartExpand(key) {
   const entry = (state.diagExpandCache || {})[key];
   if (!entry?.series) return;
+  if (entry.chartable === false) return;
   const s = entry.series;
   const milestones = entry.milestones || [];
   const status = entry.status || diagSeriesStatus(s);
@@ -14927,19 +14979,20 @@ async function submitDiagnosticReading({
   let unit = unitEl?.value.trim() || null;
   const recordedAt = dateEl?.value;
   const notes = notesEl?.value.trim() || null;
+  const hasValue = valueRaw !== "" && valueRaw != null;
   if (!name) {
     toast("Enter a diagnostic name", "error");
     return false;
   }
-  if (valueRaw === "" || valueRaw == null) {
-    toast("Enter a value", "error");
+  if (!hasValue && !notes) {
+    toast("Enter a value or result / notes", "error");
     return false;
   }
   if (!recordedAt) {
     toast("Choose a date", "error");
     return false;
   }
-  if (!unit) {
+  if (hasValue && !unit) {
     const preset = (state.diagnosticPresets || []).find(
       (p) => p.name.toLowerCase() === name.toLowerCase()
     );
@@ -14948,16 +15001,22 @@ async function submitDiagnosticReading({
       unit = preset.unit;
     }
   }
+  const payload = {
+    name,
+    unit: unitEl?.value.trim() || null,
+    recorded_at: recordedAt,
+    notes,
+  };
+  if (hasValue) {
+    payload.value = Number(valueRaw);
+  } else {
+    payload.result = notes;
+    payload.notes = null;
+  }
   const res = await fetch(`/api/patients/${state.activePatientId}/diagnostics`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name,
-      value: Number(valueRaw),
-      unit: unitEl?.value.trim() || null,
-      recorded_at: recordedAt,
-      notes,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -15018,6 +15077,142 @@ document.getElementById("btn-labs-open-add")?.addEventListener("click", () => {
   if (details) details.open = true;
   ensureLabsAddDateDefault();
   document.getElementById("labs-diag-name")?.focus();
+});
+
+function setLabsUploadStatus(msg, isError = false) {
+  const el = document.getElementById("labs-upload-status");
+  if (!el) return;
+  if (!msg) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    el.classList.remove("error-text");
+    return;
+  }
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  el.classList.toggle("error-text", Boolean(isError));
+}
+
+document.getElementById("btn-labs-upload")?.addEventListener("click", () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  document.getElementById("labs-upload-file")?.click();
+});
+
+document.getElementById("labs-upload-file")?.addEventListener("change", async () => {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const fileInput = document.getElementById("labs-upload-file");
+  const files = Array.from(fileInput?.files || []);
+  if (!files.length) return;
+  const total = files.length;
+  setLabsUploadStatus(
+    total === 1
+      ? `Uploading ${files[0].name}…`
+      : `Uploading ${total} files…`
+  );
+  try {
+    await withBackgroundTask({
+      id: `labs-upload-${Date.now()}`,
+      label:
+        total === 1
+          ? `Uploading: ${files[0].name}`
+          : `Uploading ${total} diagnostic files`,
+      run: async ({ setDetail, isCancelled }) => {
+        let ok = 0;
+        let failed = 0;
+        let lastLabImport = null;
+        let lastHandling = null;
+        const fileResults = [];
+        for (let i = 0; i < files.length; i++) {
+          if (isCancelled()) return;
+          const file = files[i];
+          setDetail(`Processing ${i + 1} of ${total}: ${file.name}`);
+          setLabsUploadStatus(`Processing ${i + 1} of ${total}: ${file.name}…`);
+          try {
+            const data = await ingestPdfUpload(file, {
+              setDetail: (msg) => {
+                setDetail(msg);
+                setLabsUploadStatus(msg);
+              },
+              isCancelled,
+            });
+            if (isCancelled()) return;
+            if (data.lab_import) lastLabImport = data.lab_import;
+            lastHandling = data.handling || data.document?.handling || lastHandling;
+            const li = data.lab_import || {};
+            const orig =
+              li.original_filename ||
+              data.document?.metadata?.original_filename ||
+              file.name;
+            const added = li.added_count || 0;
+            const skipped = li.skipped_duplicate || 0;
+            const kindLabel =
+              li.kind_label ||
+              data.document?.metadata?.clinical_report_kind_label ||
+              "";
+            let outcome = kindLabel ? `tagged as ${kindLabel}` : "uploaded";
+            if (li.study_logged) {
+              outcome = `logged on Diagnostics${kindLabel ? ` (${kindLabel})` : ""}`;
+            } else if (li.already_on_profile || (added === 0 && skipped > 0)) {
+              outcome = `already on Diagnostics (skipped ${skipped})`;
+            } else if (added > 0) {
+              outcome = `added ${added} reading${added === 1 ? "" : "s"}${
+                skipped ? `, skipped ${skipped} duplicates` : ""
+              }`;
+            } else if (li.offer_manual_import || data.handling?.status === "flagged") {
+              outcome = "needs review";
+            }
+            fileResults.push(`${orig} — ${outcome}`);
+            ok += 1;
+          } catch (err) {
+            failed += 1;
+            fileResults.push(`${file.name} — failed`);
+            console.error(`Labs upload failed for ${file.name}`, err);
+          }
+        }
+        if (fileInput) fileInput.value = "";
+        await loadDocumentIndex().catch(() => {});
+        if (lastLabImport?.diagnostic_series || lastLabImport?.profile) {
+          try {
+            applyProfileResponse(lastLabImport);
+          } catch {
+            /* ignore */
+          }
+        } else if (state.activePatientId) {
+          try {
+            const res = await fetch(`/api/patients/${state.activePatientId}/profile`);
+            if (res.ok) applyProfileResponse(await res.json());
+          } catch {
+            /* ignore */
+          }
+        }
+        refreshDiagnosticsViews();
+        const summary = fileResults.join(" · ");
+        if (ok && !failed) {
+          setLabsUploadStatus(summary);
+          toast(
+            lastLabImport?.added_count > 0 || lastLabImport?.study_logged
+              ? `Captured on Diagnostics · ${summary}`
+              : `Uploaded · ${summary}`
+          );
+          if (lastHandling?.status === "flagged" && !(lastLabImport?.added_count > 0)) {
+            notifyLabImportResult(lastLabImport, {
+              fallbackToast: summary,
+              handling: lastHandling,
+            });
+          }
+        } else if (ok && failed) {
+          setLabsUploadStatus(`${ok} uploaded, ${failed} failed · ${summary}`, true);
+          toast(`${ok} uploaded, ${failed} failed`, "error");
+        } else {
+          setLabsUploadStatus(summary || "Upload failed", true);
+          toast("Upload failed", "error");
+        }
+      },
+    });
+  } catch (err) {
+    setLabsUploadStatus(err.message || "Upload failed", true);
+    toast(err.message || "Upload failed", "error");
+  }
 });
 
 document.getElementById("labs-add-details")?.addEventListener("toggle", () => {

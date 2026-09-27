@@ -1291,3 +1291,272 @@ async def auto_confirm_lab_readings_from_document(
         "blocked_for_patient_mismatch": False,
         "mismatch_issues": list((identity or {}).get("issues") or []) if patient_mismatch else [],
     }
+
+
+STUDY_LOG_SYSTEM = (
+    "You extract a single diagnostic study log entry from an imaging or clinical report. "
+    "Return ONLY a JSON object. No prose, no markdown fences."
+)
+
+STUDY_LOG_USER_TEMPLATE = """Extract the diagnostic study performed from this clinical report.
+
+Return JSON:
+{{
+  "name": "<specific study name, e.g. Breast ultrasound, Brain MRI, Screening mammogram>",
+  "recorded_at": "<exam / study date YYYY-MM-DD or null>",
+  "result": "<1-3 sentence impression / findings summary>",
+  "category": "imaging"
+}}
+
+Rules:
+- Prefer exam / study / procedure date over report print or fax date.
+- Name should be specific (include body part when clear).
+- result must summarize the clinical impression; do not invent findings.
+- If the document is not a diagnostic study report, return {{"name": null, "recorded_at": null, "result": null}}.
+
+Kind hint: {kind_label}
+Title: {title}
+Filename: {filename}
+
+Text:
+---
+{text}
+---
+"""
+
+_KIND_DEFAULT_NAMES: dict[str, str] = {
+    "mri": "MRI",
+    "ultrasound": "Ultrasound",
+    "ct": "CT",
+    "mammogram": "Mammogram",
+    "pathology": "Pathology",
+    "cardiology": "Cardiology study",
+    "other_report": "Clinical diagnostic report",
+}
+
+
+def _fallback_study_name(doc: dict[str, Any], kind: str) -> str:
+    title = str(doc.get("title") or "").strip()
+    filename = document_original_filename(doc) or ""
+    for raw in (title, filename):
+        if not raw:
+            continue
+        cleaned = re.sub(r"\.(pdf|jpe?g|png|webp)$", "", raw, flags=re.I)
+        cleaned = re.sub(r"[_]+", " ", cleaned).strip()
+        if cleaned and len(cleaned) <= 120:
+            return cleaned[:120]
+    return _KIND_DEFAULT_NAMES.get(kind, "Diagnostic study")
+
+
+def _fallback_study_date(text: str) -> str | None:
+    from datetime import date as date_cls
+
+    today = date_cls.today()
+    candidates: list[str] = []
+    for match in re.finditer(
+        r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b",
+        text or "",
+    ):
+        iso = parse_lab_date_to_iso(match.group(1))
+        if not iso:
+            continue
+        try:
+            if date_cls.fromisoformat(iso) <= today:
+                candidates.append(iso)
+        except ValueError:
+            continue
+    return candidates[0] if candidates else None
+
+
+def _parse_study_log_json(raw: str | dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(0))
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+async def _propose_study_log_from_text(
+    *,
+    text: str,
+    doc: dict[str, Any],
+    kind: str,
+    kind_label: str,
+    llm: LLMClient | None = None,
+) -> dict[str, Any]:
+    from datetime import date as date_cls
+
+    client = llm or LLMClient()
+    clipped = (text or "")[:12000]
+    user = STUDY_LOG_USER_TEMPLATE.format(
+        kind_label=kind_label or kind,
+        title=str(doc.get("title") or ""),
+        filename=document_original_filename(doc) or "",
+        text=clipped,
+    )
+    data: dict[str, Any] = {}
+    try:
+        raw = await client.chat(
+            messages=[
+                {"role": "system", "content": STUDY_LOG_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.1,
+        )
+        data = _parse_study_log_json(raw)
+    except Exception:
+        data = {}
+    name = str(data.get("name") or "").strip() or None
+    result = " ".join(str(data.get("result") or "").split()).strip() or None
+    recorded_at = str(data.get("recorded_at") or "").strip()[:10] or None
+    if recorded_at:
+        recorded_at = prefer_plausible_lab_iso(recorded_at) or recorded_at
+        recorded_at = str(recorded_at)[:10]
+        try:
+            date_cls.fromisoformat(recorded_at)
+        except ValueError:
+            recorded_at = None
+    if not name:
+        name = _fallback_study_name(doc, kind)
+    if not recorded_at:
+        recorded_at = _fallback_study_date(clipped)
+    if not result:
+        # Keep a short excerpt so the study still appears in the table
+        excerpt = " ".join(clipped.split())[:280]
+        result = excerpt or f"{kind_label or kind} on file"
+    return {
+        "name": name,
+        "recorded_at": recorded_at,
+        "result": result,
+        "category": "imaging" if kind != "lab" else "other",
+    }
+
+
+async def auto_capture_diagnostics_from_document(
+    patient_id: str,
+    doc: dict[str, Any],
+    *,
+    extracted_text: str | None = None,
+    llm: LLMClient | None = None,
+    acknowledge_patient_mismatch: bool = False,
+) -> dict[str, Any]:
+    """Capture quantitative labs and/or a study log for any diagnostic report kind."""
+    from app.services.clinical_report_classify import (
+        clinical_report_kind_label,
+        is_diagnostic_citation_kind,
+        normalize_clinical_report_kind,
+    )
+
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    kind = normalize_clinical_report_kind(meta.get("clinical_report_kind"))
+    kind_label = meta.get("clinical_report_kind_label") or clinical_report_kind_label(kind)
+    doc_id = str(doc.get("id") or "").strip() or None
+
+    if kind == "lab" or not is_diagnostic_citation_kind(kind):
+        return await auto_confirm_lab_readings_from_document(
+            patient_id,
+            doc,
+            extracted_text=extracted_text,
+            llm=llm,
+            acknowledge_patient_mismatch=acknowledge_patient_mismatch,
+        )
+
+    # Numeric assays when they often appear (calcium score, some cardiology/pathology).
+    try_quant = kind in {"ct", "cardiology", "pathology", "other_report"}
+    quant: dict[str, Any] = _empty_lab_import_result(patient_id, doc)
+    if try_quant:
+        quant = await auto_confirm_lab_readings_from_document(
+            patient_id,
+            doc,
+            extracted_text=extracted_text,
+            llm=llm,
+            acknowledge_patient_mismatch=acknowledge_patient_mismatch,
+        )
+        if quant.get("blocked_for_patient_mismatch"):
+            return quant
+
+    linked = _profile_readings_for_document(patient_id, doc_id)
+    if linked > 0 or int(quant.get("added_count") or 0) > 0:
+        # Quantitative rows (or prior import) already cover this report.
+        quant["study_logged"] = False
+        return quant
+
+    text = (extracted_text or "").strip()
+    study = await _propose_study_log_from_text(
+        text=text,
+        doc=doc,
+        kind=kind,
+        kind_label=kind_label,
+        llm=llm,
+    )
+    recorded_at = study.get("recorded_at")
+    warnings = list(quant.get("warnings") or [])
+    if not recorded_at:
+        from datetime import date as date_cls
+
+        recorded_at = date_cls.today().isoformat()
+        warnings.append("Study date missing on report — used today’s date for the diagnostics log")
+
+    existing = existing_diagnostic_index(patient_id)
+    if is_duplicate_diagnostic(
+        {"name": study.get("name"), "recorded_at": recorded_at},
+        existing_index=existing,
+    ):
+        quant["skipped_duplicate"] = int(quant.get("skipped_duplicate") or 0) + 1
+        quant["already_on_profile"] = True
+        quant["study_logged"] = False
+        quant["offer_manual_import"] = False
+        quant["warnings"] = warnings
+        return quant
+
+    try:
+        entry = add_patient_diagnostic(
+            patient_id,
+            name=str(study.get("name") or kind_label),
+            value=None,
+            recorded_at=recorded_at,
+            result=study.get("result"),
+            category=study.get("category") or "imaging",
+            source_document_id=doc_id,
+        )
+    except (TypeError, ValueError) as exc:
+        warnings.append(f"Could not log diagnostic study: {exc}")
+        quant["warnings"] = warnings
+        quant["offer_manual_import"] = True
+        return quant
+
+    if not entry:
+        quant["warnings"] = warnings
+        return quant
+
+    profile = get_patient_profile(patient_id)
+    added = list(quant.get("added") or [])
+    added.append(entry)
+    return {
+        **quant,
+        "added": added,
+        "added_count": len(added),
+        "proposed_count": max(int(quant.get("proposed_count") or 0), 1),
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+        "offer_manual_import": False,
+        "already_on_profile": False,
+        "study_logged": True,
+        "kind": kind,
+        "kind_label": kind_label,
+        "warnings": warnings,
+    }

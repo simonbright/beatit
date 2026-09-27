@@ -238,16 +238,29 @@ def evaluate_document_handling(
         # If some readings are on charts, do not keep the flag for leftover incomplete rows.
         # User can re-import or dismiss; charts are no longer empty.
 
-    # Non-lab diagnostic reports with text are considered handled once classified
-    if not reasons and kind in DIAGNOSTIC_CITATION_KINDS and kind != "lab":
-        return {
-            "status": HANDLING_OK,
-            "reasons": [],
-            "message": f"Tagged as {kind_label}",
-            "severity": "info",
-            "kind": kind,
-            "kind_label": kind_label,
-        }
+    # Non-lab diagnostic reports should appear on Diagnostics (study log and/or scores)
+    if kind in DIAGNOSTIC_CITATION_KINDS and kind != "lab":
+        linked = _readings_from_doc(profile, str(doc.get("id") or ""))
+        stored_added = int(meta.get("lab_charts_added") or 0)
+        import_added = int((lab_import or {}).get("added_count") or 0)
+        charted = max(linked, stored_added, import_added)
+        if empty:
+            reasons.append(REASON_LAB_CHARTS_PENDING)
+            messages.append("Cannot log this diagnostic until text is extracted")
+        elif charted == 0:
+            reasons.append(REASON_LAB_CHARTS_PENDING)
+            messages.append(
+                f"{kind_label} is tagged but not yet on Diagnostics — re-upload or Import to Labs"
+            )
+        elif not reasons:
+            return {
+                "status": HANDLING_OK,
+                "reasons": [],
+                "message": f"{kind_label} logged on Diagnostics ({charted})",
+                "severity": "info",
+                "kind": kind,
+                "kind_label": kind_label,
+            }
 
     if not reasons and kind == "lab":
         linked = _readings_from_doc(profile, str(doc.get("id") or ""))
@@ -343,6 +356,8 @@ def _looks_like_strong_diagnostic_filename(doc: dict[str, Any], meta: dict[str, 
         for n in (
             "mri",
             "ultrasound",
+            "mammogram",
+            "mammography",
             "pathology",
             "biopsy",
             "echocardiogram",

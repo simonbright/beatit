@@ -16,6 +16,7 @@ from app.services.medication_import import (
     propose_medications_from_upload,
 )
 from app.services.diagnostic_import import (
+    auto_capture_diagnostics_from_document,
     auto_confirm_lab_readings_from_document,
     clamp_proposed_diagnostic,
     diagnostic_identity_key,
@@ -441,7 +442,8 @@ async def _finalize_clinical_report_document(
     *,
     patient_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Auto-import lab charts when applicable, then persist handled/flagged state."""
+    """Auto-import labs / study logs when applicable, then persist handled/flagged state."""
+    from app.services.clinical_report_classify import is_diagnostic_citation_kind
     from app.services.clinical_report_handling import refresh_document_handling
 
     meta = doc.get("metadata") or {}
@@ -451,10 +453,10 @@ async def _finalize_clinical_report_document(
         patient_id = get_active_context().get("patient_id")
     profile = get_patient_profile(patient_id) if patient_id else None
 
-    if kind == "lab" and patient_id:
+    if patient_id and is_diagnostic_citation_kind(kind):
         text = await store.read_extracted_text(doc)
         try:
-            lab_import = await auto_confirm_lab_readings_from_document(
+            lab_import = await auto_capture_diagnostics_from_document(
                 patient_id,
                 doc,
                 extracted_text=text,
@@ -472,7 +474,9 @@ async def _finalize_clinical_report_document(
                 "document_id": doc.get("id"),
                 "document_title": doc.get("title"),
                 "original_filename": document_original_filename(doc),
-                "warnings": ["Automatic lab import failed — use Import to Labs"],
+                "warnings": [
+                    "Automatic diagnostic capture failed — use Import to Labs or Add reading"
+                ],
                 "errors": [],
             }
 
@@ -3136,10 +3140,11 @@ async def api_update_patient_profile(patient_id: str, body: PatientDemographicsR
 
 class PatientDiagnosticRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    value: float
+    value: float | None = None
     recorded_at: str
     unit: str | None = Field(default=None, max_length=40)
     notes: str | None = Field(default=None, max_length=500)
+    result: str | None = Field(default=None, max_length=2000)
     category: str | None = Field(default=None, max_length=20)
 
 
@@ -3198,6 +3203,7 @@ async def api_add_patient_diagnostic(patient_id: str, body: PatientDiagnosticReq
             recorded_at=body.recorded_at.strip()[:10],
             unit=body.unit,
             notes=body.notes,
+            result=body.result,
             category=body.category,
         )
     except ValueError as exc:
@@ -3363,7 +3369,7 @@ async def api_confirm_patient_diagnostics_from_document(
     target_store, doc = opened
     text = await target_store.read_extracted_text(doc)
     try:
-        lab_import = await auto_confirm_lab_readings_from_document(
+        lab_import = await auto_capture_diagnostics_from_document(
             patient_id,
             doc,
             extracted_text=text,
