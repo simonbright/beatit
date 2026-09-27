@@ -8,6 +8,7 @@ SETTINGS_MODEL_UPDATED = "settings.model_updated"
 SETTINGS_PATIENT_CONTEXT_UPDATED = "settings.patient_context_updated"
 SETTINGS_REVIEWER_CONTEXT_UPDATED = "settings.reviewer_context_updated"
 SETTINGS_SOURCE_LABELS_UPDATED = "settings.source_labels_updated"
+SETTINGS_MEDICATION_DELETED = "settings.medication_deleted"
 DOCUMENT_CITATION_UPDATED = "document.citation_updated"
 ANALYSIS_REQUESTED = "analysis.requested"
 ANALYSIS_COMPLETED = "analysis.completed"
@@ -58,6 +59,7 @@ EVENT_LABELS: dict[str, str] = {
     PDF_EXPORTED: "Assessment PDF exported",
     ANALYSIS_ANNOTATIONS_UPDATED: "Custom task annotations updated",
     ANALYSIS_SHARED_EMAIL: "Custom task shared by email",
+    SETTINGS_MEDICATION_DELETED: "Medication deleted",
 }
 
 CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
@@ -87,6 +89,7 @@ CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
         SETTINGS_PATIENT_CONTEXT_UPDATED,
         SETTINGS_REVIEWER_CONTEXT_UPDATED,
         SETTINGS_SOURCE_LABELS_UPDATED,
+        SETTINGS_MEDICATION_DELETED,
     ),
     "auth": (AUTH_LOGIN, AUTH_LOGOUT, AUTH_USER_UPSERTED, AUTH_USER_DELETED),
 }
@@ -160,6 +163,9 @@ def format_audit_summary(event: dict[str, Any]) -> str:
         return f'Clinical reviewer context updated ({meta.get("old_length", 0)} → {meta.get("new_length", 0)} chars)'
     if event_type == SETTINGS_SOURCE_LABELS_UPDATED:
         return meta.get("summary") or "Source type labels updated"
+    if event_type == SETTINGS_MEDICATION_DELETED:
+        name = meta.get("name") or meta.get("official_name") or "medication"
+        return f'Deleted "{name}"'
     if event_type == ANALYSIS_REQUESTED:
         return f'{meta.get("job_type", "analysis")} job queued'
     if event_type == ANALYSIS_COMPLETED:
@@ -243,6 +249,13 @@ def format_audit_details(event: dict[str, Any]) -> list[str]:
     elif event_type == SETTINGS_SOURCE_LABELS_UPDATED:
         if meta.get("changes"):
             add("Changes", meta.get("changes"))
+    elif event_type == SETTINGS_MEDICATION_DELETED:
+        add("Name", meta.get("name"))
+        add("Official name", meta.get("official_name"))
+        add("Dosage", meta.get("dosage"))
+        add("Category", meta.get("category"))
+        add("Patient", meta.get("patient_id"))
+        add("Medication ID", event.get("resource_id"))
     elif event_type in {ANALYSIS_REQUESTED, ANALYSIS_COMPLETED, ANALYSIS_FAILED, ANALYSIS_PROMOTED, ANALYSIS_DRAFT_DISCARDED}:
         add("Job type", meta.get("job_type") or meta.get("analysis_type"))
         add("Query", meta.get("query_preview"))

@@ -124,6 +124,7 @@ from app.services.audit import (
     SETTINGS_PATIENT_CONTEXT_UPDATED,
     SETTINGS_REVIEWER_CONTEXT_UPDATED,
     SETTINGS_SOURCE_LABELS_UPDATED,
+    SETTINGS_MEDICATION_DELETED,
     enrich_audit_event,
     log_audit,
     preview_text,
@@ -4170,10 +4171,31 @@ async def api_stop_patient_medication(
 
 
 @router.delete("/patients/{patient_id}/medications/{medication_id}")
-async def api_delete_patient_medication(patient_id: str, medication_id: str):
-    ok = delete_patient_medication(patient_id, medication_id)
-    if not ok:
+async def api_delete_patient_medication(
+    patient_id: str,
+    medication_id: str,
+    request: Request,
+):
+    db, _, _, _, _ = await _get_services()
+    removed = delete_patient_medication(patient_id, medication_id)
+    if not removed:
         raise HTTPException(status_code=404, detail="Medication not found")
+    await _audit(
+        db,
+        request,
+        SETTINGS_MEDICATION_DELETED,
+        resource_type="medication",
+        resource_id=medication_id,
+        metadata={
+            "patient_id": patient_id,
+            "name": removed.get("name"),
+            "official_name": removed.get("official_name"),
+            "dosage": removed.get("dosage"),
+            "frequency": removed.get("frequency"),
+            "category": removed.get("category"),
+            "status": removed.get("status"),
+        },
+    )
     profile = get_patient_profile(patient_id)
     return {
         "ok": True,

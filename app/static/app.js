@@ -9497,7 +9497,7 @@ function renderMedicationsHome(profile) {
         ${formatMedicationConditions(m)}
         ${formatMedicationHistory(m)}
       </div>
-      <div class="medication-row-actions">${formatMedicationFixActions(m)}</div>
+      <div class="medication-row-actions">${formatMedicationFixActions(m, { includeDelete: true })}</div>
     </div>`;
   };
   let html = active.map((m) => rowHtml(m)).join("");
@@ -10161,7 +10161,7 @@ function updateMedIdentityHint(m) {
   el.classList.remove("hidden");
 }
 
-function formatMedicationFixActions(m) {
+function formatMedicationFixActions(m, { includeDelete = false } = {}) {
   const status = m.identity_status || "known";
   const bits = [];
   bits.push(
@@ -10177,7 +10177,30 @@ function formatMedicationFixActions(m) {
       `<button type="button" class="btn secondary btn-sm btn-accept-med-name" data-id="${escapeHtml(m.id || "")}" data-name="${escapeHtml(m.identity_match)}">Official: ${escapeHtml(m.identity_match)}</button>`
     );
   }
+  if (includeDelete) {
+    bits.push(
+      `<button type="button" class="btn danger btn-sm btn-delete-medication" data-id="${escapeHtml(m.id || "")}" data-name="${escapeHtml(medicationPreferredName(m))}">Delete</button>`
+    );
+  }
   return bits.join("");
+}
+
+async function confirmAndDeleteMedication(id, nameHint = "") {
+  if (!state.activePatientId || !id) return false;
+  const label = String(nameHint || "").trim() || "this medication";
+  if (!confirm(`Delete ${label}?\n\nThis permanently removes it from the profile.`)) return false;
+  if (!confirm(`Confirm delete: ${label}\n\nAre you sure? This cannot be undone.`)) return false;
+  const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    toast("Could not delete medication", "error");
+    return false;
+  }
+  applyProfileResponse(await res.json());
+  if (document.getElementById("med-edit-id")?.value === id) clearMedicationForm();
+  toast("Medication deleted");
+  return true;
 }
 
 function formatMedSafetyWhen(iso) {
@@ -10381,9 +10404,8 @@ function renderMedicationsSettings(profile) {
          <input type="checkbox" class="med-show-on-log-toggle" data-id="${escapeHtml(m.id)}" ${onLog ? "checked" : ""}>
          Show on Log
        </label>
-         ${formatMedicationFixActions(m)}
-         ${isStopped ? "" : `<button type="button" class="btn ghost btn-sm btn-stop-medication" data-id="${escapeHtml(m.id)}">Stop</button>`}
-         <button type="button" class="btn ghost btn-sm btn-delete-medication" data-id="${escapeHtml(m.id)}">Remove</button>`;
+         ${formatMedicationFixActions(m, { includeDelete: true })}
+         ${isStopped ? "" : `<button type="button" class="btn ghost btn-sm btn-stop-medication" data-id="${escapeHtml(m.id)}">Stop</button>`}`;
     return `<div class="medication-row" data-id="${escapeHtml(m.id)}">
       <div class="medication-row-main">
         ${formatMedicationTitleHtml(m)}${formatMedicationCategoryBadge(m)}${formatMedicationIdentityBadge(m)}${medicationSourcePhotoLink(m)}
@@ -15501,15 +15523,7 @@ document.getElementById("patient-medications-list")?.addEventListener("click", a
   }
 
   if (delBtn) {
-    const id = delBtn.dataset.id;
-    if (!id || !confirm("Remove this medication record?")) return;
-    const res = await fetch(`/api/patients/${state.activePatientId}/medications/${id}`, {
-      method: "DELETE",
-    });
-    if (!res.ok) return toast("Could not remove medication", "error");
-    applyProfileResponse(await res.json());
-    if (document.getElementById("med-edit-id")?.value === id) clearMedicationForm();
-    toast("Medication removed");
+    await confirmAndDeleteMedication(delBtn.dataset.id, delBtn.dataset.name);
   }
 });
 
@@ -15598,6 +15612,7 @@ document.getElementById("patient-food-drinks-list")?.addEventListener("click", a
 document.getElementById("medications-home-list")?.addEventListener("click", async (event) => {
   const acceptBtn = event.target.closest(".btn-accept-med-name");
   const editBtn = event.target.closest(".btn-edit-medication, .btn-fix-medication");
+  const delBtn = event.target.closest(".btn-delete-medication");
   if (acceptBtn) {
     await acceptSuggestedMedName(acceptBtn.dataset.id, acceptBtn.dataset.name);
     return;
@@ -15606,6 +15621,10 @@ document.getElementById("medications-home-list")?.addEventListener("click", asyn
     await openMedicationEditor(editBtn.dataset.id, {
       focusDose: editBtn.classList.contains("btn-fix-medication"),
     });
+    return;
+  }
+  if (delBtn) {
+    await confirmAndDeleteMedication(delBtn.dataset.id, delBtn.dataset.name);
   }
 });
 

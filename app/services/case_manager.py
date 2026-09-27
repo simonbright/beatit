@@ -1306,19 +1306,19 @@ def stop_patient_medication(
     return next((m for m in saved["medications"] if m["id"] == medication_id), med)
 
 
-def delete_patient_medication(patient_id: str, medication_id: str) -> bool:
+def delete_patient_medication(patient_id: str, medication_id: str) -> dict[str, Any] | None:
+    """Remove a medication. Returns the deleted medication dict, or None if not found."""
     reg = load_registry()
     if not _find_patient(reg, patient_id):
-        return False
+        return None
     profile = get_patient_profile(patient_id)
-    before = len(profile.get("medications") or [])
-    profile["medications"] = [
-        m for m in profile.get("medications") or [] if m.get("id") != medication_id
-    ]
-    if len(profile["medications"]) == before:
-        return False
+    meds = list(profile.get("medications") or [])
+    removed = next((m for m in meds if m.get("id") == medication_id), None)
+    if not removed:
+        return None
+    profile["medications"] = [m for m in meds if m.get("id") != medication_id]
     save_patient_profile(patient_id, profile)
-    return True
+    return removed
 
 
 def add_patient_food_drink(patient_id: str, label: str) -> dict[str, Any] | None:

@@ -1645,8 +1645,22 @@ body {
 .med-form-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.65rem;
   align-items: center;
+  margin-top: 0.35rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #0ea5e9) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent, #0ea5e9) 10%, var(--surface, #fff));
+}
+
+.med-form-actions .btn-save-medication,
+.med-form-actions #btn-save-medication {
+  min-height: 2.85rem;
+  padding-inline: 1.35rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
 .medication-import-block {
