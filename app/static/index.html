@@ -899,14 +899,36 @@
           <div class="row-between wrap">
             <div>
               <h3>Key diagnostics</h3>
-              <p class="muted small">Blood-test trends with collection dates. Green shaded zone = on-target range (or the safe side of a one-sided bound). Trend line segments follow each reading (green / yellow / red). Gray values have no reference yet. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones. Toggle <strong>Canada</strong> or <strong>United States</strong> units when sharing with clinicians in either system — originals from each lab report are kept.</p>
+              <p class="muted small">Blood-test trends with collection dates. Green shaded zone = on-target range (or the safe side of a one-sided bound). Trend line segments follow each reading (green / yellow / red). Gray values have no reference yet. Solid blue <strong>Today</strong> line marks the current day. Use <strong>Gaps</strong> for metrics never recorded or due for update — copy that list for your doctor. Dashed colored lines are medication or lifestyle milestones. Toggle <strong>Canada</strong> or <strong>United States</strong> units when sharing with clinicians in either system — originals from each lab report are kept.</p>
             </div>
             <div class="diagnostics-actions">
+              <button type="button" class="btn primary btn-sm" id="btn-labs-open-add" title="Add a lab reading">Add reading</button>
               <button type="button" class="btn secondary btn-sm" id="btn-export-diagnostics-pdf" title="Download diagnostics PDF with charts and results table">Export PDF</button>
               <button type="button" class="btn ghost btn-sm" id="btn-export-diagnostics-table-pdf" title="Download results table only">Export table</button>
-              <button type="button" class="btn ghost btn-sm" id="btn-diagnostics-settings" data-nav-settings>Add in Settings</button>
             </div>
           </div>
+          <details class="labs-add-details" id="labs-add-details">
+            <summary class="labs-add-summary">Add lab reading</summary>
+            <div class="patient-measurement-form patient-diagnostic-form labs-add-form">
+              <label for="labs-diag-name">Name
+                <input type="text" id="labs-diag-name" list="diag-name-presets" placeholder="e.g. LDL cholesterol" maxlength="120">
+              </label>
+              <label for="labs-diag-value">Value
+                <input type="number" id="labs-diag-value" step="any" placeholder="e.g. 2.1">
+              </label>
+              <label for="labs-diag-unit">Unit
+                <input type="text" id="labs-diag-unit" list="diag-unit-presets" placeholder="e.g. mmol/L" maxlength="40">
+              </label>
+              <label for="labs-diag-date">Date
+                <input type="date" id="labs-diag-date">
+              </label>
+              <label for="labs-diag-notes">Notes
+                <input type="text" id="labs-diag-notes" maxlength="200" placeholder="Optional">
+              </label>
+              <button type="button" class="btn primary" id="btn-labs-add-diagnostic">Add reading</button>
+            </div>
+            <p class="muted small">Imports and bulk edits stay in Settings → Who profile → Labs.</p>
+          </details>
           <div class="diag-labs-toolbar" id="diag-labs-toolbar">
             <div class="diag-view-toggle" role="group" aria-label="Labs view">
               <button type="button" class="btn secondary btn-sm diag-view-btn active" id="diag-view-charts" data-labs-view="charts">Charts</button>
@@ -992,7 +1014,7 @@
               </div>
             </div>
             <div id="diagnostics-charts" class="diagnostics-charts">
-              <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Add height/weight or lab readings under Settings → Who profile.</p>
+              <p class="muted small" id="diagnostics-empty">No charted diagnostics yet. Use <strong>Add reading</strong> above, or import under Settings → Who profile.</p>
             </div>
             <div id="diagnostics-table-wrap" class="diagnostics-table-wrap hidden">
               <div class="diagnostics-table-scroll">

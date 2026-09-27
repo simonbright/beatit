@@ -13381,12 +13381,21 @@ function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system =
     return matrix;
   }
   const unitBadge = system === "us" ? "US" : "Canada";
+  const latestForTest = (t) => {
+    const keys = Object.keys(t.byDate || {}).sort();
+    return keys.length ? keys[keys.length - 1] : "";
+  };
   if (!matrix.flipped) {
-    const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Test · ${escapeHtml(unitBadge)}</th>${matrix.dates
+    const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Test · ${escapeHtml(unitBadge)}</th><th scope="col" class="diag-matrix-since">Since</th>${matrix.dates
       .map((d) => `<th scope="col">${escapeHtml(formatDiagDateAxis(d, system))}<span class="diag-matrix-iso">${escapeHtml(d)}</span></th>`)
       .join("")}</tr></thead>`;
     const body = matrix.tests
       .map((t) => {
+        const latest = latestForTest(t);
+        const since = formatTimeSinceLastTest(latest);
+        const sinceTip = latest
+          ? `Latest ${formatDiagDate(latest, system)} (${latest}) · ${since}`
+          : "No date";
         const cells = matrix.dates
           .map((d) => {
             const cell = t.byDate[d];
@@ -13396,13 +13405,17 @@ function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system =
             return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || t.unit || "")}</span></td>`;
           })
           .join("");
-        return `<tr><th scope="row">${escapeHtml(t.name)}</th>${cells}</tr>`;
+        return `<tr><th scope="row">${escapeHtml(t.name)}</th><td class="diag-matrix-since-cell" title="${escapeHtml(sinceTip)}">${escapeHtml(since)}</td>${cells}</tr>`;
       })
       .join("");
     tableEl.innerHTML = `${head}<tbody>${body}</tbody>`;
   } else {
     const head = `<thead><tr><th scope="col" class="diag-matrix-corner">Date · ${escapeHtml(unitBadge)}</th>${matrix.tests
-      .map((t) => `<th scope="col">${escapeHtml(t.name)}</th>`)
+      .map((t) => {
+        const latest = latestForTest(t);
+        const since = formatTimeSinceLastTest(latest);
+        return `<th scope="col">${escapeHtml(t.name)}<span class="diag-matrix-since-sub" title="Time since latest result">${escapeHtml(since)}</span></th>`;
+      })
       .join("")}</tr></thead>`;
     const body = matrix.dates
       .map((d) => {
@@ -13975,9 +13988,33 @@ function buildSparklineSvg(
     const minHead = Math.max((readMax - readMin) * 0.22, 50 * dayMs);
     tMax = Math.max(latest, readMax + minHead);
   }
+  const todayIso = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  const todayMs = toDay(todayIso);
+  if (Number.isFinite(todayMs)) {
+    if (todayMs > tMax) tMax = todayMs + Math.max(2 * dayMs, (tMax - tMin) * 0.03);
+    else if (todayMs < tMin) tMin = todayMs - Math.max(2 * dayMs, (tMax - tMin) * 0.03);
+  }
   const tSpan = tMax - tMin || 1;
   const xFor = (iso) => padL + ((toDay(iso) - tMin) / tSpan) * (w - padL - padR);
   const coords = points.map((p) => ({ ...p, x: xFor(p.date), y: yFor(p.value) }));
+
+  let todayLayer = "";
+  if (Number.isFinite(todayMs)) {
+    let tx = xFor(todayIso);
+    if (Number.isFinite(tx)) {
+      tx = Math.min(w - padR, Math.max(padL, tx));
+      const tipY = padTop - (large ? 4 : 2);
+      todayLayer = `<g class="diag-today-mark" aria-label="Today">
+        <line x1="${tx.toFixed(1)}" y1="${padTop}" x2="${tx.toFixed(1)}" y2="${(h - padBottom).toFixed(1)}" stroke="#0ea5e9" stroke-width="${large ? 2.8 : 2.2}" opacity="0.95">
+          <title>Today (${escapeHtml(formatDiagDate(todayIso))})</title>
+        </line>
+        <text x="${tx.toFixed(1)}" y="${tipY.toFixed(1)}" text-anchor="middle" fill="#0284c7" font-size="${large ? 13 : 11}" font-weight="700">Today</text>
+      </g>`;
+    }
+  }
 
   let milestoneLayer = "";
   let milestoneLegend = "";
@@ -14110,6 +14147,7 @@ function buildSparklineSvg(
     <svg class="${svgClass}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Trend">
       ${refLayer}
       ${yAxisLayer}
+      ${todayLayer}
       ${milestoneLayer}
       ${segments}
       ${dots}
@@ -14117,6 +14155,40 @@ function buildSparklineSvg(
     </svg>
     ${milestoneLegend}
   </div>`;
+}
+
+function formatTimeSinceLastTest(latestIso, asOfIso = null) {
+  const raw = String(latestIso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "—";
+  const latest = new Date(`${raw}T12:00:00`);
+  const asOfRaw = asOfIso || (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  const asOf = new Date(`${String(asOfRaw).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(latest.getTime()) || Number.isNaN(asOf.getTime())) return "—";
+  if (latest > asOf) return "0 days";
+  const days = Math.round((asOf - latest) / 86400000);
+  if (days <= 0) return "today";
+  if (days < 30) return days === 1 ? "1 day" : `${days} days`;
+  let years = asOf.getFullYear() - latest.getFullYear();
+  let months = asOf.getMonth() - latest.getMonth();
+  if (asOf.getDate() < latest.getDate()) months -= 1;
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+  if (years >= 1) {
+    if (months <= 0) return years === 1 ? "1 year" : `${years} years`;
+    return `${years === 1 ? "1 year" : `${years} years`} ${months === 1 ? "1 month" : `${months} months`}`;
+  }
+  const monthsF = days / 30.437;
+  if (monthsF < 1) return days === 1 ? "1 day" : `${days} days`;
+  if (Math.abs(monthsF - Math.round(monthsF)) < 0.05) {
+    const whole = Math.round(monthsF);
+    return whole === 1 ? "1 month" : `${whole} months`;
+  }
+  return `${monthsF.toFixed(1)} months`;
 }
 
 function renderDiagnosticsCharts(profile, series, opts = {}) {
@@ -14833,34 +14905,48 @@ document.getElementById("btn-add-measurement")?.addEventListener("click", async 
   toast("Measurement added");
 });
 
-document.getElementById("btn-add-diagnostic")?.addEventListener("click", async () => {
+async function submitDiagnosticReading({
+  nameId,
+  valueId,
+  unitId,
+  dateId,
+  notesId,
+  stayOnLabs = false,
+} = {}) {
   if (!state.activePatientId) {
     toast("Select a patient first", "error");
-    return;
+    return false;
   }
-  const name = document.getElementById("diag-name")?.value.trim();
-  const valueRaw = document.getElementById("diag-value")?.value;
-  const unit = document.getElementById("diag-unit")?.value.trim() || null;
-  const recordedAt = document.getElementById("diag-date")?.value;
-  const notes = document.getElementById("diag-notes")?.value.trim() || null;
+  const nameEl = document.getElementById(nameId);
+  const valueEl = document.getElementById(valueId);
+  const unitEl = document.getElementById(unitId);
+  const dateEl = document.getElementById(dateId);
+  const notesEl = document.getElementById(notesId);
+  const name = nameEl?.value.trim();
+  const valueRaw = valueEl?.value;
+  let unit = unitEl?.value.trim() || null;
+  const recordedAt = dateEl?.value;
+  const notes = notesEl?.value.trim() || null;
   if (!name) {
     toast("Enter a diagnostic name", "error");
-    return;
+    return false;
   }
   if (valueRaw === "" || valueRaw == null) {
     toast("Enter a value", "error");
-    return;
+    return false;
   }
   if (!recordedAt) {
     toast("Choose a date", "error");
-    return;
+    return false;
   }
-  // Auto-fill unit from preset when blank
   if (!unit) {
     const preset = (state.diagnosticPresets || []).find(
       (p) => p.name.toLowerCase() === name.toLowerCase()
     );
-    if (preset?.unit) document.getElementById("diag-unit").value = preset.unit;
+    if (preset?.unit && unitEl) {
+      unitEl.value = preset.unit;
+      unit = preset.unit;
+    }
   }
   const res = await fetch(`/api/patients/${state.activePatientId}/diagnostics`, {
     method: "POST",
@@ -14868,7 +14954,7 @@ document.getElementById("btn-add-diagnostic")?.addEventListener("click", async (
     body: JSON.stringify({
       name,
       value: Number(valueRaw),
-      unit: document.getElementById("diag-unit")?.value.trim() || null,
+      unit: unitEl?.value.trim() || null,
       recorded_at: recordedAt,
       notes,
     }),
@@ -14876,22 +14962,74 @@ document.getElementById("btn-add-diagnostic")?.addEventListener("click", async (
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     toast(err.detail || "Could not add diagnostic", "error");
-    return;
+    return false;
   }
   const data = await res.json();
-  document.getElementById("diag-value").value = "";
-  document.getElementById("diag-notes").value = "";
+  if (valueEl) valueEl.value = "";
+  if (notesEl) notesEl.value = "";
   applyProfileResponse(data);
   toast("Diagnostic reading added");
-  switchTab("labs");
-});
+  if (stayOnLabs) switchTab("labs");
+  else switchTab("labs");
+  return true;
+}
 
-document.getElementById("diag-name")?.addEventListener("change", () => {
-  const name = document.getElementById("diag-name")?.value.trim().toLowerCase();
-  const unitEl = document.getElementById("diag-unit");
+function syncDiagUnitFromName(nameId, unitId) {
+  const name = document.getElementById(nameId)?.value.trim().toLowerCase();
+  const unitEl = document.getElementById(unitId);
   if (!name || !unitEl || unitEl.value.trim()) return;
   const preset = (state.diagnosticPresets || []).find((p) => p.name.toLowerCase() === name);
   if (preset?.unit) unitEl.value = preset.unit;
+}
+
+function ensureLabsAddDateDefault() {
+  const dateEl = document.getElementById("labs-diag-date");
+  if (!dateEl || dateEl.value) return;
+  const today = new Date();
+  dateEl.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+}
+
+document.getElementById("btn-add-diagnostic")?.addEventListener("click", async () => {
+  await submitDiagnosticReading({
+    nameId: "diag-name",
+    valueId: "diag-value",
+    unitId: "diag-unit",
+    dateId: "diag-date",
+    notesId: "diag-notes",
+  });
+});
+
+document.getElementById("btn-labs-add-diagnostic")?.addEventListener("click", async () => {
+  const ok = await submitDiagnosticReading({
+    nameId: "labs-diag-name",
+    valueId: "labs-diag-value",
+    unitId: "labs-diag-unit",
+    dateId: "labs-diag-date",
+    notesId: "labs-diag-notes",
+    stayOnLabs: true,
+  });
+  if (ok) {
+    document.getElementById("labs-diag-name")?.focus();
+  }
+});
+
+document.getElementById("btn-labs-open-add")?.addEventListener("click", () => {
+  const details = document.getElementById("labs-add-details");
+  if (details) details.open = true;
+  ensureLabsAddDateDefault();
+  document.getElementById("labs-diag-name")?.focus();
+});
+
+document.getElementById("labs-add-details")?.addEventListener("toggle", () => {
+  if (document.getElementById("labs-add-details")?.open) ensureLabsAddDateDefault();
+});
+
+document.getElementById("diag-name")?.addEventListener("change", () => {
+  syncDiagUnitFromName("diag-name", "diag-unit");
+});
+
+document.getElementById("labs-diag-name")?.addEventListener("change", () => {
+  syncDiagUnitFromName("labs-diag-name", "labs-diag-unit");
 });
 
 document.getElementById("patient-measurements-list")?.addEventListener("click", async (event) => {

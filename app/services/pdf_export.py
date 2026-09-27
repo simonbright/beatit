@@ -1,6 +1,6 @@
 import math
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -956,6 +956,11 @@ def _sparkline_png_bytes(
         t_min = min(read_min - headroom, min(pre_days))
     if post_days:
         t_max = max(read_max + headroom, max(post_days))
+    today_ord = float(datetime.now(timezone.utc).astimezone(EASTERN).date().toordinal())
+    if today_ord > t_max:
+        t_max = today_ord + max(2.0, (t_max - t_min) * 0.03 or 2.0)
+    elif today_ord < t_min:
+        t_min = today_ord - max(2.0, (t_max - t_min) * 0.03 or 2.0)
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)
@@ -1039,7 +1044,23 @@ def _sparkline_png_bytes(
         y = y_for(value)
         coords.append((x, y, status))
 
-    # 3) Very light drop-lines from each reading (date↔point) — keep quiet vs letter ticks
+    # 3) Today reference — solid vertical marker so "now" is visible vs last draws
+    today_x = x_for_day(today_ord)
+    if pad_l <= today_x <= pad_l + chart_w:
+        draw.line(
+            (today_x, plot_top, today_x, plot_bottom),
+            fill=(14, 165, 233, 220),
+            width=3,
+        )
+        draw.text(
+            (today_x, plot_top - 2),
+            "Today",
+            fill=(14, 116, 144, 255),
+            font=font_small,
+            anchor="mb",
+        )
+
+    # 4) Very light drop-lines from each reading (date↔point) — keep quiet vs letter ticks
     for x, y, _status in coords:
         draw.line(
             (x, y + 8, x, plot_bottom),
@@ -1047,7 +1068,7 @@ def _sparkline_png_bytes(
             width=1,
         )
 
-    # 4) Trend segments + dots + value labels
+    # 5) Trend segments + dots + value labels
     for i in range(len(coords) - 1):
         x0, y0, s0 = coords[i]
         x1, y1, s1 = coords[i + 1]
@@ -1652,6 +1673,51 @@ def diagnostics_pdf_filename(
     return f"bright-health-{kind}-{stamp}.pdf"
 
 
+def _format_time_since_last_test(
+    latest_iso: str | None,
+    *,
+    as_of: date | None = None,
+) -> str:
+    """Human age since a lab date: days / fractional months / years+months."""
+    raw = str(latest_iso or "").strip()[:10]
+    if len(raw) != 10:
+        return "—"
+    try:
+        latest = date.fromisoformat(raw)
+    except ValueError:
+        return "—"
+    today = as_of or datetime.now(timezone.utc).astimezone(EASTERN).date()
+    if latest > today:
+        return "0 days"
+    days = (today - latest).days
+    if days <= 0:
+        return "today"
+    if days < 30:
+        return "1 day" if days == 1 else f"{days} days"
+    # Calendar years / months for 1y+
+    years = today.year - latest.year
+    months = today.month - latest.month
+    if today.day < latest.day:
+        months -= 1
+    if months < 0:
+        years -= 1
+        months += 12
+    if years >= 1:
+        if months <= 0:
+            return "1 year" if years == 1 else f"{years} years"
+        year_bit = "1 year" if years == 1 else f"{years} years"
+        month_bit = "1 month" if months == 1 else f"{months} months"
+        return f"{year_bit} {month_bit}"
+    # Under a year: fractional months (approx 30.437 days)
+    months_f = days / 30.437
+    if months_f < 1:
+        return "1 day" if days == 1 else f"{days} days"
+    if abs(months_f - round(months_f)) < 0.05:
+        whole = int(round(months_f))
+        return "1 month" if whole == 1 else f"{whole} months"
+    return f"{months_f:.1f} months"
+
+
 def _diagnostics_matrix_data(
     series: list[dict[str, Any]] | None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
@@ -1676,7 +1742,16 @@ def _diagnostics_matrix_data(
             unit = ""
             sample = next(iter(by_date.values()))
             unit = str(sample.get("unit") or item.get("unit") or "").strip()
-            tests.append({"name": name, "unit": unit, "by_date": by_date})
+            latest_day = max(by_date.keys())
+            tests.append(
+                {
+                    "name": name,
+                    "unit": unit,
+                    "by_date": by_date,
+                    "latest_at": latest_day,
+                    "since_label": _format_time_since_last_test(latest_day),
+                }
+            )
     dates.sort()
     return dates, tests
 
@@ -1731,8 +1806,9 @@ def _write_diagnostics_overview_pages(
     def _write_chunk(chunk: list[str], *, first: bool) -> None:
         pdf.add_page(orientation="L")
         usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-        name_w = min(46.0, usable_w * 0.22)
-        value_w = (usable_w - name_w) / max(len(chunk), 1)
+        name_w = min(40.0, usable_w * 0.18)
+        since_w = min(28.0, usable_w * 0.12)
+        value_w = (usable_w - name_w - since_w) / max(len(chunk), 1)
 
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(14, 116, 144)
@@ -1745,6 +1821,7 @@ def _write_diagnostics_overview_pages(
             3.8,
             _safe_text(
                 f"Landscape view · values only (units in Test column) · "
+                f"Since = time since latest result · "
                 f"{len(tests)} tests · {len(dates)} dates · "
                 f"{'US' if system == 'us' else 'Canada'} units"
             ),
@@ -1753,41 +1830,32 @@ def _write_diagnostics_overview_pages(
         )
         pdf.ln(1.5)
 
-        pdf.set_font("Helvetica", "B", 6.2)
-        pdf.set_fill_color(241, 245, 249)
-        pdf.set_text_color(15, 23, 42)
-        pdf.cell(name_w, row_h + 0.8, "Test (unit)", border=1, fill=True)
-        for day in chunk:
-            label = _format_diag_date_label(day, compact=True, unit_system=system)
-            pdf.cell(value_w, row_h + 0.8, _safe_text(label), border=1, align="C", fill=True)
-        pdf.ln(row_h + 0.8)
+        def _write_header() -> None:
+            pdf.set_font("Helvetica", "B", 6.2)
+            pdf.set_fill_color(241, 245, 249)
+            pdf.set_text_color(15, 23, 42)
+            pdf.cell(name_w, row_h + 0.8, "Test (unit)", border=1, fill=True)
+            pdf.cell(since_w, row_h + 0.8, "Since", border=1, align="C", fill=True)
+            for day in chunk:
+                label = _format_diag_date_label(day, compact=True, unit_system=system)
+                pdf.cell(value_w, row_h + 0.8, _safe_text(label), border=1, align="C", fill=True)
+            pdf.ln(row_h + 0.8)
+
+        _write_header()
 
         pdf.set_font("Helvetica", "", 6.0)
         for ti, test in enumerate(tests):
             if pdf.get_y() + row_h + 2 > pdf.h - pdf.b_margin:
                 pdf.add_page(orientation="L")
                 usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-                name_w = min(46.0, usable_w * 0.22)
-                value_w = (usable_w - name_w) / max(len(chunk), 1)
+                name_w = min(40.0, usable_w * 0.18)
+                since_w = min(28.0, usable_w * 0.12)
+                value_w = (usable_w - name_w - since_w) / max(len(chunk), 1)
                 pdf.set_font("Helvetica", "B", 11)
                 pdf.set_text_color(14, 116, 144)
                 pdf.cell(0, 5.5, "Results overview (continued)", new_x="LMARGIN", new_y="NEXT")
                 pdf.ln(1)
-                pdf.set_font("Helvetica", "B", 6.2)
-                pdf.set_fill_color(241, 245, 249)
-                pdf.set_text_color(15, 23, 42)
-                pdf.cell(name_w, row_h + 0.8, "Test (unit)", border=1, fill=True)
-                for day in chunk:
-                    label = _format_diag_date_label(day, compact=True, unit_system=system)
-                    pdf.cell(
-                        value_w,
-                        row_h + 0.8,
-                        _safe_text(label),
-                        border=1,
-                        align="C",
-                        fill=True,
-                    )
-                pdf.ln(row_h + 0.8)
+                _write_header()
                 pdf.set_font("Helvetica", "", 6.0)
 
             if ti % 2 == 0:
@@ -1798,8 +1866,17 @@ def _write_diagnostics_overview_pages(
             pdf.cell(
                 name_w,
                 row_h,
-                _matrix_test_label(test, max_len=40),
+                _matrix_test_label(test, max_len=34),
                 border=1,
+                fill=True,
+            )
+            pdf.set_text_color(71, 85, 105)
+            pdf.cell(
+                since_w,
+                row_h,
+                _safe_text(test.get("since_label") or "—"),
+                border=1,
+                align="C",
                 fill=True,
             )
             for day in chunk:
@@ -2015,10 +2092,10 @@ def build_diagnostics_pdf(
     pdf.set_font("Helvetica", "", 8)
     legend = (
         "Green shaded zone = target. Line segments follow each reading (green / yellow / red). "
-        "Gray = no reference yet. Letter ticks (A, B, …) at the top of a chart mark med/lifestyle "
-        "changes in the lab date range — no vertical overlay lines through the trend. "
+        "Gray = no reference yet. A solid blue Today line marks the current day. "
+        "Letter ticks (A, B, …) at the top of a chart mark med/lifestyle changes in the lab date range. "
         f"{date_order}; ISO (YYYY-MM-DD) also appears with latest values. "
-        "Trend charts first, then a landscape results overview."
+        "Results table first (with time since latest test), then trend charts."
     )
     _pdf_multiline(pdf, _safe_text(legend), h=3.6)
     if chart_milestones:
@@ -2052,7 +2129,6 @@ def build_diagnostics_pdf(
         pdf.set_text_color(100, 100, 100)
         pdf.cell(0, 8, "No diagnostic readings to export.", new_x="LMARGIN", new_y="NEXT")
     else:
-        usable_w = pdf.w - pdf.l_margin - pdf.r_margin
         strokes = [(14, 116, 144), (8, 145, 178), (180, 83, 9)]
         ranked = sorted(
             series,
@@ -2072,6 +2148,29 @@ def build_diagnostics_pdf(
                 trends.append(item)
             else:
                 singles.append(item)
+
+        # Table / overview first, then portrait trend charts
+        _write_diagnostics_overview_pages(
+            pdf,
+            ranked,
+            unit_system=system,
+        )
+
+        pdf.add_page()
+        usable_w = pdf.w - pdf.l_margin - pdf.r_margin
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(14, 116, 144)
+        pdf.cell(0, 6.5, "Trend charts", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(
+            0,
+            4,
+            "Solid blue line = today. Letter ticks mark med/lifestyle changes near this lab window.",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        pdf.ln(2.5)
 
         chart_h_mm = 58
         for index, item in enumerate(trends):
@@ -2098,11 +2197,17 @@ def build_diagnostics_pdf(
             latest_date = _format_diag_date_precise(
                 latest.get("recorded_at"), unit_system=system
             )
+            since_bit = _format_time_since_last_test(
+                str(latest.get("recorded_at") or "")[:10]
+            )
             unit_bit = f" {unit}" if unit else ""
             status_bit = f" | {str(status).capitalize()}" if status in _STATUS_RGB else ""
             ref = item.get("reference") or {}
             ref_bit = f" | Ref {ref['label']}" if ref.get("label") else ""
-            summary = f"{latest_val}{unit_bit} · {latest_date}{status_bit}{ref_bit}"
+            since_part = f" · {since_bit} ago" if since_bit and since_bit not in {"—", "today"} else (
+                f" · {since_bit}" if since_bit == "today" else ""
+            )
+            summary = f"{latest_val}{unit_bit} · {latest_date}{since_part}{status_bit}{ref_bit}"
 
             pdf.set_x(x)
             pdf.set_font("Helvetica", "B", 9.5)
@@ -2162,13 +2267,6 @@ def build_diagnostics_pdf(
             _write_single_reading_rows(
                 pdf, singles, usable_w=usable_w, unit_system=system
             )
-
-        # Landscape results overview only (all dates across — no multi-page detailed split)
-        _write_diagnostics_overview_pages(
-            pdf,
-            ranked,
-            unit_system=system,
-        )
 
     buffer = BytesIO()
     pdf.output(buffer)

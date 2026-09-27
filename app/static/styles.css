@@ -2940,6 +2940,56 @@ body {
   z-index: 3;
 }
 
+.diagnostics-matrix-table th.diag-matrix-since,
+.diagnostics-matrix-table td.diag-matrix-since-cell {
+  position: sticky;
+  left: 11rem;
+  z-index: 1;
+  background: var(--surface-solid, var(--surface));
+  min-width: 5.5rem;
+  max-width: 7.5rem;
+  white-space: normal;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+
+.diagnostics-matrix-table thead th.diag-matrix-since {
+  z-index: 3;
+  color: var(--text);
+}
+
+.diag-matrix-since-sub {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 0.15rem;
+  white-space: normal;
+}
+
+.labs-add-details {
+  margin: 0.65rem 0 0.85rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.labs-add-summary {
+  cursor: pointer;
+  font-weight: 650;
+  font-size: 0.95rem;
+  list-style: none;
+}
+
+.labs-add-summary::-webkit-details-marker { display: none; }
+
+.labs-add-form {
+  margin-top: 0.65rem;
+}
+
 .diag-matrix-iso {
   display: block;
   font-size: 0.72rem;
