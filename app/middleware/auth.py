@@ -7,7 +7,13 @@ from app.services.auth_session import COOKIE_NAME, verify_session_token
 from app.services.profile_access import enforce_request_access
 from app.services.user_context import reset_request_actor, set_request_actor
 
-PUBLIC_PATHS = {"/api/health", "/api/version", "/login", "/api/login"}
+PUBLIC_PATHS = {
+    "/api/health",
+    "/api/version",
+    "/login",
+    "/api/login",
+    "/manifest.webmanifest",
+}
 PUBLIC_PREFIXES = ("/static/",)
 
 

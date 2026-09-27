@@ -3,16 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BeatIt — Patient Care Workspace</title>
+  <title>Bright Health — Patient Care Workspace</title>
+  <meta name="application-name" content="Bright Health">
+  <meta name="apple-mobile-web-app-title" content="Bright Health">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0ea5e9">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="icon" href="/static/favicon.png" type="image/png">
-  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="/static/favicon.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
   <script>
     (function () {
-      var t = localStorage.getItem("beatit-theme");
+      var t = localStorage.getItem("bright-health-theme") || localStorage.getItem("beatit-theme");
       if (t === "day" || t === "night") document.documentElement.setAttribute("data-theme", t);
       else document.documentElement.setAttribute("data-theme", "day");
     })();
@@ -29,11 +35,11 @@
   <header class="header report-header">
     <div class="header-inner">
       <div class="brand">
-        <a href="/" class="brand-duck-link" aria-label="BeatIt home">
+        <a href="/" class="brand-duck-link" aria-label="Bright Health home">
           <img src="/static/favicon.svg" alt="" class="brand-duck" width="40" height="40">
         </a>
         <div>
-          <h1>BeatIt</h1>
+          <h1>Bright Health</h1>
           <p class="subtitle">Patient Care Workspace</p>
         </div>
       </div>
@@ -68,7 +74,7 @@
             <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
           </svg>
         </button>
-        <button type="button" class="header-icon-btn" id="btn-howto" aria-label="How to use BeatIt" title="How to">
+        <button type="button" class="header-icon-btn" id="btn-howto" aria-label="How to use Bright Health" title="How to">
           <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
             <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -103,6 +109,10 @@
         <button class="tab tab-icon" data-tab="labs" role="tab" title="Labs" aria-label="Labs">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="tab-icon-label">Labs</span>
+        </button>
+        <button class="tab tab-icon" data-tab="plan" role="tab" title="Plan" aria-label="Plan">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+          <span class="tab-icon-label">Plan</span>
         </button>
         <button class="tab tab-icon" data-tab="custom-tasks" role="tab" title="Custom Tasks" aria-label="Custom Tasks">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -803,7 +813,7 @@
         </summary>
         <div class="analyze-actions-body">
           <p class="analysis-run-lead muted small" id="analysis-run-lead">
-            BeatIt reads your selected documents and produces an executive summary, full assessment, and open items to resolve.
+            Bright Health reads your selected documents and produces an executive summary, full assessment, and open items to resolve.
           </p>
 
           <div class="analysis-run-step assessment-scope-section" id="assessment-scope-card">
@@ -991,6 +1001,71 @@
             </div>
           </div>
         </div>
+    </section>
+
+    <!-- PLAN / CALENDAR -->
+    <section id="panel-plan" class="panel">
+      <div class="card plan-card">
+        <div class="row-between wrap">
+          <div>
+            <h3>Plan &amp; follow-ups</h3>
+            <p class="muted small">Schedule exams and diagnostics, track calls and results to send, and log what you still need to follow up on.</p>
+          </div>
+        </div>
+        <form id="care-item-form" class="care-item-form" autocomplete="off">
+          <label for="care-item-title">What needs doing
+            <input type="text" id="care-item-title" maxlength="160" required placeholder="e.g. Call Dr. Lee to book MRI, Send CT to specialist">
+          </label>
+          <label for="care-item-kind">Type
+            <select id="care-item-kind">
+              <option value="exam">Exam / imaging</option>
+              <option value="diagnostic">Diagnostic / lab</option>
+              <option value="appointment">Appointment</option>
+              <option value="call">Call / book</option>
+              <option value="send">Send results</option>
+              <option value="follow_up">Follow-up</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label for="care-item-due">Date
+            <input type="date" id="care-item-due">
+          </label>
+          <label for="care-item-contact">Who / where
+            <input type="text" id="care-item-contact" maxlength="120" placeholder="Clinic, doctor, contact">
+          </label>
+          <label for="care-item-notes" class="care-item-notes">Notes
+            <textarea id="care-item-notes" rows="2" maxlength="2000" placeholder="Details, prep, account numbers…"></textarea>
+          </label>
+          <div class="care-item-form-actions">
+            <button type="submit" class="btn primary" id="btn-save-care-item">Add to plan</button>
+            <button type="button" class="btn ghost hidden" id="btn-cancel-care-edit">Cancel edit</button>
+          </div>
+          <input type="hidden" id="care-item-edit-id" value="">
+        </form>
+        <div class="plan-layout">
+          <div class="plan-calendar-wrap">
+            <div class="plan-calendar-header">
+              <button type="button" class="btn ghost btn-sm" id="btn-plan-prev-month" aria-label="Previous month">‹</button>
+              <h4 id="plan-calendar-label">Month</h4>
+              <button type="button" class="btn ghost btn-sm" id="btn-plan-next-month" aria-label="Next month">›</button>
+              <button type="button" class="btn secondary btn-sm" id="btn-plan-today">Today</button>
+            </div>
+            <div id="plan-calendar" class="plan-calendar" aria-label="Plan calendar"></div>
+          </div>
+          <div class="plan-list-wrap">
+            <div class="plan-list-filters" role="group" aria-label="Plan filters">
+              <button type="button" class="btn secondary btn-sm plan-filter-btn active" data-plan-filter="open">Open</button>
+              <button type="button" class="btn ghost btn-sm plan-filter-btn" data-plan-filter="overdue">Overdue</button>
+              <button type="button" class="btn ghost btn-sm plan-filter-btn" data-plan-filter="done">Done</button>
+              <button type="button" class="btn ghost btn-sm plan-filter-btn" data-plan-filter="all">All</button>
+            </div>
+            <p id="plan-selected-day" class="muted small plan-selected-day"></p>
+            <div id="plan-items-list" class="plan-items-list">
+              <p class="muted small">Select a patient to see planned items.</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- OPTIONS CHAT -->
@@ -1371,8 +1446,8 @@
     <!-- HOW TO -->
     <section id="panel-howto" class="panel">
       <div class="card howto-intro-card">
-        <h3>How BeatIt works</h3>
-        <p class="muted howto-lead">BeatIt builds a clinical case assessment from your stored documents. Start with the three steps below, then explore each tab when you need it.</p>
+        <h3>How Bright Health works</h3>
+        <p class="muted howto-lead">Bright Health builds a clinical case assessment from your stored documents. Start with the three steps below, then explore each tab when you need it.</p>
 
         <div class="workflow-steps howto-quickstart" aria-label="Quick start">
           <button type="button" class="workflow-step" data-howto-nav="library" data-howto-open-add="1">
@@ -2007,7 +2082,7 @@
   </main>
 
   <footer class="app-footer" aria-label="App version">
-    <p class="app-footer-text" id="app-version">BeatIt</p>
+    <p class="app-footer-text" id="app-version">Bright Health</p>
   </footer>
 
   <button type="button" class="scroll-top-btn" id="btn-scroll-top" aria-label="Scroll to top" title="Back to top" hidden>

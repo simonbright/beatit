@@ -1,12 +1,12 @@
-# BeatIt — Oncology Case Research
+# Bright Health — Patient Care Workspace
 
-A local-first web application for organizing oncology research material (notes, URLs, PDFs, imaging, transcripts) and synthesizing insights with **sourced** AI analysis via **Ollama** or **OpenRouter**.
+A local-first web application for organizing clinical research material (notes, URLs, PDFs, imaging, transcripts) and synthesizing insights with **sourced** AI analysis via **Ollama** or **OpenRouter**.
 
 **Project page:** [simonbrightman.com/projects/beatit/](https://simonbrightman.com/projects/beatit/) · **License:** MIT
 
 ## Medical disclaimer
 
-BeatIt supports research and case organization. It is **not** medical advice and does not replace evaluation by qualified oncology teams. Verify all clinical decisions with your care team.
+Bright Health supports research and case organization. It is **not** medical advice and does not replace evaluation by qualified oncology teams. Verify all clinical decisions with your care team.
 
 ## Features
 

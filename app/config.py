@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     openrouter_model: str = "google/gemini-3.1-flash-lite"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_http_referer: str = "http://localhost:8080"
-    openrouter_app_title: str = "BeatIt"
+    openrouter_app_title: str = "Bright Health"
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"

@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-APP_NAME = "BeatIt"
-APP_VERSION = "1.6.41"
+APP_NAME = "Bright Health"
+APP_VERSION = "1.7.0"
 # Optional ISO override (date or datetime). Leave empty to use git/file timestamp.
 APP_UPDATED = ""
 

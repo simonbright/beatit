@@ -185,6 +185,10 @@ from app.services.case_manager import (
     add_patient_food_drink,
     update_patient_food_drink,
     delete_patient_food_drink,
+    add_patient_care_item,
+    update_patient_care_item,
+    add_patient_care_item_activity,
+    delete_patient_care_item,
     add_patient_log_tile,
     delete_patient_log_tile,
     rename_patient_log_tile,
@@ -4271,6 +4275,121 @@ async def api_delete_patient_food_drink(patient_id: str, food_id: str):
         "diagnostic_series": group_diagnostics_for_charts(profile),
         "journal_series": group_journal_for_charts(profile),
     }
+
+
+class PatientCareItemCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    kind: str | None = Field(default="other", max_length=40)
+    due_at: str | None = Field(default=None, max_length=10)
+    notes: str | None = Field(default=None, max_length=2000)
+    contact: str | None = Field(default=None, max_length=120)
+
+
+class PatientCareItemUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=160)
+    kind: str | None = Field(default=None, max_length=40)
+    due_at: str | None = Field(default=None, max_length=10)
+    notes: str | None = Field(default=None, max_length=2000)
+    contact: str | None = Field(default=None, max_length=120)
+    status: str | None = Field(default=None, max_length=20)
+
+
+class PatientCareItemActivityRequest(BaseModel):
+    note: str = Field(min_length=1, max_length=500)
+    kind: str | None = Field(default="note", max_length=40)
+    follow_up_at: str | None = Field(default=None, max_length=10)
+
+
+def _care_item_profile_payload(patient_id: str, entry: dict[str, Any] | None = None) -> dict[str, Any]:
+    profile = get_patient_profile(patient_id)
+    payload: dict[str, Any] = {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
+        "profile": profile,
+        "diagnostic_series": group_diagnostics_for_charts(profile),
+        "journal_series": group_journal_for_charts(profile),
+    }
+    if entry is not None:
+        payload["care_item"] = entry
+    return payload
+
+
+@router.post("/patients/{patient_id}/care-items")
+async def api_add_patient_care_item(patient_id: str, body: PatientCareItemCreateRequest):
+    try:
+        entry = add_patient_care_item(
+            patient_id,
+            title=body.title,
+            kind=body.kind,
+            due_at=body.due_at,
+            notes=body.notes,
+            contact=body.contact,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return _care_item_profile_payload(patient_id, entry)
+
+
+@router.patch("/patients/{patient_id}/care-items/{item_id}")
+async def api_update_patient_care_item(
+    patient_id: str,
+    item_id: str,
+    body: PatientCareItemUpdateRequest,
+):
+    fields_set = body.model_fields_set
+    kwargs: dict[str, Any] = {}
+    if "title" in fields_set:
+        kwargs["title"] = body.title
+    if "kind" in fields_set:
+        kwargs["kind"] = body.kind
+    if "due_at" in fields_set:
+        kwargs["due_at"] = body.due_at
+    if "notes" in fields_set:
+        kwargs["notes"] = body.notes
+    if "contact" in fields_set:
+        kwargs["contact"] = body.contact
+    if "status" in fields_set:
+        kwargs["status"] = body.status
+    try:
+        entry = update_patient_care_item(patient_id, item_id, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return _care_item_profile_payload(patient_id, entry)
+
+
+@router.post("/patients/{patient_id}/care-items/{item_id}/activity")
+async def api_add_patient_care_item_activity(
+    patient_id: str,
+    item_id: str,
+    body: PatientCareItemActivityRequest,
+):
+    try:
+        entry = add_patient_care_item_activity(
+            patient_id,
+            item_id,
+            note=body.note,
+            kind=body.kind,
+            follow_up_at=body.follow_up_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return _care_item_profile_payload(patient_id, entry)
+
+
+@router.delete("/patients/{patient_id}/care-items/{item_id}")
+async def api_delete_patient_care_item(patient_id: str, item_id: str):
+    removed = delete_patient_care_item(patient_id, item_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Item not found")
+    payload = _care_item_profile_payload(patient_id)
+    payload["ok"] = True
+    return payload
 
 
 class PatientLogTileCreateRequest(BaseModel):

@@ -7,7 +7,7 @@ SOURCE ATTRIBUTION (mandatory — every clinical claim must be tagged):
 - [SOURCE: Web — https://example.org/page] — external web page where you found the fact (ClinicalTrials.gov, NCI, journal, guideline site). Use the full https URL.
 - [SOURCE: Web — NCT01234567] — clinical trial by NCT ID (links to ClinicalTrials.gov automatically)
 - [SOURCE: Patient context] — from configured patient context only (not verified clinical record)
-- [SOURCE: Patient profile] — labs, logs, measurements, medications, or milestones from the patient's BeatIt profile
+- [SOURCE: Patient profile] — labs, logs, measurements, medications, or milestones from the patient's Bright Health profile
 - [SOURCE: AI inference — not verified] — your interpretation; NOT hard data
 - [SOURCE: Unknown] — gap not supported by stored documents; do NOT present as established fact
 

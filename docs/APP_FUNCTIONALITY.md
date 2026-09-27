@@ -1,6 +1,6 @@
-# BeatIt — App Functionality
+# Bright Health — App Functionality
 
-BeatIt is a local-first **patient care workspace** for organizing clinical research material (notes, PDFs, imaging, links, transcripts) and synthesizing **sourced** AI assessments via **Ollama** or **OpenRouter**.
+Bright Health is a local-first **patient care workspace** for organizing clinical research material (notes, PDFs, imaging, links, transcripts) and synthesizing **sourced** AI assessments via **Ollama** or **OpenRouter**.
 
 It is **not medical advice**. Verify clinical decisions with qualified care teams.
 
@@ -290,7 +290,7 @@ Exports use Eastern timestamps where applicable; lab charts embed print-quality 
 
 ## 16. How-to & themes
 
-- In-app **How BeatIt works** (header): Library → context → Run; open items; chat; tasks; citations; settings
+- In-app **How Bright Health works** (header): Library → context → Run; open items; chat; tasks; Plan calendar; citations; settings
 - Day/night theme (`localStorage` key `beatit-theme`)
 - Version footer (`/api/version`); health check (`/api/health`)
 
@@ -326,7 +326,7 @@ Full HTTP surface: `app/api/routes.py`.
 
 ---
 
-## What BeatIt is not
+## What Bright Health is not
 
 - Not a calendar/scheduling product
 - Not billing or insurance software

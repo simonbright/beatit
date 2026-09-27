@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -11,7 +11,7 @@ from app.middleware.auth import SessionAuthMiddleware
 from app.storage.database import Database
 from app.services.analysis_jobs import resume_pending_jobs, scrub_all_case_databases
 from app.services.case_manager import migrate_legacy_if_needed, scrub_all_patient_profiles
-from app.version import APP_VERSION
+from app.version import APP_NAME, APP_VERSION
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="BeatIt — Patient Care Workspace",
+    title=f"{APP_NAME} — Patient Care Workspace",
     description="Store clinical research material and synthesize clinical insights",
     version=APP_VERSION,
     lifespan=lifespan,
@@ -51,6 +51,18 @@ def _inject_static_version(html: str) -> str:
     )
 
 
+@app.get("/manifest.webmanifest")
+async def web_manifest():
+    path = STATIC_DIR / "manifest.webmanifest"
+    if path.exists():
+        return FileResponse(
+            path,
+            media_type="application/manifest+json",
+            headers={"Cache-Control": "no-cache"},
+        )
+    raise HTTPException(status_code=404, detail="Manifest not found")
+
+
 @app.get("/login")
 async def login_page():
     login_path = STATIC_DIR / "login.html"
@@ -70,4 +82,4 @@ async def index():
             _inject_static_version(index_path.read_text(encoding="utf-8")),
             headers={"Cache-Control": "no-cache"},
         )
-    return {"message": "BeatIt API running. Static UI not found."}
+    return {"message": f"{APP_NAME} API running. Static UI not found."}

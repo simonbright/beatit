@@ -1,4 +1,4 @@
-"""Extract and compare patient name / DOB from lab report text vs BeatIt profile."""
+"""Extract and compare patient name / DOB from lab report text vs Bright Health profile."""
 
 from __future__ import annotations
 
@@ -461,7 +461,7 @@ def compare_lab_patient_identity(
     patient_id: str,
     extracted: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Compare extracted lab identity to the active BeatIt patient profile."""
+    """Compare extracted lab identity to the active Bright Health patient profile."""
     label = _patient_label(patient_id)
     profile = get_patient_profile(patient_id) or {}
     profile_dob = str(profile.get("date_of_birth") or "").strip()[:10] or None

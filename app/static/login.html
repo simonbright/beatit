@@ -3,13 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sign in — BeatIt</title>
+  <title>Sign in — Bright Health</title>
+  <meta name="application-name" content="Bright Health">
+  <meta name="apple-mobile-web-app-title" content="Bright Health">
+  <meta name="theme-color" content="#0ea5e9">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/favicon.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
   <script>
-    document.documentElement.setAttribute("data-theme", localStorage.getItem("beatit-theme") || "day");
+    document.documentElement.setAttribute(
+      "data-theme",
+      localStorage.getItem("bright-health-theme") || localStorage.getItem("beatit-theme") || "day"
+    );
   </script>
   <link rel="stylesheet" href="/static/styles.css">
   <style>
@@ -166,7 +175,7 @@
     <article class="card login-card">
       <div class="login-brand">
         <img src="/static/favicon.svg" alt="" class="login-duck" width="72" height="72">
-        <h1>BeatIt</h1>
+        <h1>Bright Health</h1>
         <p class="muted">Sign in to continue</p>
       </div>
 
@@ -209,7 +218,7 @@
   </div>
 
   <footer class="app-footer" aria-label="App version">
-    <p class="app-footer-text" id="app-version">BeatIt</p>
+    <p class="app-footer-text" id="app-version">Bright Health</p>
   </footer>
 
   <script>
@@ -288,7 +297,7 @@
                 return `${date} · ${time} ET`;
               })()
             : "");
-        el.textContent = `${data.name || "BeatIt"} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
+        el.textContent = `${data.name || "Bright Health"} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
       })
       .catch(() => {});
   </script>

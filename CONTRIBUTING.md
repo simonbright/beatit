@@ -1,6 +1,6 @@
-# Contributing to BeatIt
+# Contributing to Bright Health
 
-Thank you for your interest in improving BeatIt.
+Thank you for your interest in improving Bright Health.
 
 ## Getting started
 
@@ -22,11 +22,11 @@ Open http://localhost:8080. Leave `AUTH_USERNAME` and `AUTH_PASSWORD` empty for 
 
 ## PHI and safety
 
-BeatIt is designed for oncology case **research organization**, not clinical record systems.
+Bright Health is designed for oncology case **research organization**, not clinical record systems.
 
 - Do not open issues or PRs that include real patient names, identifiers, or clinical documents.
 - Use synthetic or clearly fictional examples in bug reports and screenshots.
 
 ## Medical disclaimer
 
-Contributions that change clinical prompting or output should preserve clear sourcing and the existing medical disclaimer posture. BeatIt does not provide medical advice.
+Contributions that change clinical prompting or output should preserve clear sourcing and the existing medical disclaimer posture. Bright Health does not provide medical advice.

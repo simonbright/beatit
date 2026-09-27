@@ -204,7 +204,7 @@ class AssessmentPDF(FPDF):
         self.set_xy(40, 11)
         self.set_font("Helvetica", "B", 16)
         self.set_text_color(14, 116, 144)
-        self.cell(0, 7, "BeatIt", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 7, APP_NAME, new_x="LMARGIN", new_y="NEXT")
         self.set_x(40)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(80, 80, 80)
@@ -1607,8 +1607,8 @@ def patient_bundle_pdf_filename(
     if len(part_key) > 40:
         part_key = "bundle"
     if slug:
-        return f"beatit-export-{part_key}-{slug}-{stamp}.pdf"
-    return f"beatit-export-{part_key}-{stamp}.pdf"
+        return f"bright-health-export-{part_key}-{slug}-{stamp}.pdf"
+    return f"bright-health-export-{part_key}-{stamp}.pdf"
 
 
 def assessment_pdf_filename(
@@ -1626,11 +1626,11 @@ def assessment_pdf_filename(
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:40]
         if slug:
             prefix = "custom-task" if analysis.get("analysis_type") == "query" else "assessment"
-            return f"beatit-{prefix}-{slug}-{stamp}.pdf"
+            return f"bright-health-{prefix}-{slug}-{stamp}.pdf"
 
     if analysis.get("analysis_type") == "query":
-        return f"beatit-custom-task-{stamp}.pdf"
-    return f"beatit-assessment-{stamp}.pdf"
+        return f"bright-health-custom-task-{stamp}.pdf"
+    return f"bright-health-assessment-{stamp}.pdf"
 
 
 def diagnostics_pdf_filename(
@@ -1648,8 +1648,8 @@ def diagnostics_pdf_filename(
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
     kind = "diagnostics-table" if table_only else "diagnostics"
     if slug:
-        return f"beatit-{kind}-{slug}-{stamp}.pdf"
-    return f"beatit-{kind}-{stamp}.pdf"
+        return f"bright-health-{kind}-{slug}-{stamp}.pdf"
+    return f"bright-health-{kind}-{stamp}.pdf"
 
 
 def _diagnostics_matrix_data(
@@ -2342,8 +2342,8 @@ def coverage_pdf_filename(
         slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
     if slug:
-        return f"beatit-coverage-{slug}-{stamp}.pdf"
-    return f"beatit-coverage-{stamp}.pdf"
+        return f"bright-health-coverage-{slug}-{stamp}.pdf"
+    return f"bright-health-coverage-{stamp}.pdf"
 
 
 def _format_coverage_doc_date(iso: str | None) -> str:
@@ -2676,8 +2676,8 @@ def medications_pdf_filename(
         slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
     if slug:
-        return f"beatit-medications-{scope_key}-{slug}-{stamp}.pdf"
-    return f"beatit-medications-{scope_key}-{stamp}.pdf"
+        return f"bright-health-medications-{scope_key}-{slug}-{stamp}.pdf"
+    return f"bright-health-medications-{scope_key}-{stamp}.pdf"
 
 
 def _estimate_med_row_height(pdf: FPDF, cells: list[tuple[float, str]], line_h: float = 3.6) -> float:
@@ -2960,8 +2960,8 @@ def journal_pdf_filename(
         slug = re.sub(r"[^\w\s-]", "", patient_label.lower())
         slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:36]
     if slug:
-        return f"beatit-log-{scope_key}-{slug}-{stamp}.pdf"
-    return f"beatit-log-{scope_key}-{stamp}.pdf"
+        return f"bright-health-log-{scope_key}-{slug}-{stamp}.pdf"
+    return f"bright-health-log-{scope_key}-{stamp}.pdf"
 
 
 def _format_journal_export_when(iso: str | None) -> str:

@@ -71,6 +71,9 @@ const state = {
   labsDateFrom: "",
   labsDateTo: "",
   labsPanel: "all",
+  planMonth: null,
+  planFilter: "open",
+  planSelectedDay: null,
   diagnosticsLoading: false,
   coverageReport: null,
   coverageView: "all",
@@ -111,7 +114,8 @@ let logLiveTick = 0;
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-const THEME_KEY = "beatit-theme";
+const THEME_KEY = "bright-health-theme";
+const LEGACY_THEME_KEY = "beatit-theme";
 
 function getTheme() {
   return document.documentElement.getAttribute("data-theme") === "day" ? "day" : "night";
@@ -121,6 +125,11 @@ function applyTheme(theme) {
   const next = theme === "day" ? "day" : "night";
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem(THEME_KEY, next);
+  try {
+    localStorage.removeItem(LEGACY_THEME_KEY);
+  } catch {
+    /* ignore */
+  }
 
   const toggle = $("#theme-toggle");
   if (toggle) {
@@ -603,7 +612,7 @@ function renderAppVersion(data) {
   const el = $("#app-version");
   if (!el || !data?.version) return;
   const updated = data.updated_display || formatVersionUpdated(data.updated);
-  const name = data.name || "BeatIt";
+  const name = data.name || "Bright Health";
   el.textContent = `${name} v${data.version}${updated ? ` · updated ${updated}` : ""}`;
 }
 
@@ -779,7 +788,7 @@ function renderPathLines(lines) {
     .join("");
 }
 
-const UPLOAD_BANNER_KEY = "beatit-upload-banner";
+const UPLOAD_BANNER_KEY = "bright-health-upload-banner";
 
 function dismissUploadResult() {
   const panel = $("#upload-result");
@@ -1791,7 +1800,7 @@ function renderAnalysisRunChrome() {
     : "Choose sources, then synthesize your library into an assessment";
   const lead = hasAssessment
     ? "Re-run when you've added reports or changed which documents are in scope."
-    : "BeatIt reads your selected documents and produces an executive summary, full assessment, and open items to resolve.";
+    : "Bright Health reads your selected documents and produces an executive summary, full assessment, and open items to resolve.";
   const btnLabel = hasAssessment ? "Update analysis" : "Run analysis";
 
   const titleEl = $("#analysis-panel-title");
@@ -1960,6 +1969,10 @@ function switchTab(name, options = {}) {
   }
   if (name === "labs") {
     refreshActivePatientProfile().catch(() => {});
+  }
+  if (name === "plan") {
+    refreshActivePatientProfile().catch(() => {});
+    renderCarePlan(state.patientProfile);
   }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
@@ -2872,7 +2885,9 @@ function readSavedTabName() {
   if (hash === "ingest") return "library";
   if (hash && VALID_TABS.has(hash)) return hash;
   try {
-    const saved = sessionStorage.getItem(TAB_STORAGE_KEY);
+    const saved =
+      sessionStorage.getItem(TAB_STORAGE_KEY) ||
+      sessionStorage.getItem("beatit-active-tab");
     if (saved === "ingest") return "library";
     if (saved && VALID_TABS.has(saved)) return saved;
   } catch {
@@ -3027,13 +3042,13 @@ function buildCustomTaskShareContent(analysis) {
     lines.push("");
     lines.push(analysis.annotation_notes);
   }
-  lines.push("", "BeatIt custom task export (PDF attached).");
+  lines.push("", "Bright Health custom task export (PDF attached).");
   const defaultSubject =
     (analysis.annotation_title || "").trim() ||
     truncate(analysis.query || "", 120) ||
-    "BeatIt custom task";
+    "Bright Health custom task";
   return {
-    subject: `BeatIt: ${defaultSubject}`,
+    subject: `Bright Health: ${defaultSubject}`,
     body: lines.join("\n"),
   };
 }
@@ -3662,12 +3677,13 @@ async function savePatientContext() {
 }
 
 const LIBRARY_PAGE_SIZE = 10;
-const SELECTION_STORAGE_KEY = "beatit-assessment-selection";
-const ASSESSMENT_GUIDANCE_STORAGE_KEY = "beatit-assessment-guidance";
-const TAB_STORAGE_KEY = "beatit-active-tab";
+const SELECTION_STORAGE_KEY = "bright-health-assessment-selection";
+const ASSESSMENT_GUIDANCE_STORAGE_KEY = "bright-health-assessment-guidance";
+const TAB_STORAGE_KEY = "bright-health-active-tab";
 const VALID_TABS = new Set([
   "analyze",
   "labs",
+  "plan",
   "options-chat",
   "custom-tasks",
   "library",
@@ -3679,6 +3695,7 @@ const VALID_TABS = new Set([
 const MAIN_NAV_TABS = new Set([
   "analyze",
   "labs",
+  "plan",
   "custom-tasks",
   "library",
   "settings",
@@ -4370,7 +4387,7 @@ const PATIENT_ASK_PRESETS = {
     label: "What am I missing?",
     query:
       "What am I missing?\n\n" +
-      "Synthesize the accumulated BeatIt record for this person: most recent labs (with trends), " +
+      "Synthesize the accumulated Bright Health record for this person: most recent labs (with trends), " +
       "recent and historical logs/self-reports, medications, measurements, milestones, and library documents.\n\n" +
       "Identify important gaps: missing tests, incomplete workup, unresolved findings, overdue follow-ups, " +
       "and documentation that seems absent. Distinguish (1) not in the chart, (2) mentioned but not done, " +
@@ -9284,6 +9301,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
     renderMobileLogTiles(null);
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
+    renderCarePlan(null);
     renderMedicationsHome(null);
     return;
   }
@@ -9369,6 +9387,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   const journalSeries = extras.journal_series || groupJournalClient(profile);
   renderJournalHome(profile, journalSeries);
   renderMedicationsHome(profile);
+  renderCarePlan(profile);
   renderMedSafetyResult(profile?.medication_safety);
   syncPatientSpecificLogTiles();
   syncMobileLogForLabel();
@@ -10201,6 +10220,289 @@ async function confirmAndDeleteMedication(id, nameHint = "") {
   if (document.getElementById("med-edit-id")?.value === id) clearMedicationForm();
   toast("Medication deleted");
   return true;
+}
+
+const CARE_KIND_LABELS = {
+  exam: "Exam",
+  diagnostic: "Diagnostic",
+  appointment: "Appointment",
+  call: "Call / book",
+  send: "Send results",
+  follow_up: "Follow-up",
+  other: "Other",
+};
+
+function careTodayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function careMonthStart(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function ensurePlanMonth() {
+  if (!(state.planMonth instanceof Date) || Number.isNaN(state.planMonth.getTime())) {
+    state.planMonth = careMonthStart();
+  }
+  return state.planMonth;
+}
+
+function clearCareItemForm() {
+  const form = document.getElementById("care-item-form");
+  if (form) form.reset();
+  const editId = document.getElementById("care-item-edit-id");
+  if (editId) editId.value = "";
+  document.getElementById("btn-cancel-care-edit")?.classList.add("hidden");
+  const saveBtn = document.getElementById("btn-save-care-item");
+  if (saveBtn) saveBtn.textContent = "Add to plan";
+}
+
+function fillCareItemForm(item) {
+  document.getElementById("care-item-edit-id").value = item.id || "";
+  document.getElementById("care-item-title").value = item.title || "";
+  document.getElementById("care-item-kind").value = item.kind || "other";
+  document.getElementById("care-item-due").value = item.due_at || "";
+  document.getElementById("care-item-contact").value = item.contact || "";
+  document.getElementById("care-item-notes").value = item.notes || "";
+  document.getElementById("btn-cancel-care-edit")?.classList.remove("hidden");
+  const saveBtn = document.getElementById("btn-save-care-item");
+  if (saveBtn) saveBtn.textContent = "Save changes";
+  document.getElementById("care-item-title")?.focus();
+}
+
+function careItemsFromProfile(profile) {
+  return Array.isArray(profile?.care_items) ? profile.care_items : [];
+}
+
+function careItemIsOverdue(item, today = careTodayIso()) {
+  if ((item.status || "open") !== "open") return false;
+  const due = item.due_at;
+  return Boolean(due && due < today);
+}
+
+function filterCareItems(items, filter, selectedDay) {
+  let list = items.slice();
+  if (selectedDay) {
+    list = list.filter((item) => (item.due_at || "") === selectedDay);
+  }
+  if (filter === "open") list = list.filter((item) => (item.status || "open") === "open");
+  else if (filter === "done") list = list.filter((item) => item.status === "done");
+  else if (filter === "overdue") {
+    const today = careTodayIso();
+    list = list.filter((item) => careItemIsOverdue(item, today));
+  }
+  return list.sort((a, b) => {
+    const aOpen = (a.status || "open") === "open" ? 0 : 1;
+    const bOpen = (b.status || "open") === "open" ? 0 : 1;
+    if (aOpen !== bOpen) return aOpen - bOpen;
+    return String(a.due_at || "9999").localeCompare(String(b.due_at || "9999"));
+  });
+}
+
+function renderPlanCalendar(items) {
+  const el = document.getElementById("plan-calendar");
+  const label = document.getElementById("plan-calendar-label");
+  if (!el) return;
+  const month = ensurePlanMonth();
+  const year = month.getFullYear();
+  const monthIdx = month.getMonth();
+  if (label) {
+    label.textContent = month.toLocaleString(undefined, { month: "long", year: "numeric" });
+  }
+  const firstDow = new Date(year, monthIdx, 1).getDay();
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const today = careTodayIso();
+  const byDay = new Map();
+  for (const item of items) {
+    const due = item.due_at;
+    if (!due || !due.startsWith(`${year}-${String(monthIdx + 1).padStart(2, "0")}`)) continue;
+    if (!byDay.has(due)) byDay.set(due, []);
+    byDay.get(due).push(item);
+  }
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    .map((d) => `<div class="plan-cal-dow">${d}</div>`)
+    .join("");
+  let cells = "";
+  for (let i = 0; i < firstDow; i++) cells += `<div class="plan-cal-cell is-empty"></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const dayItems = byDay.get(iso) || [];
+    const openCount = dayItems.filter((i) => (i.status || "open") === "open").length;
+    const overdue = dayItems.some((i) => careItemIsOverdue(i, today));
+    const classes = [
+      "plan-cal-cell",
+      iso === today ? "is-today" : "",
+      iso === state.planSelectedDay ? "is-selected" : "",
+      dayItems.length ? "has-items" : "",
+      overdue ? "is-overdue" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const dots = dayItems
+      .slice(0, 3)
+      .map(
+        (i) =>
+          `<span class="plan-cal-dot kind-${escapeHtml(i.kind || "other")} status-${escapeHtml(i.status || "open")}"></span>`
+      )
+      .join("");
+    cells += `<button type="button" class="${classes}" data-plan-day="${iso}" aria-label="${iso}${openCount ? `, ${openCount} open` : ""}">
+      <span class="plan-cal-daynum">${day}</span>
+      <span class="plan-cal-dots">${dots}</span>
+    </button>`;
+  }
+  el.innerHTML = `<div class="plan-cal-grid">${weekdays}${cells}</div>`;
+}
+
+function formatCareActivity(activity) {
+  if (!activity?.length) return "";
+  const rows = activity
+    .slice()
+    .reverse()
+    .slice(0, 4)
+    .map((a) => {
+      const when = formatDiagDate(String(a.at || "").slice(0, 10)) || String(a.at || "").slice(0, 16);
+      return `<li><span class="care-activity-kind">${escapeHtml(a.kind || "note")}</span> ${escapeHtml(a.note || "")}${when ? ` <span class="muted">· ${escapeHtml(when)}</span>` : ""}</li>`;
+    })
+    .join("");
+  return `<ul class="care-activity-list">${rows}</ul>`;
+}
+
+function renderCarePlanItem(item) {
+  const today = careTodayIso();
+  const overdue = careItemIsOverdue(item, today);
+  const kind = CARE_KIND_LABELS[item.kind] || item.kind || "Other";
+  const due = item.due_at ? formatDiagDate(item.due_at) : "No date";
+  const contact = item.contact ? escapeHtml(item.contact) : "";
+  const notes = item.notes ? `<p class="care-item-notes-text">${escapeHtml(item.notes)}</p>` : "";
+  const status = item.status || "open";
+  return `<article class="care-item-row status-${escapeHtml(status)}${overdue ? " is-overdue" : ""}" data-id="${escapeHtml(item.id || "")}">
+    <div class="care-item-main">
+      <div class="care-item-title-row">
+        <strong>${escapeHtml(item.title || "")}</strong>
+        <span class="care-kind-pill">${escapeHtml(kind)}</span>
+        ${overdue ? `<span class="care-overdue-pill">Overdue</span>` : ""}
+        ${status === "done" ? `<span class="care-done-pill">Done</span>` : ""}
+      </div>
+      <p class="care-item-meta">${escapeHtml(due)}${contact ? ` · ${contact}` : ""}</p>
+      ${notes}
+      ${formatCareActivity(item.activity)}
+    </div>
+    <div class="care-item-actions">
+      ${
+        status === "open"
+          ? `<button type="button" class="btn secondary btn-sm btn-care-done" data-id="${escapeHtml(item.id)}">Done</button>
+             <button type="button" class="btn ghost btn-sm btn-care-sent" data-id="${escapeHtml(item.id)}">Log sent</button>
+             <button type="button" class="btn ghost btn-sm btn-care-followup" data-id="${escapeHtml(item.id)}">Follow up</button>`
+          : `<button type="button" class="btn ghost btn-sm btn-care-reopen" data-id="${escapeHtml(item.id)}">Reopen</button>`
+      }
+      <button type="button" class="btn ghost btn-sm btn-care-edit" data-id="${escapeHtml(item.id)}">Edit</button>
+      <button type="button" class="btn danger btn-sm btn-care-delete" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.title || "")}">Delete</button>
+    </div>
+  </article>`;
+}
+
+function renderCarePlan(profile) {
+  const listEl = document.getElementById("plan-items-list");
+  const selectedEl = document.getElementById("plan-selected-day");
+  if (!listEl) return;
+  ensurePlanMonth();
+  document.querySelectorAll(".plan-filter-btn").forEach((btn) => {
+    const active = btn.dataset.planFilter === (state.planFilter || "open");
+    btn.classList.toggle("active", active);
+    btn.classList.toggle("secondary", active);
+    btn.classList.toggle("ghost", !active);
+  });
+  if (!profile || !state.activePatientId) {
+    renderPlanCalendar([]);
+    listEl.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see the plan."))}</p>`;
+    if (selectedEl) selectedEl.textContent = "";
+    return;
+  }
+  const items = careItemsFromProfile(profile);
+  renderPlanCalendar(items);
+  const filtered = filterCareItems(items, state.planFilter || "open", state.planSelectedDay);
+  if (selectedEl) {
+    selectedEl.textContent = state.planSelectedDay
+      ? `Showing ${formatDiagDate(state.planSelectedDay) || state.planSelectedDay} · tap the day again to clear`
+      : "";
+  }
+  if (!filtered.length) {
+    listEl.innerHTML = `<p class="muted small">${
+      state.planSelectedDay
+        ? "Nothing on this day."
+        : state.planFilter === "overdue"
+          ? "No overdue items."
+          : state.planFilter === "done"
+            ? "No completed items yet."
+            : "Nothing planned yet. Add an exam, call, or follow-up above."
+    }</p>`;
+    return;
+  }
+  listEl.innerHTML = filtered.map((item) => renderCarePlanItem(item)).join("");
+}
+
+async function saveCareItemFromForm(event) {
+  event?.preventDefault?.();
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const title = document.getElementById("care-item-title")?.value?.trim() || "";
+  if (!title) return toast("Enter what needs doing", "error");
+  const editId = document.getElementById("care-item-edit-id")?.value || "";
+  const body = {
+    title,
+    kind: document.getElementById("care-item-kind")?.value || "other",
+    due_at: document.getElementById("care-item-due")?.value || null,
+    contact: document.getElementById("care-item-contact")?.value?.trim() || "",
+    notes: document.getElementById("care-item-notes")?.value?.trim() || "",
+  };
+  const btn = document.getElementById("btn-save-care-item");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(
+      editId
+        ? `/api/patients/${state.activePatientId}/care-items/${editId}`
+        : `/api/patients/${state.activePatientId}/care-items`,
+      {
+        method: editId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save");
+    }
+    applyProfileResponse(await res.json());
+    clearCareItemForm();
+    toast(editId ? "Plan item updated" : "Added to plan");
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function patchCareItem(id, patch) {
+  if (!state.activePatientId || !id) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/care-items/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) return toast("Could not update item", "error");
+  applyProfileResponse(await res.json());
+}
+
+async function logCareActivity(id, { note, kind = "note", followUpAt = null } = {}) {
+  if (!state.activePatientId || !id) return;
+  const res = await fetch(`/api/patients/${state.activePatientId}/care-items/${id}/activity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note, kind, follow_up_at: followUpAt }),
+  });
+  if (!res.ok) return toast("Could not log activity", "error");
+  applyProfileResponse(await res.json());
+  toast("Logged");
 }
 
 function formatMedSafetyWhen(iso) {
@@ -14101,6 +14403,7 @@ async function refreshActivePatientProfile({ background = false } = {}) {
     renderDiagnosticsCharts(null, []);
     renderJournalHome(null, []);
     renderMedicationsHome(null);
+    renderCarePlan(null);
     syncDiagnosticsLoadingUi();
     return;
   }
@@ -16285,6 +16588,103 @@ document.getElementById("patient-milestones-list")?.addEventListener("click", as
   if (!res.ok) return toast("Could not remove milestone", "error");
   applyProfileResponse(await res.json());
   toast("Milestone removed");
+});
+
+document.getElementById("care-item-form")?.addEventListener("submit", (event) => {
+  saveCareItemFromForm(event);
+});
+
+document.getElementById("btn-cancel-care-edit")?.addEventListener("click", () => {
+  clearCareItemForm();
+});
+
+document.getElementById("btn-plan-prev-month")?.addEventListener("click", () => {
+  const month = ensurePlanMonth();
+  state.planMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+  renderCarePlan(state.patientProfile);
+});
+
+document.getElementById("btn-plan-next-month")?.addEventListener("click", () => {
+  const month = ensurePlanMonth();
+  state.planMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+  renderCarePlan(state.patientProfile);
+});
+
+document.getElementById("btn-plan-today")?.addEventListener("click", () => {
+  state.planMonth = careMonthStart();
+  state.planSelectedDay = careTodayIso();
+  renderCarePlan(state.patientProfile);
+});
+
+document.querySelectorAll(".plan-filter-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.planFilter = btn.dataset.planFilter || "open";
+    renderCarePlan(state.patientProfile);
+  });
+});
+
+document.getElementById("plan-calendar")?.addEventListener("click", (event) => {
+  const cell = event.target.closest("[data-plan-day]");
+  if (!cell) return;
+  const day = cell.dataset.planDay;
+  state.planSelectedDay = state.planSelectedDay === day ? null : day;
+  renderCarePlan(state.patientProfile);
+});
+
+document.getElementById("plan-items-list")?.addEventListener("click", async (event) => {
+  const editBtn = event.target.closest(".btn-care-edit");
+  const doneBtn = event.target.closest(".btn-care-done");
+  const reopenBtn = event.target.closest(".btn-care-reopen");
+  const sentBtn = event.target.closest(".btn-care-sent");
+  const followBtn = event.target.closest(".btn-care-followup");
+  const delBtn = event.target.closest(".btn-care-delete");
+  if (!state.activePatientId) return;
+
+  if (editBtn) {
+    const item = careItemsFromProfile(state.patientProfile).find((row) => row.id === editBtn.dataset.id);
+    if (item) fillCareItemForm(item);
+    return;
+  }
+  if (doneBtn) {
+    await patchCareItem(doneBtn.dataset.id, { status: "done" });
+    toast("Marked done");
+    return;
+  }
+  if (reopenBtn) {
+    await patchCareItem(reopenBtn.dataset.id, { status: "open" });
+    toast("Reopened");
+    return;
+  }
+  if (sentBtn) {
+    const note = prompt("What was sent / to whom?", "Results sent");
+    if (note == null || !note.trim()) return;
+    await logCareActivity(sentBtn.dataset.id, { note: note.trim(), kind: "sent" });
+    return;
+  }
+  if (followBtn) {
+    const note = prompt("Follow-up note", "Need to follow up");
+    if (note == null || !note.trim()) return;
+    const follow = prompt("Follow-up date (YYYY-MM-DD), or leave blank", careTodayIso());
+    if (follow == null) return;
+    await logCareActivity(followBtn.dataset.id, {
+      note: note.trim(),
+      kind: "follow_up",
+      followUpAt: follow.trim() || null,
+    });
+    return;
+  }
+  if (delBtn) {
+    const label = delBtn.dataset.name || "this item";
+    if (!confirm(`Delete ${label}?`)) return;
+    if (!confirm(`Confirm delete: ${label}`)) return;
+    const res = await fetch(`/api/patients/${state.activePatientId}/care-items/${delBtn.dataset.id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) return toast("Could not delete", "error");
+    applyProfileResponse(await res.json());
+    if (document.getElementById("care-item-edit-id")?.value === delBtn.dataset.id) clearCareItemForm();
+    toast("Deleted");
+  }
 });
 
 // Cross-case browsing folded into the unified patient-wide Library list

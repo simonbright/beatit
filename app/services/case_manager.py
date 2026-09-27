@@ -159,6 +159,12 @@ def _default_food_drinks() -> list[dict[str, Any]]:
     ]
 
 
+CARE_ITEM_KINDS = frozenset(
+    {"exam", "diagnostic", "appointment", "call", "send", "follow_up", "other"}
+)
+CARE_ITEM_STATUSES = frozenset({"open", "done", "cancelled"})
+
+
 def _empty_profile() -> dict[str, Any]:
     return {
         "date_of_birth": None,
@@ -168,6 +174,7 @@ def _empty_profile() -> dict[str, Any]:
         "journal": [],
         "medications": [],
         "food_drinks": _default_food_drinks(),
+        "care_items": [],
         "log_custom_tiles": [],
         "log_tile_order": [],
         "log_tile_hidden": [],
@@ -303,6 +310,7 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
             key=lambda m: str(m.get("date") or ""),
             reverse=True,
         )
+    profile["care_items"] = _normalize_care_items(data.get("care_items"))
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
@@ -374,6 +382,7 @@ def save_patient_profile(
         "milestones": [
             m for m in (profile.get("milestones") or []) if isinstance(m, dict)
         ],
+        "care_items": _normalize_care_items(profile.get("care_items")),
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
@@ -1393,6 +1402,243 @@ def delete_patient_food_drink(patient_id: str, food_id: str) -> bool:
         return False
     save_patient_profile(patient_id, profile)
     return True
+
+
+def _normalize_care_item_kind(kind: str | None) -> str:
+    cleaned = str(kind or "other").strip().lower().replace("-", "_").replace(" ", "_")
+    if cleaned == "followup":
+        cleaned = "follow_up"
+    return cleaned if cleaned in CARE_ITEM_KINDS else "other"
+
+
+def _normalize_care_item_status(status: str | None) -> str:
+    cleaned = str(status or "open").strip().lower()
+    return cleaned if cleaned in CARE_ITEM_STATUSES else "open"
+
+
+def _normalize_care_item_date(value: str | None) -> str | None:
+    raw = str(value or "").strip()[:10]
+    if not raw:
+        return None
+    try:
+        datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return raw
+
+
+def _normalize_care_item_activity(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        note = " ".join(str(row.get("note") or "").split())[:500]
+        if not note:
+            continue
+        kind = str(row.get("kind") or "note").strip().lower()
+        if kind not in {"note", "sent", "follow_up", "done", "call"}:
+            kind = "note"
+        out.append(
+            {
+                "at": str(row.get("at") or _now_iso()),
+                "note": note,
+                "kind": kind,
+            }
+        )
+    return out[-40:]
+
+
+def _normalize_care_item(raw: dict[str, Any]) -> dict[str, Any] | None:
+    title = " ".join(str(raw.get("title") or "").split())[:160]
+    if not title:
+        return None
+    item_id = str(raw.get("id") or "").strip()
+    if not item_id:
+        from uuid import uuid4
+
+        item_id = str(uuid4())
+    status = _normalize_care_item_status(raw.get("status"))
+    return {
+        "id": item_id,
+        "title": title,
+        "kind": _normalize_care_item_kind(raw.get("kind")),
+        "due_at": _normalize_care_item_date(raw.get("due_at")),
+        "notes": " ".join(str(raw.get("notes") or "").split())[:2000],
+        "contact": " ".join(str(raw.get("contact") or "").split())[:120],
+        "status": status,
+        "created_at": str(raw.get("created_at") or _now_iso()),
+        "updated_at": str(raw.get("updated_at") or raw.get("created_at") or _now_iso()),
+        "completed_at": str(raw.get("completed_at") or "") or None,
+        "activity": _normalize_care_item_activity(raw.get("activity")),
+    }
+
+
+def _normalize_care_items(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        item = _normalize_care_item(row)
+        if item:
+            items.append(item)
+
+    def sort_key(item: dict[str, Any]) -> tuple:
+        status = item.get("status") or "open"
+        due = item.get("due_at") or "9999-99-99"
+        open_rank = 0 if status == "open" else 1 if status == "done" else 2
+        return (open_rank, due, item.get("created_at") or "")
+
+    return sorted(items, key=sort_key)
+
+
+def add_patient_care_item(
+    patient_id: str,
+    *,
+    title: str,
+    kind: str | None = None,
+    due_at: str | None = None,
+    notes: str | None = None,
+    contact: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    cleaned_title = " ".join((title or "").split())[:160]
+    if not cleaned_title:
+        raise ValueError("Title is required")
+    now = _now_iso()
+    entry = _normalize_care_item(
+        {
+            "id": str(uuid4()),
+            "title": cleaned_title,
+            "kind": kind,
+            "due_at": due_at,
+            "notes": notes,
+            "contact": contact,
+            "status": "open",
+            "created_at": now,
+            "updated_at": now,
+            "activity": [],
+        }
+    )
+    if not entry:
+        raise ValueError("Title is required")
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("care_items") or [])
+    items.append(entry)
+    profile["care_items"] = items
+    saved = save_patient_profile(patient_id, profile)
+    return next((i for i in saved.get("care_items") or [] if i.get("id") == entry["id"]), entry)
+
+
+def update_patient_care_item(
+    patient_id: str,
+    item_id: str,
+    *,
+    title: str | None = None,
+    kind: str | None = None,
+    due_at: Any = ...,
+    notes: str | None = None,
+    contact: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("care_items") or [])
+    idx = next((i for i, row in enumerate(items) if row.get("id") == item_id), None)
+    if idx is None:
+        return None
+    item = dict(items[idx])
+    if title is not None:
+        cleaned = " ".join(title.split())[:160]
+        if not cleaned:
+            raise ValueError("Title is required")
+        item["title"] = cleaned
+    if kind is not None:
+        item["kind"] = _normalize_care_item_kind(kind)
+    if due_at is not ...:
+        item["due_at"] = _normalize_care_item_date(due_at if due_at is not None else "")
+    if notes is not None:
+        item["notes"] = " ".join(notes.split())[:2000]
+    if contact is not None:
+        item["contact"] = " ".join(contact.split())[:120]
+    if status is not None:
+        next_status = _normalize_care_item_status(status)
+        prev = item.get("status") or "open"
+        item["status"] = next_status
+        if next_status == "done" and prev != "done":
+            item["completed_at"] = _now_iso()
+            activity = list(item.get("activity") or [])
+            activity.append({"at": _now_iso(), "note": "Marked done", "kind": "done"})
+            item["activity"] = activity[-40:]
+        elif next_status == "open":
+            item["completed_at"] = None
+    item["updated_at"] = _now_iso()
+    items[idx] = _normalize_care_item(item) or item
+    profile["care_items"] = items
+    saved = save_patient_profile(patient_id, profile)
+    return next((i for i in saved.get("care_items") or [] if i.get("id") == item_id), items[idx])
+
+
+def add_patient_care_item_activity(
+    patient_id: str,
+    item_id: str,
+    *,
+    note: str,
+    kind: str | None = None,
+    follow_up_at: str | None = None,
+) -> dict[str, Any] | None:
+    cleaned_note = " ".join((note or "").split())[:500]
+    if not cleaned_note:
+        raise ValueError("Note is required")
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("care_items") or [])
+    idx = next((i for i, row in enumerate(items) if row.get("id") == item_id), None)
+    if idx is None:
+        return None
+    item = dict(items[idx])
+    activity_kind = str(kind or "note").strip().lower()
+    if activity_kind not in {"note", "sent", "follow_up", "done", "call"}:
+        activity_kind = "note"
+    activity = list(item.get("activity") or [])
+    activity.append({"at": _now_iso(), "note": cleaned_note, "kind": activity_kind})
+    item["activity"] = activity[-40:]
+    follow = _normalize_care_item_date(follow_up_at)
+    if follow:
+        item["due_at"] = follow
+        if (item.get("status") or "open") == "done":
+            item["status"] = "open"
+            item["completed_at"] = None
+    item["updated_at"] = _now_iso()
+    items[idx] = _normalize_care_item(item) or item
+    profile["care_items"] = items
+    saved = save_patient_profile(patient_id, profile)
+    return next((i for i in saved.get("care_items") or [] if i.get("id") == item_id), items[idx])
+
+
+def delete_patient_care_item(patient_id: str, item_id: str) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("care_items") or [])
+    removed = next((row for row in items if row.get("id") == item_id), None)
+    if not removed:
+        return None
+    profile["care_items"] = [row for row in items if row.get("id") != item_id]
+    save_patient_profile(patient_id, profile)
+    return removed
 
 
 def _normalize_log_tile_label(label: str) -> str:
