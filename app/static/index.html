@@ -2123,6 +2123,22 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <div id="app-updating-overlay" class="app-updating-overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="app-updating-title" aria-describedby="app-updating-copy">
+    <div class="app-updating-card">
+      <div class="app-updating-icon-wrap" aria-hidden="true">
+        <img class="app-updating-icon" src="/static/favicon.svg" width="72" height="72" alt="">
+      </div>
+      <h2 id="app-updating-title">Bright Health is updating</h2>
+      <p id="app-updating-copy">
+        We’re rolling out a fresh version. This page will refresh in
+        <span class="app-updating-countdown" id="app-updating-countdown">60</span>
+        seconds — or tap Refresh anytime.
+      </p>
+      <button type="button" class="btn primary" id="btn-app-updating-refresh">Refresh now</button>
+      <p class="app-updating-hint">Thanks for waiting — you’re all set once this finishes.</p>
+    </div>
+  </div>
+
   <div id="chat-selection-toolbar" class="chat-selection-toolbar hidden" role="toolbar" aria-label="Chat excerpt actions">
     <button type="button" class="btn btn-sm primary" data-action="pin-excerpt">Pin excerpt</button>
     <button type="button" class="btn btn-sm secondary" data-action="save-excerpt-library">Save to library</button>
@@ -2130,6 +2146,7 @@
     <button type="button" class="btn btn-sm ghost" data-action="send-excerpt-ingest">Add to Library</button>
   </div>
 
+  <script src="/static/updating.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

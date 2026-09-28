@@ -13,6 +13,7 @@ PUBLIC_PATHS = {
     "/login",
     "/api/login",
     "/manifest.webmanifest",
+    "/sw.js",
 }
 PUBLIC_PREFIXES = ("/static/",)
 

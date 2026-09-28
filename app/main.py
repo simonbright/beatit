@@ -48,6 +48,22 @@ def _inject_static_version(html: str) -> str:
     return (
         html.replace('href="/static/styles.css"', f'href="/static/styles.css{versioned}"')
         .replace('src="/static/app.js"', f'src="/static/app.js{versioned}"')
+        .replace('src="/static/updating.js"', f'src="/static/updating.js{versioned}"')
+    )
+
+
+@app.get("/sw.js")
+async def service_worker():
+    path = STATIC_DIR / "sw.js"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Service worker not found")
+    return FileResponse(
+        path,
+        media_type="application/javascript; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "Service-Worker-Allowed": "/",
+        },
     )
 
 

@@ -221,6 +221,23 @@
     <p class="app-footer-text" id="app-version">Bright Health</p>
   </footer>
 
+  <div id="app-updating-overlay" class="app-updating-overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="app-updating-title" aria-describedby="app-updating-copy">
+    <div class="app-updating-card">
+      <div class="app-updating-icon-wrap" aria-hidden="true">
+        <img class="app-updating-icon" src="/static/favicon.svg" width="72" height="72" alt="">
+      </div>
+      <h2 id="app-updating-title">Bright Health is updating</h2>
+      <p id="app-updating-copy">
+        We’re rolling out a fresh version. This page will refresh in
+        <span class="app-updating-countdown" id="app-updating-countdown">60</span>
+        seconds — or tap Refresh anytime.
+      </p>
+      <button type="button" class="btn primary" id="btn-app-updating-refresh">Refresh now</button>
+      <p class="app-updating-hint">Thanks for waiting — you’re all set once this finishes.</p>
+    </div>
+  </div>
+
+  <script src="/static/updating.js"></script>
   <script>
     const REMEMBER_KEY = "beatit-login-remember";
     const USERNAME_KEY = "beatit-login-username";
@@ -252,7 +269,13 @@
           body: JSON.stringify({ username, password }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.detail || "Sign in failed");
+        if (!res.ok) {
+          if (window.BrightUpdating?.isProxyGatewayResponse?.(res, data)) {
+            window.BrightUpdating.noteGatewayFailure({ immediate: true });
+            return;
+          }
+          throw new Error(data.detail || "Sign in failed");
+        }
 
         if (rememberInput.checked) {
           localStorage.setItem(REMEMBER_KEY, "1");
@@ -264,10 +287,17 @@
 
         window.location.href = "/";
       } catch (ex) {
+        if (window.BrightUpdating?.isGatewayError?.(ex)) {
+          window.BrightUpdating.noteGatewayFailure({ immediate: true });
+          return;
+        }
         errEl.textContent = ex.message || "Sign in failed";
         passwordInput.focus();
         passwordInput.select();
       }
+    });
+    document.getElementById("btn-app-updating-refresh")?.addEventListener("click", () => {
+      window.location.reload();
     });
   </script>
   <script>

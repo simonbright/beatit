@@ -166,6 +166,11 @@ document.querySelectorAll("[data-library-view]").forEach((btn) => {
 }
 
 function toast(message, type = "success") {
+  if (type === "error" && window.BrightUpdating?.isVisible?.()) return;
+  if (type === "error" && window.BrightUpdating?.isGatewayError?.({ message })) {
+    window.BrightUpdating.noteGatewayFailure({ immediate: true });
+    return;
+  }
   const el = $("#toast");
   el.textContent = message;
   el.className = `toast ${type}`;
@@ -205,8 +210,12 @@ async function api(path, options = {}) {
       }
       const error = new Error(message);
       error.status = res.status;
+      error.appDetail = Boolean(data.detail || data.message);
+      error.isProxyGateway = Boolean(window.BrightUpdating?.isProxyGatewayResponse?.(res, data));
+      if (error.isProxyGateway) error.isGateway = true;
       throw error;
     }
+    window.BrightUpdating?.noteGatewayRecovery?.();
     return data;
   } catch (err) {
     if (err.name === "AbortError") {
@@ -214,6 +223,9 @@ async function api(path, options = {}) {
         throw new Error("Cancelled");
       }
       throw new Error("Request timed out — check your connection and try again.");
+    }
+    if (!err.status && window.BrightUpdating?.isGatewayError?.(err)) {
+      err.isGateway = true;
     }
     throw err;
   } finally {
@@ -238,8 +250,13 @@ async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses =
         /Failed to fetch|NetworkError|Load failed|timed out|Bad Gateway/i.test(
           String(err?.message || err || "")
         );
-      const retriable = retryStatuses.includes(status) || network;
-      if (!retriable || attempt === retries) throw err;
+      const retriable = retryStatuses.includes(status) || network || err?.isGateway;
+      if (!retriable || attempt === retries) {
+        if (retriable && window.BrightUpdating?.isGatewayError?.(err)) {
+          window.BrightUpdating.noteGatewayFailure({ immediate: true });
+        }
+        throw err;
+      }
       const backoff = status === 429 ? 4000 * (attempt + 1) : 1200 * (attempt + 1);
       await sleep(backoff);
     }
