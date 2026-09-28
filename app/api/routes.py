@@ -2994,22 +2994,28 @@ async def export_patient_diagnostics_pdf(
     note_milestones = filter_milestones_by_ids(in_span, note_ids) if note_ids else []
 
     exported_at = datetime.now(timezone.utc)
-    if table_only:
-        pdf_bytes = build_diagnostics_table_pdf(
-            series,
-            patient_label=patient.get("label"),
-            patient_subline=patient_subline,
-            unit_system=system,
-            milestones=note_milestones,
-        )
-    else:
-        pdf_bytes = build_diagnostics_pdf(
-            series,
-            patient_label=patient.get("label"),
-            patient_subline=patient_subline,
-            milestones=chart_milestones,
-            unit_system=system,
-        )
+    try:
+        if table_only:
+            pdf_bytes = build_diagnostics_table_pdf(
+                series,
+                patient_label=patient.get("label"),
+                patient_subline=patient_subline,
+                unit_system=system,
+                milestones=note_milestones,
+            )
+        else:
+            pdf_bytes = build_diagnostics_pdf(
+                series,
+                patient_label=patient.get("label"),
+                patient_subline=patient_subline,
+                milestones=chart_milestones,
+                unit_system=system,
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not build diagnostics PDF: {exc}",
+        ) from exc
     filename = diagnostics_pdf_filename(
         patient_label=patient.get("label"),
         exported_at=exported_at,
@@ -3256,10 +3262,11 @@ async def api_clear_patient_diagnostics(patient_id: str):
 
 class PatientDiagnosticConfirmItem(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    value: float
+    value: float | None = None
     recorded_at: str = Field(min_length=8, max_length=20)
     unit: str | None = Field(default=None, max_length=40)
     notes: str | None = Field(default=None, max_length=500)
+    result: str | None = Field(default=None, max_length=2000)
     category: str | None = Field(default=None, max_length=20)
     source_document_id: str | None = Field(default=None, max_length=120)
 
@@ -3436,10 +3443,11 @@ async def api_confirm_patient_diagnostics_import(
             entry = add_patient_diagnostic(
                 patient_id,
                 name=clamped["name"],
-                value=clamped["value"],
+                value=clamped.get("value"),
                 recorded_at=clamped["recorded_at"],
                 unit=clamped.get("unit"),
                 notes=clamped.get("notes"),
+                result=clamped.get("result") or raw.result,
                 category=clamped.get("category"),
                 source_document_id=row_doc_id,
             )

@@ -620,8 +620,8 @@ def _short_milestone_legend_label(label: str | None, *, max_len: int = 42) -> st
         cleaned.append(part)
     out = " · ".join(cleaned) if cleaned else text
     if len(out) > max_len:
-        return out[: max_len - 1].rstrip() + "…"
-    return out
+        return _safe_text(out[: max_len - 3].rstrip() + "...")
+    return _safe_text(out)
 
 
 def _assign_milestone_codes(
@@ -957,10 +957,17 @@ def _sparkline_png_bytes(
     if post_days:
         t_max = max(read_max + headroom, max(post_days))
     today_ord = float(datetime.now(timezone.utc).astimezone(EASTERN).date().toordinal())
-    if today_ord > t_max:
-        t_max = today_ord + max(2.0, (t_max - t_min) * 0.03 or 2.0)
-    elif today_ord < t_min:
-        t_min = today_ord - max(2.0, (t_max - t_min) * 0.03 or 2.0)
+    t_min = min(t_min, read_min, today_ord)
+    t_max = max(t_max, today_ord)
+    # Soft-cap how far past today future-dated points stretch the axis
+    future_pad = max(14.0, read_span * 0.08)
+    future_days = [d for d in post_days if d > today_ord]
+    for date, _value, _status in points:
+        day = _day(date)
+        if day and day > today_ord:
+            future_days.append(day)
+    if future_days:
+        t_max = max(t_max, min(max(future_days), today_ord + future_pad))
     t_span = (t_max - t_min) or 1.0
     edge_inset = min(56, chart_w * 0.07)
     usable = max(chart_w - 2 * edge_inset, 1)
@@ -1758,9 +1765,14 @@ def _diagnostics_matrix_data(
 
 def _matrix_value_only(row: dict[str, Any] | None) -> str:
     if not row:
-        return "—"
+        return "-"
     val = _format_diag_value_label(row.get("value"))
-    return val if val else "—"
+    if val:
+        return val
+    result = _safe_text(str(row.get("result") or row.get("notes") or "").strip())
+    if result:
+        return result[:28] + ("..." if len(result) > 28 else "")
+    return "-"
 
 
 def _matrix_test_label(test: dict[str, Any], *, max_len: int = 36) -> str:
@@ -1768,7 +1780,7 @@ def _matrix_test_label(test: dict[str, Any], *, max_len: int = 36) -> str:
     unit = _safe_text(test.get("unit") or "")
     label = f"{name} ({unit})" if unit else name
     if len(label) > max_len:
-        return label[: max_len - 1].rstrip() + "…"
+        return _safe_text(label[: max_len - 3].rstrip() + "...")
     return label
 
 

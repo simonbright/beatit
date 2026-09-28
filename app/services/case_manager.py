@@ -625,6 +625,7 @@ def add_patient_diagnostic(
                     unit_clean = preset["unit"] or None
                     break
     cat = _infer_diagnostic_category(cleaned_name, category)
+    doc_id = (source_document_id or "").strip() or None
     entry = {
         "id": str(uuid4()),
         "name": cleaned_name,
@@ -634,9 +635,9 @@ def add_patient_diagnostic(
         "category": cat,
         "notes": notes_clean,
         "result": result_clean,
+        "source": "library" if doc_id else "manual",
         "created_at": _now_iso(),
     }
-    doc_id = (source_document_id or "").strip() or None
     if doc_id:
         entry["source_document_id"] = doc_id
     from app.services.lab_units import enrich_diagnostic_units
@@ -2124,6 +2125,9 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
                 "unit_system_original": enriched.get("unit_system_original"),
                 "notes": enriched.get("notes"),
                 "result": enriched.get("result"),
+                "source": enriched.get("source")
+                or ("library" if enriched.get("source_document_id") else "manual"),
+                "source_document_id": enriched.get("source_document_id"),
             }
         )
     series: list[dict[str, Any]] = []

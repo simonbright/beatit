@@ -66,7 +66,7 @@ async def build_medical_system_prompt(
     pid = patient_id or ctx.get("patient_id")
     plabel = patient_label or ctx.get("patient_label")
     clabel = case_label or ctx.get("case_label")
-    demographics = format_profile_for_prompt(pid, plabel)
+    demographics = format_profile_for_prompt(pid, plabel, rich=True)
     if not demographics.strip():
         demographics = "- Not set yet."
     specialty = infer_assessment_specialty(
@@ -316,6 +316,74 @@ def _is_patient_ask_query(query: str) -> bool:
     return any(m in head for m in markers)
 
 
+def _is_labs_advice_query(query: str) -> bool:
+    """True when the user asks for dosing / lab-guided care advice (e.g. iron dose)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    topic = (
+        "iron",
+        "ferritin",
+        "anemia",
+        "anaemia",
+        "hemoglobin",
+        "haemoglobin",
+        "tibc",
+        "transferrin",
+        "b12",
+        "vitamin d",
+        "dose",
+        "dosing",
+        "dosage",
+        "supplement",
+        "how much",
+        "should i take",
+        "can i take",
+        "lab",
+        "labs",
+        "bloodwork",
+        "blood work",
+    )
+    action = (
+        "dose",
+        "dosing",
+        "dosage",
+        "how much",
+        "should i",
+        "can i",
+        "recommend",
+        "advice",
+        "given my",
+        "based on",
+        "with my",
+        "for me",
+        "supplement",
+        "start",
+        "increase",
+        "decrease",
+    )
+    has_topic = any(t in q for t in topic)
+    has_action = any(a in q for a in action)
+    return has_topic and has_action
+
+
+LABS_ADVICE_QUERY_INSTRUCTIONS = """
+The user is asking for lab-informed advice (dose, supplement, or whether a value supports a change).
+
+You MUST:
+1. Pull the relevant PATIENT TRACKED DATA labs (latest value + date + trend when available). For iron questions that means Ferritin, Iron, TIBC / Transferrin Saturation, Hemoglobin, Hematocrit, and any iron medication/supplement on the med list.
+2. If those labs are missing, say exactly which ones are missing and why they matter — do not invent numbers.
+3. Answer with cautious, practical framing: what the chart supports, typical clinician considerations, and what to verify with the care team. Do NOT prescribe a definitive mg dose as medical orders.
+4. In ### Direct answer, include a short "What the labs show" subsection before any dosing discussion.
+5. Cite [SOURCE: Patient profile] for tracked labs/meds. For general iron-deficiency education, prefer stable public references such as:
+   - https://medlineplus.gov/ferritintest.html
+   - https://medlineplus.gov/iron.html
+   - https://medlineplus.gov/ency/article/007478.htm
+   Tag those as [SOURCE: Web — <url>].
+6. End ### Limitations & verification with what the user should confirm with their clinician (GI workup, inflammation confounding ferritin, timing relative to supplements, etc.).
+"""
+
+
 def _response_structure_for_analysis(
     *,
     analysis_type: str,
@@ -326,6 +394,8 @@ def _response_structure_for_analysis(
         if _is_patient_ask_query(query):
             return f"{PATIENT_ASK_RESPONSE_STRUCTURE}\n\n{LIST_ITEM_SOURCE_RULES}"
         structure = f"{CUSTOM_QUERY_RESPONSE_STRUCTURE}\n\n{LIST_ITEM_SOURCE_RULES}"
+        if _is_labs_advice_query(query):
+            structure = f"{structure}\n\n{LABS_ADVICE_QUERY_INSTRUCTIONS}"
         if _is_trial_search_query(query):
             structure = f"{structure}\n\n{TRIAL_SEARCH_QUERY_INSTRUCTIONS}"
         return structure
@@ -510,6 +580,14 @@ class SynthesisService:
             ask_hint = (
                 "\nFor this patient ask: weigh the most recent labs and recent logs first, "
                 "then historical trends; end with concrete Suggested responses.\n"
+            )
+        elif analysis_type == "query" and _is_labs_advice_query(query):
+            ask_hint = (
+                "\nFor this labs/dosing question: open with the relevant PATIENT TRACKED DATA "
+                "(latest values + dates + short trend). If iron-related, require Ferritin / Iron / "
+                "TIBC or transferrin saturation / Hemoglobin when present, and list them as missing "
+                "when absent. Use MedlinePlus links in Limitations when giving general education. "
+                "Do not invent a prescription dose.\n"
             )
         baseline_hint = ""
         if analysis_type == "baseline":

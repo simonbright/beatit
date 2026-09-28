@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
@@ -54,13 +54,23 @@ def _inject_static_version(html: str) -> str:
 @app.get("/manifest.webmanifest")
 async def web_manifest():
     path = STATIC_DIR / "manifest.webmanifest"
-    if path.exists():
-        return FileResponse(
-            path,
-            media_type="application/manifest+json",
-            headers={"Cache-Control": "no-cache"},
-        )
-    raise HTTPException(status_code=404, detail="Manifest not found")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Manifest not found")
+    raw = path.read_text(encoding="utf-8")
+    # Bust home-screen / PWA icon caches when APP_VERSION changes
+    for name in (
+        "icon-192.png",
+        "icon-512.png",
+        "icon-512-maskable.png",
+        "favicon.png",
+        "apple-touch-icon.png",
+    ):
+        raw = raw.replace(f"/static/{name}", f"/static/{name}?v={APP_VERSION}")
+    return Response(
+        content=raw,
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/login")

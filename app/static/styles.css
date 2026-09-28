@@ -2877,12 +2877,9 @@ body {
   font-size: 1rem;
 }
 
-.diag-study-result {
-  margin: 0.35rem 0 0;
-  font-size: 0.92rem;
-  line-height: 1.4;
-  color: var(--text);
-  white-space: pre-wrap;
+.diag-future-date-warn {
+  margin: 0.25rem 0 0;
+  color: #b45309;
 }
 
 .diag-study-card .diag-chart-latest {
@@ -2896,6 +2893,35 @@ body {
   white-space: normal;
   max-width: 12rem;
   display: inline-block;
+}
+
+.diag-source-link,
+.diag-source-manual {
+  display: inline-block;
+  margin-left: 0.25rem;
+  font-size: 0.72rem;
+  vertical-align: middle;
+}
+
+.diag-source-manual {
+  font-style: italic;
+}
+
+.diag-import-row-study {
+  border-left: 3px solid var(--accent, #2f6fed);
+  padding-left: 0.35rem;
+}
+
+.diag-import-study-badge {
+  margin: 0.15rem 0 0;
+  grid-column: 1 / -1;
+}
+
+.diag-import-result {
+  width: 100%;
+  min-height: 2.5rem;
+  resize: vertical;
+  font: inherit;
 }
 
 .diagnostics-body.is-loading #diagnostics-loading {

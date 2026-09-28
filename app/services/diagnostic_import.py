@@ -366,7 +366,9 @@ def clamp_proposed_diagnostic(
     if not name:
         return None
     value = _parse_float(raw.get("value"))
-    if value is None:
+    result = _clamp_str(raw.get("result"), 2000)
+    notes = _clamp_str(raw.get("notes"), 500)
+    if value is None and not result and not notes:
         return None
     recorded_raw = raw.get("recorded_at")
     recorded_at = None
@@ -385,7 +387,7 @@ def clamp_proposed_diagnostic(
                 date_order=date_order,  # type: ignore[arg-type]
             )
     unit = _clamp_str(raw.get("unit"), 40)
-    if not unit:
+    if value is not None and not unit:
         for preset in DIAGNOSTIC_PRESETS:
             if preset["name"].lower() == name.lower() and preset.get("unit"):
                 unit = preset["unit"]
@@ -393,14 +395,18 @@ def clamp_proposed_diagnostic(
     category = raw.get("category")
     if category not in {"blood", "imaging", "vital", "other"}:
         category = _infer_diagnostic_category(name, None)
-    return {
+    entry = {
         "name": name,
         "value": value,
         "unit": unit,
         "recorded_at": recorded_at,
-        "notes": _clamp_str(raw.get("notes"), 500),
+        "notes": notes,
+        "result": result,
         "category": category,
     }
+    if raw.get("row_kind"):
+        entry["row_kind"] = str(raw.get("row_kind"))
+    return entry
 
 
 def parse_diagnostics_json(
@@ -432,13 +438,23 @@ def parse_diagnostics_json(
 
 
 _SERVICE_DATE_RE = re.compile(
-    r"(?im)(?:Date\s+of\s+Service|Collected|Collection\s+Date|Specimen\s+Date|Drawn)\s*[:\-]?\s*"
+    r"(?im)(?:Date\s+of\s+Service|Collected|Collection\s+Date|Specimen\s+Date|Drawn|TEST\s+DATE)\s*[:\-]?\s*"
     r"("
-    r"[A-Za-z]{3,9}\s+\d{1,2}\s+\d{2,4}"  # Jul 03 2026
+    r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4}"  # Jul 03 2026 / Nov 18, 2025
     r"|\d{1,2}[-/][A-Za-z]{3,9}[-/]\d{2,4}"  # 03-JUL-2026
     r"|\d{4}-\d{2}-\d{2}"
     r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
     r")"
+)
+
+_AMENDED_OR_STATUS_DATE_RE = re.compile(
+    r"(?im)\b(?:Amended|Final|Preliminary|Corrected)\s+"
+    r"([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})"
+)
+
+_MONTH_DAY_YEAR_RE = re.compile(
+    r"\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b",
+    re.I,
 )
 
 _LIFELABS_DOS_RE = re.compile(
@@ -508,10 +524,22 @@ _LIFELABS_VALUE_TAIL = (
 
 def _parse_lab_service_date(text: str, *, date_order: str | None = None) -> str | None:
     order = date_order or detect_lab_date_order(text)
-    m = _SERVICE_DATE_RE.search(text or "")
-    if not m:
-        return None
-    return parse_lab_date_to_iso(m.group(1).strip(), date_order=order)  # type: ignore[arg-type]
+    body = text or ""
+    for pattern in (_SERVICE_DATE_RE, _AMENDED_OR_STATUS_DATE_RE):
+        m = pattern.search(body)
+        if not m:
+            continue
+        iso = parse_lab_date_to_iso(m.group(1).strip(), date_order=order)  # type: ignore[arg-type]
+        if iso:
+            return iso
+    # First Month DD, YYYY in the header (pathology / imaging reports)
+    head = body[:2500]
+    m = _MONTH_DAY_YEAR_RE.search(head)
+    if m:
+        iso = parse_lab_date_to_iso(m.group(1).strip(), date_order=order)  # type: ignore[arg-type]
+        if iso:
+            return iso
+    return None
 
 
 def _parse_lifelabs_dos(text: str) -> str | None:
@@ -946,6 +974,11 @@ async def _propose_from_text(
         if fixed:
             row["recorded_at"] = fixed
 
+    proposed, study_warnings = _enrich_proposed_with_study_log(
+        proposed, text, meta=meta or {}
+    )
+    warnings.extend(study_warnings)
+
     proposed, overlap_warnings, _ = annotate_proposed_duplicates(proposed, patient_id)
     warnings.extend(overlap_warnings)
     missing_dates = sum(1 for p in proposed if not p.get("recorded_at"))
@@ -1020,6 +1053,8 @@ async def propose_diagnostics_from_document(
     if isinstance(doc_meta, dict):
         meta["extraction_method"] = doc_meta.get("extraction_method")
         meta["extracted_chars"] = doc_meta.get("extracted_chars")
+        meta["clinical_report_kind"] = doc_meta.get("clinical_report_kind")
+        meta["clinical_report_kind_label"] = doc_meta.get("clinical_report_kind_label")
         if not meta.get("original_filename") and doc_meta.get("original_filename"):
             meta["original_filename"] = Path(str(doc_meta["original_filename"])).name
 
@@ -1215,7 +1250,9 @@ async def auto_confirm_lab_readings_from_document(
     for raw in proposed:
         name = str(raw.get("name") or "").strip()
         recorded_at = str(raw.get("recorded_at") or "").strip()[:10]
-        if not name or raw.get("value") is None or not recorded_at:
+        has_value = raw.get("value") is not None
+        has_text = bool(str(raw.get("result") or "").strip() or str(raw.get("notes") or "").strip())
+        if not name or not recorded_at or (not has_value and not has_text):
             skipped_incomplete += 1
             continue
         key = diagnostic_identity_key(name, recorded_at)
@@ -1233,10 +1270,11 @@ async def auto_confirm_lab_readings_from_document(
             entry = add_patient_diagnostic(
                 patient_id,
                 name=name,
-                value=float(raw["value"]),
+                value=float(raw["value"]) if has_value else None,
                 recorded_at=recorded_at,
                 unit=raw.get("unit"),
                 notes=raw.get("notes"),
+                result=raw.get("result"),
                 category=raw.get("category"),
                 source_document_id=doc_id,
             )
@@ -1351,6 +1389,9 @@ def _fallback_study_name(doc: dict[str, Any], kind: str) -> str:
 def _fallback_study_date(text: str) -> str | None:
     from datetime import date as date_cls
 
+    service = _parse_lab_service_date(text)
+    if service:
+        return service
     today = date_cls.today()
     candidates: list[str] = []
     for match in re.finditer(
@@ -1366,6 +1407,187 @@ def _fallback_study_date(text: str) -> str | None:
         except ValueError:
             continue
     return candidates[0] if candidates else None
+
+
+def _text_looks_like_clinical_study(text: str, kind: str | None = None) -> bool:
+    kind_norm = str(kind or "").strip().lower()
+    if kind_norm in {
+        "mri",
+        "ultrasound",
+        "ct",
+        "mammogram",
+        "pathology",
+        "cardiology",
+        "other_report",
+    }:
+        return True
+    hay = (text or "")[:4000].lower()
+    markers = (
+        "surgical pathology",
+        "final diagnosis",
+        "gross description",
+        "biopsy",
+        "histology",
+        "cytology",
+        "impression:",
+        "clinical indication",
+        "mri ",
+        "ultrasound",
+        "mammogram",
+        "ct abdomen",
+        "ct chest",
+        "echocardiogram",
+    )
+    return any(m in hay for m in markers)
+
+
+def _extract_final_diagnosis_summary(text: str) -> str | None:
+    body = text or ""
+    m = re.search(
+        r"(?is)Final\s+Diagnosis\s*:\s*(.+?)"
+        r"(?:Electronically\s+signed|Relevant\s+History|Gross\s+Description|Clinical\s+Information|$)",
+        body,
+    )
+    if not m:
+        m = re.search(
+            r"(?is)(?:Diagnosis|Impression)\s*:\s*(.+?)"
+            r"(?:Electronically\s+signed|Relevant\s+History|Gross\s+Description|$)",
+            body,
+        )
+    if not m:
+        return None
+    chunk = re.sub(r"\s+", " ", m.group(1)).strip()
+    if not chunk:
+        return None
+    lower = chunk.lower()
+    if "benign prostatic tissue" in lower and "carcinoma" not in lower and "adenocarcinoma" not in lower:
+        sites = len(re.findall(r"\b[A-Z]\.\s+Prostate", m.group(1)))
+        cores = re.search(r"(\d+)\s+cores?\s+total", body, re.I)
+        bits = ["All sampled cores: benign prostatic tissue"]
+        if sites:
+            bits.append(f"{sites} specimen sites")
+        if cores:
+            bits.append(f"{cores.group(1)} cores total")
+        return "; ".join(bits) + "."
+    return chunk[:700]
+
+
+def _heuristic_study_row(
+    text: str,
+    *,
+    kind: str | None = None,
+    title: str = "",
+    filename: str = "",
+) -> dict[str, Any] | None:
+    """Build a study-log proposal (no numeric value) from pathology/imaging text."""
+    if not _text_looks_like_clinical_study(text, kind):
+        return None
+    hay = f"{title} {filename} {(text or '')[:2500]}".lower()
+    kind_norm = str(kind or "").strip().lower()
+    name: str | None = None
+    category = "imaging"
+    if "prostate" in hay and ("biopsy" in hay or "surgical pathology" in hay or "core" in hay):
+        name = "Prostate biopsy"
+    elif "breast" in hay and ("ultrasound" in hay or "sonograph" in hay):
+        name = "Breast ultrasound"
+    elif "mammogram" in hay or "mammography" in hay:
+        name = "Mammogram"
+    elif kind_norm == "pathology" or "surgical pathology" in hay or "biopsy" in hay:
+        name = "Pathology"
+        if "prostate" in hay:
+            name = "Prostate biopsy"
+        elif "breast" in hay:
+            name = "Breast pathology"
+    elif kind_norm in _KIND_DEFAULT_NAMES:
+        name = _KIND_DEFAULT_NAMES[kind_norm]
+    else:
+        for label, needles in (
+            ("Brain MRI", ("brain mri", "mri brain")),
+            ("MRI", (" mri", "magnetic resonance")),
+            ("Ultrasound", ("ultrasound", "sonograph")),
+            ("CT", (" ct ", "computed tomography")),
+        ):
+            if any(n in hay for n in needles):
+                name = label
+                break
+    if not name:
+        cleaned = " ".join((title or filename or "").replace("_", " ").split())
+        cleaned = re.sub(r"\.(pdf|jpe?g|png|webp)$", "", cleaned, flags=re.I).strip()
+        name = cleaned[:120] if cleaned else None
+    if not name:
+        return None
+    result = _extract_final_diagnosis_summary(text)
+    if not result:
+        # Short clinical excerpt so the study still has substance
+        excerpt = " ".join((text or "").split())
+        for marker in ("Final Diagnosis:", "Impression:", "Findings:"):
+            idx = excerpt.lower().find(marker.lower())
+            if idx >= 0:
+                excerpt = excerpt[idx : idx + 400]
+                break
+        else:
+            excerpt = excerpt[:320]
+        result = excerpt or f"{name} on file"
+    recorded_at = _fallback_study_date(text)
+    return {
+        "name": name,
+        "value": None,
+        "unit": None,
+        "recorded_at": recorded_at,
+        "result": result,
+        "notes": None,
+        "category": category,
+        "row_kind": "study",
+    }
+
+
+def _enrich_proposed_with_study_log(
+    proposed: list[dict[str, Any]],
+    text: str,
+    *,
+    meta: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Prepend study log + backfill missing dates for pathology/imaging reports."""
+    warnings: list[str] = []
+    meta = meta or {}
+    kind = str(meta.get("clinical_report_kind") or "").strip().lower() or None
+    study_date = _parse_lab_service_date(text) or _fallback_study_date(text)
+    if study_date:
+        filled = 0
+        for row in proposed:
+            if not row.get("recorded_at"):
+                row["recorded_at"] = study_date
+                filled += 1
+        if filled:
+            warnings.append(
+                f"Applied report date {study_date} to {filled} reading(s) missing a collection date"
+            )
+
+    study = _heuristic_study_row(
+        text,
+        kind=kind,
+        title=str(meta.get("title") or ""),
+        filename=str(meta.get("original_filename") or ""),
+    )
+    if not study:
+        return proposed, warnings
+    if study_date and not study.get("recorded_at"):
+        study["recorded_at"] = study_date
+    # Avoid duplicate study name already proposed
+    study_key = (str(study.get("name") or "").strip().lower(), str(study.get("recorded_at") or "")[:10])
+    already = any(
+        (
+            str(r.get("name") or "").strip().lower(),
+            str(r.get("recorded_at") or "")[:10],
+        )
+        == study_key
+        or r.get("row_kind") == "study"
+        for r in proposed
+    )
+    if already:
+        return proposed, warnings
+    warnings.append(f"Added study log: {study.get('name')}")
+    return [study, *proposed], warnings
 
 
 def _parse_study_log_json(raw: str | dict[str, Any] | None) -> dict[str, Any]:
@@ -1474,8 +1696,11 @@ async def auto_capture_diagnostics_from_document(
             acknowledge_patient_mismatch=acknowledge_patient_mismatch,
         )
 
-    # Numeric assays when they often appear (calcium score, some cardiology/pathology).
-    try_quant = kind in {"ct", "cardiology", "pathology", "other_report"}
+    # Numeric assays when present (PSA on pathology, calcium score on CT, …).
+    # Study log is always attempted afterward so the procedure itself is captured.
+    try_quant = kind in {"ct", "cardiology", "pathology", "other_report"} or _text_looks_like_clinical_study(
+        extracted_text or "", kind
+    )
     quant: dict[str, Any] = _empty_lab_import_result(patient_id, doc)
     if try_quant:
         quant = await auto_confirm_lab_readings_from_document(
@@ -1488,20 +1713,22 @@ async def auto_capture_diagnostics_from_document(
         if quant.get("blocked_for_patient_mismatch"):
             return quant
 
-    linked = _profile_readings_for_document(patient_id, doc_id)
-    if linked > 0 or int(quant.get("added_count") or 0) > 0:
-        # Quantitative rows (or prior import) already cover this report.
-        quant["study_logged"] = False
-        return quant
-
     text = (extracted_text or "").strip()
-    study = await _propose_study_log_from_text(
-        text=text,
-        doc=doc,
+    # Prefer deterministic pathology/imaging heuristics; LLM only as fallback.
+    study = _heuristic_study_row(
+        text,
         kind=kind,
-        kind_label=kind_label,
-        llm=llm,
+        title=str(doc.get("title") or ""),
+        filename=document_original_filename(doc) or "",
     )
+    if not study or not study.get("result"):
+        study = await _propose_study_log_from_text(
+            text=text,
+            doc=doc,
+            kind=kind,
+            kind_label=kind_label,
+            llm=llm,
+        )
     recorded_at = study.get("recorded_at")
     warnings = list(quant.get("warnings") or [])
     if not recorded_at:
@@ -1515,6 +1742,12 @@ async def auto_capture_diagnostics_from_document(
         {"name": study.get("name"), "recorded_at": recorded_at},
         existing_index=existing,
     ):
+        # Quant may already have been added; study already on profile.
+        if int(quant.get("added_count") or 0) > 0:
+            quant["study_logged"] = False
+            quant["warnings"] = warnings
+            quant["offer_manual_import"] = False
+            return quant
         quant["skipped_duplicate"] = int(quant.get("skipped_duplicate") or 0) + 1
         quant["already_on_profile"] = True
         quant["study_logged"] = False
@@ -1535,7 +1768,8 @@ async def auto_capture_diagnostics_from_document(
     except (TypeError, ValueError) as exc:
         warnings.append(f"Could not log diagnostic study: {exc}")
         quant["warnings"] = warnings
-        quant["offer_manual_import"] = True
+        if int(quant.get("added_count") or 0) == 0:
+            quant["offer_manual_import"] = True
         return quant
 
     if not entry:

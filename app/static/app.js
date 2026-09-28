@@ -11036,16 +11036,31 @@ function renderDiagImportReview(data) {
       const alreadyNote = already
         ? `<p class="muted small diag-import-dup-note">Already on charts for this date — left unchecked</p>`
         : "";
-      return `<div class="med-import-row${already ? " diag-import-row-dup" : ""}" data-idx="${i}" data-already="${already ? "1" : "0"}">
+      const isStudy = d.row_kind === "study" || (d.value == null && (d.result || d.category === "imaging"));
+      const resultVal = d.result || (!isStudy ? "" : d.notes || "");
+      const notesVal = isStudy ? "" : d.notes || "";
+      const studyBadge = isStudy
+        ? `<p class="muted small diag-import-study-badge">Study log — findings / impression (links to Library source)</p>`
+        : "";
+      return `<div class="med-import-row${already ? " diag-import-row-dup" : ""}${
+        isStudy ? " diag-import-row-study" : ""
+      }" data-idx="${i}" data-already="${already ? "1" : "0"}" data-row-kind="${escapeHtml(isStudy ? "study" : "reading")}">
         <label class="med-import-check">
           <input type="checkbox" class="diag-import-select" ${checked} aria-label="Include ${escapeHtml(d.name || "reading")}">
         </label>
         <div class="med-import-row-fields">
           <label>Name<input type="text" class="diag-import-name" maxlength="120" list="diag-name-presets" value="${escapeHtml(d.name || "")}"></label>
-          <label>Value<input type="number" class="diag-import-value" step="any" value="${escapeHtml(d.value != null ? String(d.value) : "")}"></label>
+          <label>Value<input type="number" class="diag-import-value" step="any" value="${escapeHtml(d.value != null ? String(d.value) : "")}" ${
+            isStudy ? "placeholder=\"optional\"" : ""
+          }></label>
           <label>Unit<input type="text" class="diag-import-unit" maxlength="40" list="diag-unit-presets" value="${escapeHtml(d.unit || "")}"></label>
           <label>Date<input type="date" class="diag-import-date" value="${escapeHtml(dateVal)}"></label>
-          <label class="med-import-span-2">Notes<input type="text" class="diag-import-notes" maxlength="500" value="${escapeHtml(d.notes || "")}"></label>
+          <label class="med-import-span-2">Result / findings<textarea class="diag-import-result" rows="2" maxlength="2000" placeholder="${
+            isStudy ? "Impression / findings" : "Optional"
+          }">${escapeHtml(resultVal)}</textarea></label>
+          <label class="med-import-span-2">Notes<input type="text" class="diag-import-notes" maxlength="500" value="${escapeHtml(notesVal)}"></label>
+          <input type="hidden" class="diag-import-category" value="${escapeHtml(d.category || "")}">
+          ${studyBadge}
           ${alreadyNote}
         </div>
       </div>`;
@@ -11066,16 +11081,26 @@ function collectDiagImportSelected() {
     const name = row.querySelector(".diag-import-name")?.value.trim();
     const valueRaw = row.querySelector(".diag-import-value")?.value;
     const recordedAt = row.querySelector(".diag-import-date")?.value;
-    if (!name || valueRaw === "" || valueRaw == null || !recordedAt) return;
-    const value = Number(valueRaw);
-    if (!Number.isFinite(value)) return;
-    out.push({
+    const result = row.querySelector(".diag-import-result")?.value.trim() || null;
+    const notes = row.querySelector(".diag-import-notes")?.value.trim() || null;
+    const category = row.querySelector(".diag-import-category")?.value.trim() || null;
+    const hasValue = valueRaw !== "" && valueRaw != null;
+    if (!name || !recordedAt) return;
+    if (!hasValue && !result && !notes) return;
+    const item = {
       name,
-      value,
       unit: row.querySelector(".diag-import-unit")?.value.trim() || null,
       recorded_at: recordedAt,
-      notes: row.querySelector(".diag-import-notes")?.value.trim() || null,
-    });
+      notes,
+      result,
+      category: category || undefined,
+    };
+    if (hasValue) {
+      const value = Number(valueRaw);
+      if (!Number.isFinite(value)) return;
+      item.value = value;
+    }
+    out.push(item);
   });
   return out;
 }
@@ -11084,7 +11109,7 @@ async function confirmDiagImportAndShowCharts() {
   if (!state.activePatientId) return toast("Select a patient first", "error");
   const diagnostics = collectDiagImportSelected();
   if (!diagnostics.length) {
-    return toast("Select readings with name, value, and collection date", "error");
+    return toast("Select readings with name, date, and value or findings", "error");
   }
   if (state.diagImportPatientMismatch) {
     const ok = promptLabPatientMismatch({
@@ -12836,6 +12861,8 @@ function groupDiagnosticsClient(profile) {
       unit_system_original: row.unit_system_original,
       notes: row.notes,
       result: row.result,
+      source: row.source || (row.source_document_id ? "library" : "manual"),
+      source_document_id: row.source_document_id || null,
     });
   }
   return [...groups.values()]
@@ -13385,6 +13412,8 @@ function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem
             result: r.result || r.notes || "",
             reportedAside: formatReportedAside(r),
             status: r.status,
+            source: r.source,
+            source_document_id: r.source_document_id,
           },
         ])
       ),
@@ -13393,18 +13422,29 @@ function buildLabsMatrix(series, { flipped = false, system = state.labUnitSystem
   return { dates, tests, flipped: Boolean(flipped) };
 }
 
+function diagnosticSourceBadge(reading) {
+  const docId = String(reading?.source_document_id || "").trim();
+  if (docId) {
+    return `<button type="button" class="btn-link diag-source-link" data-doc-id="${escapeHtml(
+      docId
+    )}" title="Open source report in Library">Source</button>`;
+  }
+  return `<span class="muted small diag-source-manual" title="Entered manually">Manual</span>`;
+}
+
 function formatDiagMatrixCell(cell, testName, date, system) {
   if (!cell) return `<td class="diag-matrix-empty">—</td>`;
   const st = cell.status ? ` diag-matrix-cell-${cell.status}` : "";
+  const src = diagnosticSourceBadge(cell);
   const hasNum = cell.value != null && Number.isFinite(Number(cell.value));
   if (hasNum) {
     const tip = `${testName} · ${formatDiagDate(date, system)} · ${formatDiagValue(cell.value)} ${cell.unit || ""}${cell.reportedAside || ""}`;
-    return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || "")}</span></td>`;
+    return `<td class="diag-matrix-cell${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val">${escapeHtml(formatDiagValue(cell.value))}</span><span class="diag-matrix-unit">${escapeHtml(cell.unit || "")}</span> ${src}</td>`;
   }
   const text = String(cell.result || "").trim() || "Logged";
   const short = text.length > 48 ? `${text.slice(0, 45)}…` : text;
   const tip = `${testName} · ${formatDiagDate(date, system)} · ${text}`;
-  return `<td class="diag-matrix-cell diag-matrix-cell-text${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val diag-matrix-result">${escapeHtml(short)}</span></td>`;
+  return `<td class="diag-matrix-cell diag-matrix-cell-text${st}" title="${escapeHtml(tip)}"><span class="diag-matrix-val diag-matrix-result">${escapeHtml(short)}</span> ${src}</td>`;
 }
 
 function fillDiagnosticsMatrixTable(tableEl, series, { flipped = false, system = state.labUnitSystem } = {}) {
@@ -14021,27 +14061,36 @@ function buildSparklineSvg(
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
   const todayMs = toDay(todayIso);
+  // Keep "Today" on a true calendar axis: include now, and do not let future-dated
+  // milestones/readings push the scale so far that Today looks stranded mid-chart.
   if (Number.isFinite(todayMs)) {
-    if (todayMs > tMax) tMax = todayMs + Math.max(2 * dayMs, (tMax - tMin) * 0.03);
-    else if (todayMs < tMin) tMin = todayMs - Math.max(2 * dayMs, (tMax - tMin) * 0.03);
+    tMin = Math.min(tMin, Math.min(readMin, todayMs));
+    tMax = Math.max(tMax, todayMs);
+    // Soft-cap how far past today the axis extends (future-dated rows still plot, briefly)
+    const futurePad = Math.max(14 * dayMs, (readMax - readMin) * 0.08);
+    const futurePts = points.map((p) => toDay(p.date)).filter((t) => t > todayMs);
+    const futureEv = post.filter((t) => t > todayMs);
+    const farthestFuture = Math.max(0, ...futurePts, ...futureEv);
+    if (farthestFuture > todayMs) {
+      tMax = Math.max(tMax, Math.min(farthestFuture, todayMs + futurePad));
+    }
   }
   const tSpan = tMax - tMin || 1;
   const xFor = (iso) => padL + ((toDay(iso) - tMin) / tSpan) * (w - padL - padR);
   const coords = points.map((p) => ({ ...p, x: xFor(p.date), y: yFor(p.value) }));
+  const futureReadingCount = points.filter((p) => toDay(p.date) > todayMs).length;
 
   let todayLayer = "";
-  if (Number.isFinite(todayMs)) {
-    let tx = xFor(todayIso);
-    if (Number.isFinite(tx)) {
-      tx = Math.min(w - padR, Math.max(padL, tx));
-      const tipY = padTop - (large ? 4 : 2);
-      todayLayer = `<g class="diag-today-mark" aria-label="Today">
-        <line x1="${tx.toFixed(1)}" y1="${padTop}" x2="${tx.toFixed(1)}" y2="${(h - padBottom).toFixed(1)}" stroke="#0ea5e9" stroke-width="${large ? 2.8 : 2.2}" opacity="0.95">
-          <title>Today (${escapeHtml(formatDiagDate(todayIso))})</title>
-        </line>
-        <text x="${tx.toFixed(1)}" y="${tipY.toFixed(1)}" text-anchor="middle" fill="#0284c7" font-size="${large ? 13 : 11}" font-weight="700">Today</text>
-      </g>`;
-    }
+  const todayX = Number.isFinite(todayMs) ? xFor(todayIso) : NaN;
+  if (Number.isFinite(todayX)) {
+    const tx = Math.min(w - padR, Math.max(padL, todayX));
+    const tipY = padTop - (large ? 4 : 2);
+    todayLayer = `<g class="diag-today-mark" aria-label="Today">
+      <line x1="${tx.toFixed(1)}" y1="${padTop}" x2="${tx.toFixed(1)}" y2="${(h - padBottom).toFixed(1)}" stroke="#0ea5e9" stroke-width="${large ? 2.8 : 2.2}" opacity="0.95" stroke-linecap="round">
+        <title>Today (${escapeHtml(formatDiagDate(todayIso))})</title>
+      </line>
+      <text x="${tx.toFixed(1)}" y="${tipY.toFixed(1)}" text-anchor="middle" fill="#0284c7" font-size="${large ? 13 : 11}" font-weight="700">Today</text>
+    </g>`;
   }
 
   let milestoneLayer = "";
@@ -14055,16 +14104,25 @@ function buildSparklineSvg(
     }));
     markers.sort((a, b) => a.x - b.x || String(a.date).localeCompare(String(b.date)));
     const minGap = large ? 28 : 18;
+    const todayCap = Number.isFinite(todayX) ? todayX : w - padR;
     for (let i = 1; i < markers.length; i++) {
       if (markers[i].x - markers[i - 1].x < minGap) {
-        markers[i].x = Math.min(w - padR, markers[i - 1].x + minGap);
+        // Dodge for readability, but never push a milestone marker past Today
+        markers[i].x = Math.min(todayCap, w - padR, markers[i - 1].x + minGap);
       }
+    }
+    for (const ev of markers) {
+      if (!Number.isFinite(ev.x)) continue;
+      // Keep true future milestones to the right of Today; past/current stay ≤ Today
+      if (toDay(ev.date) <= todayMs) {
+        ev.x = Math.min(ev.x, todayCap);
+      }
+      ev.x = Math.min(w - padR, Math.max(padL, ev.x));
     }
     milestoneLayer = markers
       .map((ev) => {
         let x = ev.x;
         if (!Number.isFinite(x)) return "";
-        x = Math.min(w - padR, Math.max(padL, x));
         const color = ev.color || "#0f766e";
         const top = padTop - 2;
         const bot = h - padBottom;
@@ -14181,6 +14239,13 @@ function buildSparklineSvg(
       ${dots}
       ${dateLabels}
     </svg>
+    ${
+      futureReadingCount
+        ? `<p class="muted small diag-future-date-warn" title="Collection dates after today usually mean a date parse or timezone issue">⚠ ${futureReadingCount} reading${
+            futureReadingCount === 1 ? "" : "s"
+          } dated after today (${escapeHtml(formatDiagDate(todayIso))})</p>`
+        : ""
+    }
     ${milestoneLegend}
   </div>`;
 }
@@ -14384,7 +14449,7 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
       ${body}
       <p class="diag-chart-meta">${statusBit ? `${statusBit} ` : ""}${escapeHtml(cat)} · ${s.point_count} reading${
         s.point_count === 1 ? "" : "s"
-      } · ${escapeHtml(dateSpan)}</p>
+      } · ${escapeHtml(dateSpan)} · ${diagnosticSourceBadge(latest)}</p>
       ${
         ref && chartable
           ? `<p class="diag-chart-ref">Ref: ${escapeHtml(ref.label || "")}${
@@ -15077,6 +15142,13 @@ document.getElementById("btn-labs-open-add")?.addEventListener("click", () => {
   if (details) details.open = true;
   ensureLabsAddDateDefault();
   document.getElementById("labs-diag-name")?.focus();
+});
+
+document.getElementById("panel-labs")?.addEventListener("click", (event) => {
+  const link = event.target.closest(".diag-source-link");
+  if (!link?.dataset.docId) return;
+  event.preventDefault();
+  viewDocument(link.dataset.docId).catch((err) => toast(err.message || "Could not open source", "error"));
 });
 
 function setLabsUploadStatus(msg, isError = false) {
@@ -16390,7 +16462,7 @@ document.getElementById("btn-import-diagnostics")?.addEventListener("click", asy
           setDiagImportStatus(`Processing ${i + 1} of ${total}: ${file.name}…`);
           try {
             const data = await ingestPdfUpload(file, {
-              clinicalReportKind: "lab",
+              // Auto-classify (lab, pathology, imaging, …) so study logs are captured too
               setDetail: (msg) => {
                 setDetail(msg);
                 setDiagImportStatus(msg);
