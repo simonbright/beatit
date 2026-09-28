@@ -176,11 +176,18 @@ def normalize_unit(unit: str | None) -> str:
         "pmol/l": "pmol/L",
         "ug/l": "ug/L",
         "µg/l": "ug/L",
+        "mcg/l": "ug/L",
+        "mcg / l": "ug/L",
         "ng/ml": "ng/mL",
         "pg/ml": "pg/mL",
         "ug/dl": "ug/dL",
         "µg/dl": "ug/dL",
+        "mcg/dl": "ug/dL",
+        "mcg / dl": "ug/dL",
         "ng/dl": "ng/dL",
+        "mcg/ml": "ug/mL",
+        "ug/ml": "ug/mL",
+        "µg/ml": "ug/mL",
         "g/l": "g/L",
         "l/l": "L/L",
         "x e9/l": "x E9/L",
@@ -332,7 +339,7 @@ def _round_value(value: float, *, system: str, unit: str) -> float:
     u = normalize_unit(unit)
     if u in {"L/L"}:
         return round(value, 3)
-    if u in {"mg/dL", "g/dL", "%", "ng/mL", "pg/mL", "ng/dL"} and abs(value) >= 10:
+    if u in {"mg/dL", "g/dL", "%", "ng/mL", "pg/mL", "ng/dL", "ug/dL", "µg/dL"} and abs(value) >= 10:
         return round(value, 1) if abs(value) < 100 else round(value, 0)
     if u in {"mmol/L", "umol/L", "µmol/L", "nmol/L", "pmol/L"}:
         if abs(value) >= 100:
@@ -585,8 +592,14 @@ def convert_reference_band(
         if us_unit and us_unit not in out["label"]:
             out["label"] = f"{out['label']} {us_unit}".strip()
     note = str(ref.get("note") or "")
-    if note and "mmol" in note.lower() and us_unit:
-        out["note"] = note + f" (shown in {us_unit})"
+    if note and us_unit:
+        note_out = note
+        for token in ("µmol/L", "μmol/L", "umol/L"):
+            if token in note_out:
+                note_out = note_out.replace(token, us_unit)
+        if "mmol" in note.lower() and us_unit.lower() not in note_out.lower():
+            note_out = f"{note_out} (shown in {us_unit})"
+        out["note"] = note_out
     return out
 
 
@@ -621,6 +634,11 @@ def enrich_diagnostic_units(row: dict[str, Any]) -> dict[str, Any]:
             key in _CELL_THOUSAND
             and unit == "cells/uL"
             and unit_si_existing in {None, "", "cells/uL"}
+        )
+        or (
+            key in _IRON
+            and unit == "ug/dL"
+            and unit_si_existing not in {"umol/L", "µmol/L"}
         )
     )
     if not needs_recompute and out.get("value_si") is not None and out.get("value_us") is not None:
@@ -687,6 +705,10 @@ def diagnostic_needs_unit_enrichment(row: dict[str, Any] | None) -> bool:
         return unit_si in {None, "", "g/dL"}
     if key in _CELL_THOUSAND and unit == "cells/uL":
         return unit_si in {None, "", "cells/uL"}
+    if key in _IRON:
+        raw_unit = str(row.get("unit") or "").strip().lower()
+        if unit == "ug/dL" or "mcg/dl" in raw_unit.replace(" ", ""):
+            return unit_si not in {"umol/L", "µmol/L"}
     return False
 
 

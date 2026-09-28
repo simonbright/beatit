@@ -97,3 +97,49 @@ def test_convert_reference_band_to_us():
     assert us is not None
     assert abs(us["high"] - 100.5) < 2
     assert "mg/dL" in us["label"]
+
+
+def test_iron_mcg_dl_converts_to_si():
+    assert normalize_unit("mcg/dL") == "ug/dL"
+    row = enrich_diagnostic_units({"name": "Iron", "value": 101, "unit": "mcg/dL"})
+    assert row["unit_system_original"] == "us"
+    assert row["unit_us"] == "µg/dL" or row["unit_us"] == "ug/dL"
+    assert abs(row["value_si"] - (101 / 5.587)) < 0.05
+    assert row["unit_si"] in {"µmol/L", "umol/L"}
+    # 101 mcg/dL ≈ 18 µmol/L — within male typical 11–32
+    assert 11 <= row["value_si"] <= 32
+
+
+def test_iron_reference_band_converts_units_in_note():
+    ref = {
+        "low": 11,
+        "high": 32,
+        "label": "Typical 11–32",
+        "direction": "range",
+        "note": "µmol/L adult male, age 51",
+        "meaning": "Serum iron",
+        "info_url": "https://example.com",
+        "info_source": "test",
+    }
+    us = convert_reference_band("Iron", ref, to_system="us")
+    assert us is not None
+    assert abs(us["low"] - 11 * 5.587) < 1
+    assert abs(us["high"] - 32 * 5.587) < 1
+    assert "µmol/L" not in us["note"]
+    assert "ug/dL" in us["note"].lower() or "µg/dL" in us["note"]
+
+
+def test_iron_mcg_dl_reenriches_stale_dual_units():
+    stale = {
+        "name": "Iron",
+        "value": 101,
+        "unit": "mcg/dL",
+        "unit_system_original": "unknown",
+        "value_si": 101.0,
+        "unit_si": "mcg/dL",
+        "value_us": 101.0,
+        "unit_us": "mcg/dL",
+    }
+    row = enrich_diagnostic_units(stale)
+    assert abs(row["value_si"] - (101 / 5.587)) < 0.05
+    assert row["unit_si"] in {"µmol/L", "umol/L"}
