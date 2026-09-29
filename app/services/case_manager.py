@@ -331,6 +331,83 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     return profile
 
 
+def get_patient_log_bootstrap(patient_id: str) -> dict[str, Any]:
+    """Fast path for Home Log tiles: skip diagnostics enrichment and chart series.
+
+    Returns a slim profile with tile config, recent journal entries, and enough
+    medication fields to hide duplicate med tiles. Intended for first paint.
+    """
+    path = _profile_path(patient_id)
+    profile = {
+        "date_of_birth": None,
+        "gender": None,
+        "measurements": [],
+        "diagnostics": [],
+        "journal": [],
+        "medications": [],
+        "food_drinks": [],
+        "care_items": [],
+        "log_custom_tiles": [],
+        "log_tile_order": [],
+        "log_tile_hidden": [],
+        "milestones": [],
+        "medication_safety": None,
+    }
+    if not path.exists():
+        return profile
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return profile
+
+    profile["date_of_birth"] = data.get("date_of_birth") or None
+    profile["gender"] = data.get("gender") or None
+    profile["log_custom_tiles"] = _normalize_log_custom_tiles(data.get("log_custom_tiles"))
+    order_raw = data.get("log_tile_order")
+    if isinstance(order_raw, list):
+        profile["log_tile_order"] = [
+            str(k).strip() for k in order_raw if isinstance(k, str) and str(k).strip()
+        ]
+    hidden_raw = data.get("log_tile_hidden")
+    if isinstance(hidden_raw, list):
+        profile["log_tile_hidden"] = [
+            str(k).strip() for k in hidden_raw if isinstance(k, str) and str(k).strip()
+        ][:80]
+
+    meds_out: list[dict[str, Any]] = []
+    for raw in data.get("medications") or []:
+        if not isinstance(raw, dict):
+            continue
+        meds_out.append(
+            {
+                "id": raw.get("id"),
+                "name": raw.get("name"),
+                "official_name": raw.get("official_name"),
+                "status": raw.get("status") or "active",
+                "ended_at": raw.get("ended_at"),
+                "category": _normalize_medication_category(raw.get("category")),
+                "show_on_log": (
+                    _coerce_show_on_log(raw.get("show_on_log"))
+                    if "show_on_log" in raw
+                    else False
+                ),
+            }
+        )
+    profile["medications"] = meds_out
+
+    journal = data.get("journal") or []
+    if isinstance(journal, list):
+        cleaned = [j for j in journal if isinstance(j, dict)]
+        cleaned.sort(
+            key=lambda j: str(j.get("recorded_at") or j.get("created_at") or ""),
+            reverse=True,
+        )
+        # Enough for Home Log recent list without shipping the entire history.
+        profile["journal"] = cleaned[:250]
+
+    return profile
+
+
 def save_patient_profile(
     patient_id: str,
     profile: dict[str, Any],

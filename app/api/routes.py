@@ -167,6 +167,7 @@ from app.services.case_manager import (
     find_patient_photo,
     save_patient_photo,
     get_patient_profile,
+    get_patient_log_bootstrap,
     update_patient_demographics,
     add_patient_measurement,
     delete_patient_measurement,
@@ -2873,6 +2874,24 @@ class PatientMeasurementRequest(BaseModel):
     weight_kg: float | None = None
     notes: str | None = None
 
+
+
+@router.get("/patients/{patient_id}/log-bootstrap")
+async def api_get_patient_log_bootstrap(patient_id: str):
+    """Lightweight Home Log payload — tiles usable before full profile/labs load."""
+    patients = list_patients()
+    patient = next((p for p in patients if p["id"] == patient_id), None)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = get_patient_log_bootstrap(patient_id)
+    return {
+        "patient_id": patient_id,
+        "lite": True,
+        "patient": {"id": patient["id"], "label": patient["label"]},
+        "profile": profile,
+        "common_remedies": COMMON_REMEDIES,
+        "journal_presets": JOURNAL_PRESETS,
+    }
 
 
 @router.get("/patients/{patient_id}/profile")

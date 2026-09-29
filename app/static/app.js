@@ -75,6 +75,7 @@ const state = {
   planFilter: "open",
   planSelectedDay: null,
   diagnosticsLoading: false,
+  profileIsLite: false,
   coverageReport: null,
   coverageView: "all",
   analysisJobId: null,
@@ -105,8 +106,11 @@ const documentExtractInFlight = new Set();
 const patientProfileCache = new Map();
 /** Cached log observations keyed by `${patientId}:${days}`. */
 const logObservationsCache = new Map();
+const LOG_BOOTSTRAP_STORAGE_PREFIX = "bright-log-bootstrap:";
 let profileRefreshPromise = null;
 let profileRefreshPatientId = null;
+let logBootstrapPromise = null;
+let logBootstrapPatientId = null;
 let logLiveTimer = null;
 let logDayBoundaryTimer = null;
 let logLiveTick = 0;
@@ -7639,6 +7643,7 @@ async function loadInitialData() {
   loadSelectionFromSession();
   loadAssessmentGuidanceFromSession();
   try {
+    // Non-log work loads after Home Log is usable so tiles stay responsive on startup.
     await Promise.allSettled([
       loadDocumentIndex(),
       loadLatestAssessment(),
@@ -7655,6 +7660,12 @@ async function loadInitialData() {
   if (isMobileLogLayout() && state.homeSection === "log") {
     focusMobileLogViewport({ behavior: "auto" });
   }
+}
+
+async function bootApp() {
+  // Case context + log bootstrap first; everything else waits until tiles can be used.
+  await loadCaseContext();
+  void loadInitialData();
 }
 
 bootstrapUi();
@@ -9233,21 +9244,20 @@ async function loadCaseContext() {
     state.coverageReport = null;
     if (ctx.patient_id) {
       syncMobileLogRangeControl();
-      const hasCached =
-        state.patientProfileId === state.activePatientId && !!state.patientProfile;
-      if (!hasCached) {
-        // Clear tiles until this patient's profile loads — never reuse prior person's order.
+      // Paint Log tiles ASAP: local snapshot → lightweight bootstrap → full profile later.
+      const local = readLogBootstrapLocal(ctx.patient_id);
+      if (local) applyLogBootstrap(local, { fromCache: true });
+      else if (!restorePatientProfileFromCache(ctx.patient_id)) {
         const grid = document.getElementById("mobile-log-grid");
-        if (grid) grid.innerHTML = logLoadingHtml("Loading log options…");
+        if (grid && !logTilesArePainted(grid)) {
+          grid.innerHTML = logLoadingHtml("Loading log options…");
+        }
         const orderEl = document.getElementById("log-tiles-order-list");
         if (orderEl) orderEl.innerHTML = logLoadingHtml("Loading log tiles…");
       }
-      if (hasCached) {
-        // Instant paint already done — refresh in background so data stays current.
-        refreshActivePatientProfile({ background: true }).catch(() => {});
-      } else {
-        await refreshActivePatientProfile();
-      }
+      await loadLogBootstrap(ctx.patient_id, { allowLocal: false });
+      // Full labs/profile can finish after tiles are already usable.
+      refreshActivePatientProfile({ background: true }).catch(() => {});
       if (state.homeSection === "log") ensureLogLiveUpdates();
     } else {
       syncPatientSpecificLogTiles();
@@ -11872,6 +11882,7 @@ function syncMobileLogRangeControl() {
 function clearPatientScopedLogState({ keepPatientId = false, deferRender = false } = {}) {
   state.patientProfile = null;
   state.patientProfileId = null;
+  state.profileIsLite = false;
   state.journalDraft = emptyJournalDraft();
   state.quickScaleKey = null;
   state.logObservationsRequest += 1;
@@ -12720,6 +12731,7 @@ function applyProfileResponse(
   }
   cachePatientProfilePayload(profilePatientId, data);
   const nextProfile = data.profile || {};
+  state.profileIsLite = false;
   const hadProfile =
     state.patientProfileId === profilePatientId && !!state.patientProfile;
   const journalChanged =
@@ -12803,6 +12815,150 @@ function observationsFingerprint(observations) {
 function cachePatientProfilePayload(patientId, data) {
   if (!patientId || !data) return;
   patientProfileCache.set(patientId, { data, at: Date.now() });
+  // Keep a durable slim snapshot so the next visit can paint Log tiles before the network.
+  if (data.profile) persistLogBootstrapLocal(patientId, data);
+}
+
+function persistLogBootstrapLocal(patientId, data) {
+  if (!patientId || !data?.profile) return;
+  try {
+    const profile = data.profile;
+    const slim = {
+      patient_id: patientId,
+      lite: true,
+      patient: data.patient || { id: patientId },
+      common_remedies: data.common_remedies || state.commonRemedies || [],
+      journal_presets: data.journal_presets || state.journalPresets || [],
+      profile: {
+        log_custom_tiles: profile.log_custom_tiles || [],
+        log_tile_order: profile.log_tile_order || [],
+        log_tile_hidden: profile.log_tile_hidden || [],
+        journal: (profile.journal || []).slice(0, 250),
+        medications: (profile.medications || []).map((m) => ({
+          id: m.id,
+          name: m.name,
+          official_name: m.official_name,
+          status: m.status,
+          ended_at: m.ended_at,
+          category: m.category,
+          show_on_log: m.show_on_log,
+        })),
+        diagnostics: [],
+        measurements: [],
+        food_drinks: [],
+        care_items: [],
+        milestones: [],
+      },
+      at: Date.now(),
+    };
+    localStorage.setItem(`${LOG_BOOTSTRAP_STORAGE_PREFIX}${patientId}`, JSON.stringify(slim));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function readLogBootstrapLocal(patientId) {
+  if (!patientId) return null;
+  try {
+    const raw = localStorage.getItem(`${LOG_BOOTSTRAP_STORAGE_PREFIX}${patientId}`);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data?.profile) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function applyLogBootstrap(data, { fromCache = false } = {}) {
+  const profilePatientId = data?.patient?.id || data?.patient_id || null;
+  if (!profilePatientId) return false;
+  if (state.activePatientId && profilePatientId !== state.activePatientId) return false;
+  const liteProfile = data.profile || {};
+  if (data.common_remedies?.length) state.commonRemedies = data.common_remedies;
+  if (data.journal_presets?.length) state.journalPresets = data.journal_presets;
+
+  const hasFull =
+    state.patientProfileId === profilePatientId &&
+    state.patientProfile &&
+    !state.profileIsLite;
+
+  if (hasFull) {
+    // Full profile already painted — only refresh log-related fields.
+    state.patientProfile = {
+      ...state.patientProfile,
+      log_custom_tiles: liteProfile.log_custom_tiles || state.patientProfile.log_custom_tiles,
+      log_tile_order: liteProfile.log_tile_order || state.patientProfile.log_tile_order,
+      log_tile_hidden: liteProfile.log_tile_hidden || state.patientProfile.log_tile_hidden,
+      journal: liteProfile.journal?.length
+        ? liteProfile.journal
+        : state.patientProfile.journal,
+      medications: liteProfile.medications?.length
+        ? liteProfile.medications.map((m) => {
+            const prev = (state.patientProfile.medications || []).find((x) => x.id === m.id);
+            return prev ? { ...prev, ...m } : m;
+          })
+        : state.patientProfile.medications,
+    };
+  } else {
+    state.patientProfile = {
+      date_of_birth: liteProfile.date_of_birth || null,
+      gender: liteProfile.gender || null,
+      measurements: [],
+      diagnostics: [],
+      journal: liteProfile.journal || [],
+      medications: liteProfile.medications || [],
+      food_drinks: [],
+      care_items: [],
+      log_custom_tiles: liteProfile.log_custom_tiles || [],
+      log_tile_order: liteProfile.log_tile_order || [],
+      log_tile_hidden: liteProfile.log_tile_hidden || [],
+      milestones: [],
+      medication_safety: null,
+    };
+    state.patientProfileId = profilePatientId;
+    state.profileIsLite = true;
+  }
+
+  if (!fromCache) persistLogBootstrapLocal(profilePatientId, data);
+  syncPatientSpecificLogTiles();
+  renderMobileLogRecent({ softObservations: true });
+  syncMobileLogForLabel();
+  if (state.homeSection === "log") ensureLogLiveUpdates();
+  return true;
+}
+
+async function loadLogBootstrap(patientId, { allowLocal = true } = {}) {
+  if (!patientId) return false;
+  if (allowLocal) {
+    const local = readLogBootstrapLocal(patientId);
+    if (local) applyLogBootstrap(local, { fromCache: true });
+  }
+  if (logBootstrapPromise && logBootstrapPatientId === patientId) {
+    return logBootstrapPromise;
+  }
+  logBootstrapPatientId = patientId;
+  logBootstrapPromise = (async () => {
+    try {
+      const r = await fetch(`/api/patients/${encodeURIComponent(patientId)}/log-bootstrap`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!r.ok) return false;
+      if (state.activePatientId !== patientId) return false;
+      const data = await r.json();
+      if (state.activePatientId !== patientId) return false;
+      return applyLogBootstrap(data);
+    } catch {
+      return false;
+    } finally {
+      if (logBootstrapPatientId === patientId) {
+        logBootstrapPromise = null;
+        logBootstrapPatientId = null;
+      }
+    }
+  })();
+  return logBootstrapPromise;
 }
 
 function invalidateLogObservationsCache(patientId) {
@@ -13102,7 +13258,8 @@ function labsProfileReady() {
   return Boolean(
     state.activePatientId &&
       state.patientProfileId &&
-      state.patientProfileId === state.activePatientId
+      state.patientProfileId === state.activePatientId &&
+      !state.profileIsLite
   );
 }
 
@@ -17137,8 +17294,6 @@ async function loadCrossCaseDocs(caseId, caseLabel, tabBtn) {
   } catch { docsEl.innerHTML = "<p class='muted small'>Failed to load.</p>"; }
 }
 
-// Load context on startup
-loadCaseContext();
+// Load context on startup — Log tiles first, then the rest.
+void bootApp();
 loadCrossCaseSiblings();
-
-void loadInitialData();
