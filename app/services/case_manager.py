@@ -408,6 +408,21 @@ def get_patient_log_bootstrap(patient_id: str) -> dict[str, Any]:
     return profile
 
 
+def get_patient_journal_entries(patient_id: str) -> list[dict[str, Any]]:
+    """Journal only — skip diagnostics enrichment so Log observations stay cheap."""
+    path = _profile_path(patient_id)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    journal = data.get("journal") or []
+    if not isinstance(journal, list):
+        return []
+    return [j for j in journal if isinstance(j, dict)]
+
+
 def save_patient_profile(
     patient_id: str,
     profile: dict[str, Any],

@@ -168,6 +168,7 @@ from app.services.case_manager import (
     save_patient_photo,
     get_patient_profile,
     get_patient_log_bootstrap,
+    get_patient_journal_entries,
     update_patient_demographics,
     add_patient_measurement,
     delete_patient_measurement,
@@ -3619,8 +3620,8 @@ async def api_patient_log_observations(patient_id: str, days: str = "1"):
         days_key = normalize_journal_export_days(days)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    profile = get_patient_profile(patient_id)
-    payload = log_observations_payload(profile.get("journal") or [], days_key)
+    journal = get_patient_journal_entries(patient_id)
+    payload = log_observations_payload(journal, days_key)
     payload["patient_id"] = patient_id
     payload["patient"] = {"id": patient["id"], "label": patient["label"]}
     return payload

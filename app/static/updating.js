@@ -166,6 +166,45 @@
     else window.addEventListener("load", register, { once: true });
   }
 
+  function isSameOrigin(input) {
+    try {
+      const url = typeof input === "string" ? input : input?.url;
+      if (!url) return true;
+      if (url.startsWith("/") || url.startsWith("./")) return true;
+      return new URL(url, window.location.origin).origin === window.location.origin;
+    } catch {
+      return true;
+    }
+  }
+
+  function interceptFetch() {
+    if (typeof window.fetch !== "function" || window.fetch.__brightUpdatingWrapped) return;
+    const original = window.fetch.bind(window);
+    async function wrapped(input, init) {
+      try {
+        const res = await original(input, init);
+        if (isSameOrigin(input) && isGatewayStatus(res.status)) {
+          let data = {};
+          const ct = (res.headers.get("content-type") || "").toLowerCase();
+          if (ct.includes("application/json")) {
+            data = await res.clone().json().catch(() => ({}));
+          }
+          if (isProxyGatewayResponse(res, data)) {
+            noteGatewayFailure({ immediate: true });
+          }
+        }
+        return res;
+      } catch (err) {
+        if (isSameOrigin(input) && isGatewayError(err)) {
+          noteGatewayFailure({ immediate: true });
+        }
+        throw err;
+      }
+    }
+    wrapped.__brightUpdatingWrapped = true;
+    window.fetch = wrapped;
+  }
+
   global.BrightUpdating = {
     show: showUpdatingOverlay,
     hide: hideUpdatingOverlay,
@@ -179,6 +218,7 @@
     ensureOverlay,
   };
 
+  interceptFetch();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       ensureOverlay();
