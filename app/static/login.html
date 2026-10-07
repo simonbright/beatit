@@ -271,8 +271,8 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           if (window.BrightUpdating?.isProxyGatewayResponse?.(res, data)) {
-            window.BrightUpdating.noteGatewayFailure({ immediate: true });
-            return;
+            window.BrightUpdating.noteGatewayFailure();
+            throw new Error("Sign in is briefly unavailable — try again in a moment.");
           }
           throw new Error(data.detail || "Sign in failed");
         }
@@ -288,8 +288,7 @@
         window.location.href = "/";
       } catch (ex) {
         if (window.BrightUpdating?.isGatewayError?.(ex)) {
-          window.BrightUpdating.noteGatewayFailure({ immediate: true });
-          return;
+          window.BrightUpdating.noteGatewayFailure();
         }
         errEl.textContent = ex.message || "Sign in failed";
         passwordInput.focus();

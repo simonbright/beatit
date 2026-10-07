@@ -1,19 +1,18 @@
-/* Bright Health — serve a friendly page when Render is restarting (502/503/504). */
-const CACHE_NAME = "bright-updating-v1";
+/* Bright Health — fallback HTML only when Render returns a gateway error. */
+const CACHE_NAME = "bright-updating-v2";
 const FALLBACK_URL = "/static/updating-fallback.html";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll([FALLBACK_URL])).catch(() => undefined)
   );
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    )
   );
 });
 
@@ -32,9 +31,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   const accept = request.headers.get("accept") || "";
-  const isNavigate =
-    request.mode === "navigate" || accept.includes("text/html");
-
+  const isNavigate = request.mode === "navigate" || accept.includes("text/html");
   if (!isNavigate) return;
 
   event.respondWith(
@@ -46,7 +43,10 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       } catch {
-        return (await fallbackResponse()) || new Response("Updating…", { status: 503 });
+        // Brief network blips should not replace the app with the updating page.
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        throw new Error("network");
       }
     })()
   );

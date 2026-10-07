@@ -1,10 +1,12 @@
 /**
- * Friendly "app updating" overlay for Render restarts / gateway downtime.
- * Used by the main app and login page.
+ * Friendly "app updating" overlay for Render restarts.
+ * Only shown after a sustained gateway outage — not a single 502.
  */
 (function (global) {
   const COUNTDOWN_SEC = 60;
   const PROBE_MS = 4000;
+  const SHOW_AFTER_FAILS = 5;
+  const SHOW_AFTER_MS = 12000;
 
   const state = {
     visible: false,
@@ -12,6 +14,7 @@
     countdownTimer: null,
     probeTimer: null,
     failStreak: 0,
+    firstFailAt: 0,
   };
 
   function $(id) {
@@ -80,10 +83,7 @@
         cache: "no-store",
         headers: { Accept: "application/json" },
       });
-      if (res.ok) {
-        state.failStreak = 0;
-        refreshNow();
-      }
+      if (res.ok) hideUpdatingOverlay();
     } catch {
       /* still updating */
     }
@@ -112,6 +112,8 @@
 
   function hideUpdatingOverlay() {
     const root = $("app-updating-overlay");
+    state.failStreak = 0;
+    state.firstFailAt = 0;
     if (!root || !state.visible) return;
     state.visible = false;
     clearTimers();
@@ -126,7 +128,6 @@
   function isProxyGatewayResponse(res, data) {
     if (!res || !isGatewayStatus(res.status)) return false;
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    // Our API returns JSON error bodies; Render's proxy often returns HTML/plain.
     if (ct.includes("application/json") && (data?.detail || data?.message)) {
       return false;
     }
@@ -140,21 +141,25 @@
     if (isGatewayStatus(err.status) && !err.appDetail) return true;
     const msg = String(err.message || err || "");
     if (/Request failed \(50[234]\)/i.test(msg)) return true;
-    return /Failed to fetch|NetworkError|Load failed|Bad Gateway|Service Unavailable|Gateway Timeout/i.test(
-      msg
-    );
+    return /Bad Gateway|Service Unavailable|Gateway Timeout/i.test(msg);
   }
 
   function noteGatewayFailure({ immediate = false } = {}) {
+    const now = Date.now();
+    if (!state.firstFailAt) state.firstFailAt = now;
     state.failStreak += 1;
-    if (immediate || state.failStreak >= 2) {
+    const longEnough = now - state.firstFailAt >= SHOW_AFTER_MS;
+    const manyFails = state.failStreak >= SHOW_AFTER_FAILS;
+    if (state.visible) return;
+    if (immediate && manyFails && longEnough) {
       showUpdatingOverlay();
+      return;
     }
+    if (manyFails && longEnough) showUpdatingOverlay();
   }
 
   function noteGatewayRecovery() {
-    state.failStreak = 0;
-    if (state.visible) refreshNow();
+    hideUpdatingOverlay();
   }
 
   function registerServiceWorker() {
@@ -164,45 +169,6 @@
     };
     if (document.readyState === "complete") register();
     else window.addEventListener("load", register, { once: true });
-  }
-
-  function isSameOrigin(input) {
-    try {
-      const url = typeof input === "string" ? input : input?.url;
-      if (!url) return true;
-      if (url.startsWith("/") || url.startsWith("./")) return true;
-      return new URL(url, window.location.origin).origin === window.location.origin;
-    } catch {
-      return true;
-    }
-  }
-
-  function interceptFetch() {
-    if (typeof window.fetch !== "function" || window.fetch.__brightUpdatingWrapped) return;
-    const original = window.fetch.bind(window);
-    async function wrapped(input, init) {
-      try {
-        const res = await original(input, init);
-        if (isSameOrigin(input) && isGatewayStatus(res.status)) {
-          let data = {};
-          const ct = (res.headers.get("content-type") || "").toLowerCase();
-          if (ct.includes("application/json")) {
-            data = await res.clone().json().catch(() => ({}));
-          }
-          if (isProxyGatewayResponse(res, data)) {
-            noteGatewayFailure({ immediate: true });
-          }
-        }
-        return res;
-      } catch (err) {
-        if (isSameOrigin(input) && isGatewayError(err)) {
-          noteGatewayFailure({ immediate: true });
-        }
-        throw err;
-      }
-    }
-    wrapped.__brightUpdatingWrapped = true;
-    window.fetch = wrapped;
   }
 
   global.BrightUpdating = {
@@ -218,7 +184,6 @@
     ensureOverlay,
   };
 
-  interceptFetch();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       ensureOverlay();

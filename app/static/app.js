@@ -172,8 +172,7 @@ document.querySelectorAll("[data-library-view]").forEach((btn) => {
 function toast(message, type = "success") {
   if (type === "error" && window.BrightUpdating?.isVisible?.()) return;
   if (type === "error" && window.BrightUpdating?.isGatewayError?.({ message })) {
-    window.BrightUpdating.noteGatewayFailure({ immediate: true });
-    return;
+    window.BrightUpdating.noteGatewayFailure();
   }
   const el = $("#toast");
   el.textContent = message;
@@ -257,7 +256,7 @@ async function apiWithRetries(path, options = {}, { retries = 2, retryStatuses =
       const retriable = retryStatuses.includes(status) || network || err?.isGateway;
       if (!retriable || attempt === retries) {
         if (retriable && window.BrightUpdating?.isGatewayError?.(err)) {
-          window.BrightUpdating.noteGatewayFailure({ immediate: true });
+          window.BrightUpdating.noteGatewayFailure();
         }
         throw err;
       }
