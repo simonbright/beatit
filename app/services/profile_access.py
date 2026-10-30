@@ -22,6 +22,8 @@ _OPEN_API_PATHS = {
     "/api/push/status",
     "/api/push/subscribe",
     "/api/push/unsubscribe",
+    "/api/admin/data-pack",
+    "/api/admin/data-pack/status",
 }
 
 

@@ -3,10 +3,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 import json
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from collections.abc import AsyncIterator
+from starlette.background import BackgroundTask
 
 from app.ingest.text import ingest_text
 from app.ingest.url import ingest_url
@@ -760,6 +762,63 @@ async def api_push_unsubscribe(body: PushSubscribeRequest, request: Request):
     username = _actor(request) or "local"
     removed = remove_subscription(endpoint=body.endpoint, username=username)
     return {"ok": True, "subscribed": False, "removed": removed}
+
+
+def _require_admin(request: Request) -> str:
+    actor = _actor(request)
+    if not user_is_admin(actor):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return actor or "admin"
+
+
+@router.get("/admin/data-pack/status")
+async def api_data_pack_status(request: Request):
+    from app.services.data_pack import data_pack_status
+
+    _require_admin(request)
+    return data_pack_status()
+
+
+@router.get("/admin/data-pack")
+async def api_data_pack_export(request: Request):
+    from app.services.data_pack import write_data_pack
+
+    _require_admin(request)
+    handle = tempfile.NamedTemporaryFile(prefix="bright-pack-", suffix=".tgz", delete=False)
+    path = Path(handle.name)
+    handle.close()
+    try:
+        write_data_pack(path)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return FileResponse(
+        path,
+        media_type="application/gzip",
+        filename="bright-health-data.tgz",
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
+
+
+@router.post("/admin/data-pack")
+async def api_data_pack_import(request: Request, file: UploadFile = File(...)):
+    from app.services.data_pack import restore_data_pack
+
+    _require_admin(request)
+    handle = tempfile.NamedTemporaryFile(prefix="bright-pack-", suffix=".tgz", delete=False)
+    path = Path(handle.name)
+    try:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            handle.write(chunk)
+        handle.close()
+        result = restore_data_pack(path)
+    finally:
+        handle.close()
+        path.unlink(missing_ok=True)
+    return {"ok": True, **result}
 
 
 @router.get("/auth/me")
