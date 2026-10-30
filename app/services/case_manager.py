@@ -175,6 +175,7 @@ def _empty_profile() -> dict[str, Any]:
         "medications": [],
         "food_drinks": _default_food_drinks(),
         "care_items": [],
+        "doctor_questions": [],
         "care_events": [],
         "care_team": [],
         "family_team": [],
@@ -315,6 +316,7 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
             reverse=True,
         )
     profile["care_items"] = _normalize_care_items(data.get("care_items"))
+    profile["doctor_questions"] = _normalize_doctor_questions(data.get("doctor_questions"))
     profile["care_events"] = _normalize_care_events(data.get("care_events"))
     profile["care_team"] = _normalize_team(data.get("care_team"))
     profile["family_team"] = _normalize_family(data.get("family_team"))
@@ -355,6 +357,7 @@ def get_patient_log_bootstrap(patient_id: str) -> dict[str, Any]:
         "medications": [],
         "food_drinks": [],
         "care_items": [],
+        "doctor_questions": [],
         "care_events": [],
         "care_team": [],
         "family_team": [],
@@ -487,6 +490,7 @@ def save_patient_profile(
             m for m in (profile.get("milestones") or []) if isinstance(m, dict)
         ],
         "care_items": _normalize_care_items(profile.get("care_items")),
+        "doctor_questions": _normalize_doctor_questions(profile.get("doctor_questions")),
         "care_events": _normalize_care_events(profile.get("care_events")),
         "care_team": _normalize_team(profile.get("care_team")),
         "family_team": _normalize_family(profile.get("family_team")),
@@ -1790,6 +1794,189 @@ def delete_patient_care_item(patient_id: str, item_id: str) -> dict[str, Any] | 
     return removed
 
 
+DOCTOR_QUESTION_STATUSES = frozenset({"open", "asked", "answered"})
+
+
+def _normalize_doctor_question_status(raw: Any) -> str:
+    value = str(raw or "open").strip().lower()
+    if value in {"to_ask", "todo", "ask"}:
+        return "open"
+    if value in DOCTOR_QUESTION_STATUSES:
+        return value
+    return "open"
+
+
+def _doctor_name_key(name: str | None) -> str:
+    return " ".join(str(name or "").split()).lower()
+
+
+def _normalize_doctor_question(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    question = " ".join(str(raw.get("question") or raw.get("text") or "").split())[:500]
+    if not question:
+        return None
+    doctor = " ".join(str(raw.get("doctor") or raw.get("practitioner") or "").split())[:120]
+    role = " ".join(str(raw.get("role") or "").split())[:80]
+    notes = " ".join(str(raw.get("notes") or "").split())[:2000]
+    answer = " ".join(str(raw.get("answer") or "").split())[:2000]
+    status = _normalize_doctor_question_status(raw.get("status"))
+    return {
+        "id": str(raw.get("id") or ""),
+        "question": question,
+        "doctor": doctor or None,
+        "role": role or None,
+        "notes": notes or None,
+        "answer": answer or None,
+        "status": status,
+        "recorded_by": " ".join(str(raw.get("recorded_by") or "").split())[:120] or None,
+        "created_at": str(raw.get("created_at") or _now_iso()),
+        "updated_at": str(raw.get("updated_at") or raw.get("created_at") or _now_iso()),
+        "asked_at": str(raw.get("asked_at") or "") or None,
+        "answered_at": str(raw.get("answered_at") or "") or None,
+    }
+
+
+def _normalize_doctor_questions(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for row in raw:
+        item = _normalize_doctor_question(row)
+        if item and item.get("id"):
+            items.append(item)
+
+    def sort_key(item: dict[str, Any]) -> tuple:
+        status = item.get("status") or "open"
+        rank = 0 if status == "open" else 1 if status == "asked" else 2
+        doctor = _doctor_name_key(item.get("doctor")) or "zzz"
+        return (rank, doctor, item.get("created_at") or "")
+
+    return sorted(items, key=sort_key)
+
+
+def list_patient_doctor_questions(patient_id: str) -> list[dict[str, Any]]:
+    return list(get_patient_profile(patient_id).get("doctor_questions") or [])
+
+
+def add_patient_doctor_question(
+    patient_id: str,
+    *,
+    question: str,
+    doctor: str | None = None,
+    role: str | None = None,
+    notes: str | None = None,
+    recorded_by: str | None = None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    from app.services.care_timeline import find_team_member
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    now = _now_iso()
+    entry = _normalize_doctor_question(
+        {
+            "id": str(uuid4()),
+            "question": question,
+            "doctor": doctor,
+            "role": role,
+            "notes": notes,
+            "status": "open",
+            "recorded_by": recorded_by,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    if not entry:
+        raise ValueError("Enter the question")
+    profile = get_patient_profile(patient_id)
+    if entry.get("doctor") and not entry.get("role"):
+        member = find_team_member(profile.get("care_team"), entry["doctor"])
+        if member and member.get("role"):
+            entry["role"] = member["role"]
+    questions = list(profile.get("doctor_questions") or [])
+    questions.append(entry)
+    profile["doctor_questions"] = questions
+    saved = save_patient_profile(patient_id, profile)
+    return next((q for q in saved.get("doctor_questions") or [] if q.get("id") == entry["id"]), entry)
+
+
+def update_patient_doctor_question(
+    patient_id: str,
+    question_id: str,
+    *,
+    question: str | None = None,
+    doctor: Any = ...,
+    role: Any = ...,
+    notes: Any = ...,
+    answer: Any = ...,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    from app.services.care_timeline import find_team_member
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("doctor_questions") or [])
+    idx = next((i for i, row in enumerate(items) if row.get("id") == question_id), None)
+    if idx is None:
+        return None
+    item = dict(items[idx])
+    if question is not None:
+        cleaned = " ".join(question.split())[:500]
+        if not cleaned:
+            raise ValueError("Enter the question")
+        item["question"] = cleaned
+    if doctor is not ...:
+        item["doctor"] = " ".join(str(doctor or "").split())[:120] or None
+    if role is not ...:
+        item["role"] = " ".join(str(role or "").split())[:80] or None
+    if notes is not ...:
+        item["notes"] = " ".join(str(notes or "").split())[:2000] or None
+    if answer is not ...:
+        item["answer"] = " ".join(str(answer or "").split())[:2000] or None
+    if status is not None:
+        next_status = _normalize_doctor_question_status(status)
+        prev = item.get("status") or "open"
+        item["status"] = next_status
+        if next_status == "asked" and prev != "asked":
+            item["asked_at"] = _now_iso()
+        if next_status == "answered":
+            if prev != "answered":
+                item["answered_at"] = _now_iso()
+            if prev == "open":
+                item["asked_at"] = item.get("asked_at") or _now_iso()
+        if next_status == "open":
+            item["asked_at"] = None
+            item["answered_at"] = None
+    if item.get("doctor") and not item.get("role"):
+        member = find_team_member(profile.get("care_team"), item["doctor"])
+        if member and member.get("role"):
+            item["role"] = member["role"]
+    item["updated_at"] = _now_iso()
+    items[idx] = _normalize_doctor_question(item) or item
+    profile["doctor_questions"] = items
+    saved = save_patient_profile(patient_id, profile)
+    return next((q for q in saved.get("doctor_questions") or [] if q.get("id") == question_id), items[idx])
+
+
+def delete_patient_doctor_question(patient_id: str, question_id: str) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("doctor_questions") or [])
+    removed = next((row for row in items if row.get("id") == question_id), None)
+    if not removed:
+        return None
+    profile["doctor_questions"] = [row for row in items if row.get("id") != question_id]
+    save_patient_profile(patient_id, profile)
+    return removed
+
+
 def _normalize_care_events(raw: Any) -> list[dict[str, Any]]:
     from app.services.care_timeline import normalize_care_events
 
@@ -2110,6 +2297,8 @@ def add_patient_care_event(
     summary: str | None = None,
     source_document_id: str | None = None,
     source_document_title: str | None = None,
+    source_documents: list[dict[str, Any]] | None = None,
+    summary_source: str | None = None,
     recorded_by: str | None = None,
     source: str = "manual",
 ) -> dict[str, Any] | None:
@@ -2141,6 +2330,8 @@ def add_patient_care_event(
             "summary": summary,
             "source_document_id": source_document_id,
             "source_document_title": source_document_title,
+            "source_documents": source_documents or [],
+            "summary_source": summary_source,
             "recorded_by": recorded_by,
             "source": source or "manual",
             "created_at": _now_iso(),
@@ -2183,6 +2374,8 @@ def update_patient_care_event(
         "summary",
         "source_document_id",
         "source_document_title",
+        "source_documents",
+        "summary_source",
     }
     for key, value in fields.items():
         if key not in allowed:
@@ -2234,13 +2427,30 @@ def import_patient_care_events(
         return None
     profile = get_patient_profile(patient_id)
     events = list(profile.get("care_events") or [])
-    seen = {e.get("source_ref") for e in events if e.get("source_ref")}
+    from app.services.whatsapp_import import whatsapp_dedupe_keys
+
+    seen: set[str] = set()
+    for existing in events:
+        if existing.get("source_ref"):
+            seen.add(existing["source_ref"])
+        if existing.get("source") == "whatsapp":
+            seen |= whatsapp_dedupe_keys(
+                existing.get("recorded_by") or "",
+                existing.get("occurred_at") or "",
+                existing.get("summary") or "",
+                source_ref=existing.get("source_ref"),
+            )
     added = 0
     skipped = 0
     now = _now_iso()
     for raw in incoming or []:
-        ref = raw.get("source_ref")
-        if ref and ref in seen:
+        incoming_keys = whatsapp_dedupe_keys(
+            raw.get("recorded_by") or "",
+            raw.get("occurred_at") or "",
+            raw.get("summary") or "",
+            source_ref=raw.get("source_ref"),
+        )
+        if incoming_keys & seen:
             skipped += 1
             continue
         entry = normalize_care_event({**raw, "id": str(uuid4()), "created_at": now})
@@ -2248,8 +2458,7 @@ def import_patient_care_events(
             skipped += 1
             continue
         events.append(entry)
-        if ref:
-            seen.add(ref)
+        seen |= incoming_keys
         added += 1
     profile["care_events"] = events
     save_patient_profile(patient_id, profile, reload=False)

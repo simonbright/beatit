@@ -18,6 +18,10 @@ _OPEN_API_PATHS = {
     "/api/patients",
     "/api/cases/activate",
     "/api/cases/active",
+    "/api/push/public-key",
+    "/api/push/status",
+    "/api/push/subscribe",
+    "/api/push/unsubscribe",
 }
 
 

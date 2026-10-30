@@ -337,6 +337,36 @@ def _clean_block(text: Any, limit: int) -> str:
     return out[:limit]
 
 
+def _normalize_source_documents(raw: dict[str, Any]) -> list[dict[str, str]]:
+    """One or more Library files attached to a care event. First item is primary."""
+    docs: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(doc_id: Any, title: Any) -> None:
+        cleaned_id = _clean(doc_id, 80)
+        if not cleaned_id or cleaned_id in seen:
+            return
+        seen.add(cleaned_id)
+        docs.append({"id": cleaned_id, "title": _clean(title, 200)})
+
+    primary_id = _clean(raw.get("source_document_id"), 80)
+    primary_title = _clean(raw.get("source_document_title"), 200)
+    extra = raw.get("source_documents")
+    extra_items: list[tuple[Any, Any]] = []
+    if isinstance(extra, list):
+        for item in extra:
+            if isinstance(item, dict):
+                extra_items.append((item.get("id") or item.get("document_id"), item.get("title")))
+            elif isinstance(item, str):
+                extra_items.append((item, ""))
+    if primary_id:
+        extra_title = next((title for did, title in extra_items if _clean(did, 80) == primary_id), "")
+        add(primary_id, primary_title or extra_title)
+    for did, title in extra_items:
+        add(did, title)
+    return docs
+
+
 def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -354,6 +384,8 @@ def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         occurred = parse_event_datetime(raw.get("occurred_at"))
     except ValueError:
         occurred = str(raw.get("created_at") or _now_iso())
+    source_documents = _normalize_source_documents(raw)
+    primary = source_documents[0] if source_documents else {}
     return {
         "id": event_id,
         "kind": kind,
@@ -362,8 +394,10 @@ def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "role": _clean(raw.get("role"), 80),
         "location": _clean(raw.get("location"), 120),
         "summary": summary,
-        "source_document_id": _clean(raw.get("source_document_id"), 80) or None,
-        "source_document_title": _clean(raw.get("source_document_title"), 200) or None,
+        "summary_source": _clean(raw.get("summary_source"), 20) or None,
+        "source_document_id": primary.get("id"),
+        "source_document_title": primary.get("title") or None,
+        "source_documents": source_documents,
         "recorded_by": _clean(raw.get("recorded_by"), 120) or None,
         "source": _clean(raw.get("source"), 20) or "manual",
         "source_ref": _clean(raw.get("source_ref"), 80) or None,
@@ -470,7 +504,10 @@ def care_event_rows(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]
         if ev.get("source") == "whatsapp":
             prov = f"From WhatsApp · sent by {recorded}"
         elif ev.get("source") == "transcript":
-            prov = f"Recorded visit · uploaded by {recorded}"
+            if ev.get("summary_source") == "ai":
+                prov = f"Recorded visit · summary of notes · uploaded by {recorded}"
+            else:
+                prov = f"Recorded visit · uploaded by {recorded}"
         else:
             prov = f"Recorded by {recorded}"
         if ev.get("updated_at"):
@@ -496,6 +533,8 @@ def care_event_rows(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]
                 location=ev.get("location") or "",
                 source_document_id=ev.get("source_document_id"),
                 source_document_title=ev.get("source_document_title"),
+                source_documents=ev.get("source_documents") or [],
+                summary_source=ev.get("summary_source"),
             )
         )
     return rows
@@ -720,11 +759,13 @@ def build_timeline(
     profile = profile or {}
     # A document already linked to a timeline entry (e.g. a visit transcript)
     # is shown on that entry, not again as a separate "added to library" row.
-    linked = {
-        str(e.get("source_document_id"))
-        for e in profile.get("care_events") or []
-        if e.get("source_document_id")
-    }
+    linked: set[str] = set()
+    for event in profile.get("care_events") or []:
+        if event.get("source_document_id"):
+            linked.add(str(event.get("source_document_id")))
+        for doc in event.get("source_documents") or []:
+            if isinstance(doc, dict) and doc.get("id"):
+                linked.add(str(doc["id"]))
     documents = [d for d in documents or [] if str(d.get("id")) not in linked]
     rows = [
         *care_event_rows(profile.get("care_events")),

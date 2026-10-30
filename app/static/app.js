@@ -74,6 +74,8 @@ const state = {
   planMonth: null,
   planFilter: "open",
   planSelectedDay: null,
+  questionFilter: "open",
+  questionEditId: null,
   diagnosticsLoading: false,
   profileIsLite: false,
   coverageReport: null,
@@ -1956,6 +1958,9 @@ function switchTab(name, options = {}) {
     options = { ...options, settingsSection: "assessments" };
   }
   if (!VALID_TABS.has(name)) return;
+  if (isSimpleView() && MAIN_NAV_TABS.has(name) && !SIMPLE_TABS.has(name)) {
+    setViewMode("advanced", { skipTab: true });
+  }
   const navTab = MAIN_NAV_TABS.has(name) ? name : null;
   $$(".tab").forEach((t) => {
     const active = navTab != null && t.dataset.tab === navTab;
@@ -1996,6 +2001,10 @@ function switchTab(name, options = {}) {
   }
   if (name === "timeline") {
     loadTimeline({ quiet: Boolean(timelineState.data && timelineState.patientId === state.activePatientId) });
+  }
+  if (name === "questions") {
+    refreshActivePatientProfile().catch(() => {});
+    renderDoctorQuestions(state.patientProfile);
   }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
@@ -2047,7 +2056,7 @@ const HOME_SECTIONS = new Set([
   "gaps",
   "run",
 ]);
-const SETTINGS_SECTIONS = new Set(["patients", "profile", "analysis", "assessments", "labels", "llm", "access", "audit"]);
+const SETTINGS_SECTIONS = new Set(["patients", "notifications", "profile", "analysis", "assessments", "labels", "llm", "access", "audit"]);
 const PROFILE_SECTIONS = new Set([
   "basics",
   "labs",
@@ -2905,18 +2914,28 @@ function applyTabUi(name) {
 
 function readSavedTabName() {
   const hash = window.location.hash.replace(/^#/, "").trim();
-  if (hash === "ingest") return "library";
-  if (hash && VALID_TABS.has(hash)) return hash;
+  const mapped = hash === "ingest" ? "library" : hash;
+  if (mapped && VALID_TABS.has(mapped)) {
+    if (isSimpleView() && MAIN_NAV_TABS.has(mapped) && !SIMPLE_TABS.has(mapped)) {
+      return DEFAULT_SIMPLE_TAB;
+    }
+    return mapped;
+  }
   try {
     const saved =
       sessionStorage.getItem(TAB_STORAGE_KEY) ||
       sessionStorage.getItem("beatit-active-tab");
-    if (saved === "ingest") return "library";
-    if (saved && VALID_TABS.has(saved)) return saved;
+    const savedMapped = saved === "ingest" ? "library" : saved;
+    if (savedMapped && VALID_TABS.has(savedMapped)) {
+      if (isSimpleView() && MAIN_NAV_TABS.has(savedMapped) && !SIMPLE_TABS.has(savedMapped)) {
+        return DEFAULT_SIMPLE_TAB;
+      }
+      return savedMapped;
+    }
   } catch {
     /* ignore */
   }
-  return null;
+  return isSimpleView() ? DEFAULT_SIMPLE_TAB : null;
 }
 
 function persistActiveTab(name) {
@@ -2946,6 +2965,7 @@ function restoreActiveTab() {
 }
 
 function initTabPersistence() {
+  initViewMode();
   restoreActiveTabUiOnly();
   window.addEventListener("hashchange", () => {
     const tab = readSavedTabName();
@@ -3708,6 +3728,7 @@ const VALID_TABS = new Set([
   "labs",
   "plan",
   "timeline",
+  "questions",
   "options-chat",
   "custom-tasks",
   "library",
@@ -3721,10 +3742,71 @@ const MAIN_NAV_TABS = new Set([
   "labs",
   "plan",
   "timeline",
+  "questions",
   "custom-tasks",
   "library",
   "settings",
 ]);
+const SIMPLE_TABS = new Set(["timeline", "labs", "questions"]);
+const DEFAULT_SIMPLE_TAB = "timeline";
+const VIEW_MODE_STORAGE_KEY = "bright-health-view-mode";
+
+function readViewMode() {
+  try {
+    const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    if (saved === "advanced" || saved === "simple") return saved;
+  } catch {
+    /* ignore */
+  }
+  return "simple";
+}
+
+function isSimpleView() {
+  return (document.documentElement.getAttribute("data-view-mode") || "simple") !== "advanced";
+}
+
+function applyViewMode(mode) {
+  const next = mode === "advanced" ? "advanced" : "simple";
+  document.documentElement.setAttribute("data-view-mode", next);
+  document.body.classList.toggle("view-simple", next === "simple");
+  document.body.classList.toggle("view-advanced", next === "advanced");
+  const simpleBtn = document.getElementById("btn-view-simple");
+  const advancedBtn = document.getElementById("btn-view-advanced");
+  if (simpleBtn) {
+    simpleBtn.classList.toggle("active", next === "simple");
+    simpleBtn.setAttribute("aria-pressed", next === "simple" ? "true" : "false");
+  }
+  if (advancedBtn) {
+    advancedBtn.classList.toggle("active", next === "advanced");
+    advancedBtn.setAttribute("aria-pressed", next === "advanced" ? "true" : "false");
+  }
+}
+
+function setViewMode(mode, options = {}) {
+  const next = mode === "advanced" ? "advanced" : "simple";
+  applyViewMode(next);
+  if (options.persist !== false) {
+    try {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (options.skipTab) return;
+  const current =
+    document.querySelector(".tab.active")?.dataset.tab ||
+    readSavedTabName() ||
+    DEFAULT_SIMPLE_TAB;
+  if (next === "simple" && MAIN_NAV_TABS.has(current) && !SIMPLE_TABS.has(current)) {
+    switchTab(DEFAULT_SIMPLE_TAB);
+  }
+}
+
+function initViewMode() {
+  applyViewMode(readViewMode());
+  document.getElementById("btn-view-simple")?.addEventListener("click", () => setViewMode("simple"));
+  document.getElementById("btn-view-advanced")?.addEventListener("click", () => setViewMode("advanced"));
+}
 const IMAGING_VISION_SLICE_LIMIT = 3;
 
 const IMAGING_FILTER_SPECS = [
@@ -7586,6 +7668,184 @@ function safeOn(selector, event, handler) {
   if (el) el.addEventListener(event, handler);
 }
 
+const PUSH_PROMPT_KEY = "bright-health-push-prompt";
+
+function pushSupported() {
+  return Boolean(window.Notification && "serviceWorker" in navigator && "PushManager" in window);
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+function currentPushSubscriptionJson(subscription) {
+  if (!subscription?.endpoint) return null;
+  const json = subscription.toJSON ? subscription.toJSON() : subscription;
+  return {
+    endpoint: json.endpoint,
+    keys: json.keys || {},
+  };
+}
+
+async function getExistingPushSubscription() {
+  if (!pushSupported()) return null;
+  const registration = await navigator.serviceWorker.ready;
+  return registration.pushManager.getSubscription();
+}
+
+function setPushPromptChoice(value) {
+  try {
+    localStorage.setItem(PUSH_PROMPT_KEY, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+function pushPromptChoice() {
+  try {
+    return localStorage.getItem(PUSH_PROMPT_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function renderPushUi({ subscribed = false, blocked = false, unsupported = false } = {}) {
+  const header = $("#btn-push-notify");
+  const prompt = $("#push-prompt");
+  const status = $("#push-settings-status");
+  const enable = $("#btn-push-settings-enable");
+  const disable = $("#btn-push-settings-disable");
+  if (header) {
+    header.classList.toggle("push-on", subscribed);
+    header.setAttribute("aria-pressed", subscribed ? "true" : "false");
+    header.title = subscribed ? "Update notifications are on" : "Notify me of updates";
+    header.setAttribute(
+      "aria-label",
+      subscribed ? "Turn off update notifications" : "Enable update notifications"
+    );
+  }
+  if (prompt) {
+    const hide =
+      unsupported ||
+      blocked ||
+      subscribed ||
+      pushPromptChoice() === "dismissed" ||
+      (window.Notification && Notification.permission === "denied");
+    prompt.classList.toggle("hidden", hide);
+  }
+  if (status) {
+    if (unsupported) status.textContent = "This browser cannot receive web push notifications.";
+    else if (blocked) status.textContent = "Notifications are blocked. Allow them in the browser settings for this site.";
+    else if (subscribed) status.textContent = "This device will be notified when someone else records an update.";
+    else status.textContent = "Notifications are off on this device.";
+  }
+  enable?.classList.toggle("hidden", Boolean(unsupported || blocked || subscribed));
+  disable?.classList.toggle("hidden", !subscribed);
+}
+
+async function refreshPushUi() {
+  if (!pushSupported()) {
+    renderPushUi({ unsupported: true });
+    return { subscribed: false, unsupported: true };
+  }
+  if (Notification.permission === "denied") {
+    renderPushUi({ blocked: true });
+    return { subscribed: false, blocked: true };
+  }
+  const subscription = await getExistingPushSubscription();
+  let subscribed = Boolean(subscription);
+  try {
+    const status = await api("/api/push/status");
+    subscribed = Boolean(subscription && status.subscribed);
+  } catch {
+    /* keep local subscription state */
+  }
+  renderPushUi({ subscribed });
+  return { subscribed };
+}
+
+async function enablePushNotifications() {
+  if (!pushSupported()) {
+    throw new Error("This browser does not support push notifications");
+  }
+  window.BrightUpdating?.registerServiceWorker?.();
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    renderPushUi({ blocked: permission === "denied" });
+    throw new Error(permission === "denied" ? "Notifications are blocked" : "Notifications were not allowed");
+  }
+  const keyPayload = await api("/api/push/public-key");
+  const publicKey = keyPayload.public_key;
+  if (!publicKey) throw new Error("Could not load the notification key");
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  });
+  await api("/api/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify(currentPushSubscriptionJson(subscription)),
+  });
+  setPushPromptChoice("enabled");
+  renderPushUi({ subscribed: true });
+}
+
+async function disablePushNotifications() {
+  const subscription = await getExistingPushSubscription();
+  if (subscription) {
+    try {
+      await api("/api/push/unsubscribe", {
+        method: "POST",
+        body: JSON.stringify(currentPushSubscriptionJson(subscription)),
+      });
+    } catch {
+      /* still drop the browser subscription */
+    }
+    try {
+      await subscription.unsubscribe();
+    } catch {
+      /* ignore */
+    }
+  }
+  setPushPromptChoice("dismissed");
+  renderPushUi({ subscribed: false });
+}
+
+function initPushNotifications() {
+  renderPushUi({ unsupported: !pushSupported() });
+  void refreshPushUi();
+  safeOn("#btn-push-notify", "click", () => {
+    const on = $("#btn-push-notify")?.classList.contains("push-on");
+    const action = on ? disablePushNotifications() : enablePushNotifications();
+    action
+      .then(() => toast(on ? "Notifications off on this device" : "You'll be notified of updates"))
+      .catch((error) => toast(error.message || "Could not update notifications", "error"));
+  });
+  safeOn("#btn-push-enable", "click", () => {
+    enablePushNotifications()
+      .then(() => toast("You'll be notified of updates"))
+      .catch((error) => toast(error.message || "Could not enable notifications", "error"));
+  });
+  safeOn("#btn-push-dismiss", "click", () => {
+    setPushPromptChoice("dismissed");
+    $("#push-prompt")?.classList.add("hidden");
+  });
+  safeOn("#btn-push-settings-enable", "click", () => {
+    enablePushNotifications()
+      .then(() => toast("You'll be notified of updates"))
+      .catch((error) => toast(error.message || "Could not enable notifications", "error"));
+  });
+  safeOn("#btn-push-settings-disable", "click", () => {
+    disablePushNotifications()
+      .then(() => toast("Notifications off on this device"))
+      .catch((error) => toast(error.message || "Could not turn off notifications", "error"));
+  });
+}
+
 function bootstrapUi() {
   initTheme();
   initTabPersistence();
@@ -7605,6 +7865,7 @@ function bootstrapUi() {
   syncStickyHeaderOffset();
   window.addEventListener("resize", syncStickyHeaderOffset);
   initLogLiveUpdates();
+  initPushNotifications();
   // Avoid flashing "No assessment yet" before /api/analyses/latest returns
   renderHomeState(false);
 }
@@ -9442,6 +9703,7 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderJournalHome(profile, journalSeries);
   renderMedicationsHome(profile);
   renderCarePlan(profile);
+  renderDoctorQuestions(profile);
   renderMedSafetyResult(profile?.medication_safety);
   syncPatientSpecificLogTiles();
   syncMobileLogForLabel();
@@ -10494,6 +10756,239 @@ function renderCarePlan(profile) {
     return;
   }
   listEl.innerHTML = filtered.map((item) => renderCarePlanItem(item)).join("");
+}
+
+const QUESTION_STATUS_LABEL = { open: "To ask", asked: "Asked", answered: "Answered" };
+
+function doctorQuestionsFromProfile(profile = state.patientProfile) {
+  return Array.isArray(profile?.doctor_questions) ? profile.doctor_questions : [];
+}
+
+function careTeamDoctorChoices(profile = state.patientProfile) {
+  const seen = new Set();
+  const out = [];
+  for (const member of profile?.care_team || []) {
+    const name = String(member?.name || "").trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, role: String(member.role || "").trim() });
+  }
+  for (const item of doctorQuestionsFromProfile(profile)) {
+    const name = String(item?.doctor || "").trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, role: String(item.role || "").trim() });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function fillDoctorQuestionPickers(profile = state.patientProfile) {
+  const doctors = careTeamDoctorChoices(profile);
+  const doctorList = document.getElementById("dq-doctor-list");
+  const roleList = document.getElementById("dq-role-list");
+  if (doctorList) {
+    doctorList.innerHTML = doctors
+      .map((row) => `<option value="${escapeHtml(row.name)}">${escapeHtml(row.role || row.name)}</option>`)
+      .join("");
+  }
+  if (roleList) {
+    const roles = [...new Set(doctors.map((row) => row.role).filter(Boolean))];
+    roleList.innerHTML = roles.map((role) => `<option value="${escapeHtml(role)}"></option>`).join("");
+  }
+}
+
+function clearDoctorQuestionForm() {
+  const form = document.getElementById("doctor-question-form");
+  form?.reset();
+  const edit = document.getElementById("dq-edit-id");
+  if (edit) edit.value = "";
+  state.questionEditId = null;
+  const saveBtn = document.getElementById("btn-save-doctor-question");
+  if (saveBtn) saveBtn.textContent = "Add question";
+  document.getElementById("btn-cancel-doctor-question")?.classList.add("hidden");
+}
+
+function beginDoctorQuestionEdit(item) {
+  if (!item) return;
+  state.questionEditId = item.id;
+  document.getElementById("dq-edit-id").value = item.id || "";
+  document.getElementById("dq-text").value = item.question || "";
+  document.getElementById("dq-doctor").value = item.doctor || "";
+  document.getElementById("dq-role").value = item.role || "";
+  document.getElementById("dq-notes").value = item.notes || "";
+  const saveBtn = document.getElementById("btn-save-doctor-question");
+  if (saveBtn) saveBtn.textContent = "Save question";
+  document.getElementById("btn-cancel-doctor-question")?.classList.remove("hidden");
+  document.getElementById("dq-text")?.focus();
+}
+
+function formatQuestionsForCopy(items, { doctor = "" } = {}) {
+  const who = doctor || "the care team";
+  const lines = items.map((item, index) => {
+    const extra = item.notes ? ` (${item.notes})` : "";
+    return `${index + 1}. ${item.question}${extra}`;
+  });
+  return `Questions for ${who}\n\n${lines.join("\n")}`;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "readonly");
+  area.style.position = "absolute";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  area.remove();
+}
+
+function renderDoctorQuestionItem(item) {
+  const status = item.status || "open";
+  const who = item.doctor
+    ? `${item.doctor}${item.role ? ` · ${item.role}` : ""}`
+    : item.role || "Any doctor";
+  const answer = item.answer
+    ? `<p class="question-answer"><strong>Answer:</strong> ${escapeHtml(item.answer)}</p>`
+    : "";
+  const notes = item.notes ? `<p class="muted small">${escapeHtml(item.notes)}</p>` : "";
+  const askedBlock =
+    status === "asked"
+      ? `<label class="question-answer-form">What did they say
+          <textarea class="question-answer-input" data-question-answer="${escapeHtml(item.id)}" rows="2" maxlength="2000" placeholder="Optional — save the answer">${escapeHtml(item.answer || "")}</textarea>
+        </label>`
+      : answer;
+  return `<article class="question-item status-${escapeHtml(status)}" data-question-id="${escapeHtml(item.id)}">
+    <div class="question-item-main">
+      <p class="question-item-text">${escapeHtml(item.question || "")}</p>
+      <p class="muted small">${escapeHtml(who)} · ${escapeHtml(QUESTION_STATUS_LABEL[status] || status)}</p>
+      ${notes}
+      ${askedBlock}
+    </div>
+    <div class="question-item-actions">
+      ${status === "open" ? `<button type="button" class="btn secondary btn-sm" data-question-status="asked">Asked</button>` : ""}
+      ${status !== "answered" ? `<button type="button" class="btn secondary btn-sm" data-question-status="answered">Answered</button>` : ""}
+      ${status !== "open" ? `<button type="button" class="btn ghost btn-sm" data-question-status="open">Reopen</button>` : ""}
+      <button type="button" class="btn ghost btn-sm" data-question-edit>Edit</button>
+      <button type="button" class="btn ghost btn-sm" data-question-delete>Remove</button>
+    </div>
+  </article>`;
+}
+
+function renderDoctorQuestions(profile = state.patientProfile) {
+  const listEl = document.getElementById("doctor-questions-list");
+  if (!listEl) return;
+  fillDoctorQuestionPickers(profile);
+  document.querySelectorAll(".question-filter-btn").forEach((btn) => {
+    const active = btn.dataset.questionFilter === (state.questionFilter || "open");
+    btn.classList.toggle("active", active);
+    btn.classList.toggle("secondary", active);
+    btn.classList.toggle("ghost", !active);
+  });
+  if (!profile || !state.activePatientId) {
+    listEl.innerHTML = `<p class="muted small">Select a patient to collect questions.</p>`;
+    return;
+  }
+  const filter = state.questionFilter || "open";
+  const items = doctorQuestionsFromProfile(profile).filter((item) => filter === "all" || item.status === filter);
+  if (!items.length) {
+    listEl.innerHTML = `<p class="muted small">${
+      filter === "asked"
+        ? "No asked questions yet."
+        : filter === "answered"
+          ? "No answers recorded yet."
+          : filter === "all"
+            ? "No questions yet. Add one above."
+            : "Nothing to ask yet. Add a question above."
+    }</p>`;
+    return;
+  }
+  const groups = new Map();
+  for (const item of items) {
+    const key = String(item.doctor || "").trim() || "Any doctor";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  listEl.innerHTML = [...groups.entries()]
+    .map(([doctor, group]) => {
+      const role = group.find((item) => item.role)?.role;
+      const heading = role && doctor !== "Any doctor" ? `${doctor} · ${role}` : doctor;
+      const openCount = group.filter((item) => item.status === "open").length;
+      const copyBtn =
+        openCount > 0
+          ? `<button type="button" class="btn ghost btn-sm" data-copy-doctor="${escapeHtml(doctor)}">Copy for visit</button>`
+          : "";
+      return `<section class="question-group">
+        <div class="question-group-head">
+          <h4>${escapeHtml(heading)}</h4>
+          ${copyBtn}
+        </div>
+        ${group.map((item) => renderDoctorQuestionItem(item)).join("")}
+      </section>`;
+    })
+    .join("");
+}
+
+async function saveDoctorQuestionFromForm(event) {
+  event?.preventDefault?.();
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const question = document.getElementById("dq-text")?.value?.trim() || "";
+  if (!question) return toast("Enter the question", "error");
+  const editId = document.getElementById("dq-edit-id")?.value || "";
+  const body = {
+    question,
+    doctor: document.getElementById("dq-doctor")?.value?.trim() || "",
+    role: document.getElementById("dq-role")?.value?.trim() || "",
+    notes: document.getElementById("dq-notes")?.value?.trim() || "",
+  };
+  const btn = document.getElementById("btn-save-doctor-question");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api(
+      editId
+        ? `/api/patients/${state.activePatientId}/doctor-questions/${editId}`
+        : `/api/patients/${state.activePatientId}/doctor-questions`,
+      { method: editId ? "PATCH" : "POST", body: JSON.stringify(body) }
+    );
+    applyProfileResponse(data);
+    clearDoctorQuestionForm();
+    toast(editId ? "Question updated" : "Question added");
+  } catch (error) {
+    toast(error.message || "Could not save the question", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function updateDoctorQuestion(id, body) {
+  if (!state.activePatientId || !id) return;
+  const data = await api(`/api/patients/${state.activePatientId}/doctor-questions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  applyProfileResponse(data);
+  return data;
+}
+
+async function copyOpenDoctorQuestions(doctor = "") {
+  const items = doctorQuestionsFromProfile().filter((item) => {
+    if (item.status !== "open") return false;
+    if (!doctor) return true;
+    if (doctor === "Any doctor") return !item.doctor;
+    return String(item.doctor || "").trim() === doctor;
+  });
+  if (!items.length) return toast("No open questions to copy", "error");
+  const label = doctor && doctor !== "Any doctor" ? doctor : "the care team";
+  await copyTextToClipboard(formatQuestionsForCopy(items, { doctor: label }));
+  toast(`Copied ${items.length} question${items.length === 1 ? "" : "s"}`);
 }
 
 async function saveCareItemFromForm(event) {
@@ -17212,6 +17707,87 @@ document.querySelectorAll(".plan-filter-btn").forEach((btn) => {
   });
 });
 
+document.getElementById("doctor-question-form")?.addEventListener("submit", (event) => {
+  saveDoctorQuestionFromForm(event);
+});
+
+document.getElementById("btn-cancel-doctor-question")?.addEventListener("click", () => {
+  clearDoctorQuestionForm();
+});
+
+document.getElementById("dq-doctor")?.addEventListener("change", () => {
+  const name = document.getElementById("dq-doctor")?.value?.trim() || "";
+  const roleEl = document.getElementById("dq-role");
+  if (!roleEl || roleEl.value.trim()) return;
+  const match = careTeamDoctorChoices().find((row) => row.name.toLowerCase() === name.toLowerCase());
+  if (match?.role) roleEl.value = match.role;
+});
+
+document.querySelectorAll(".question-filter-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.questionFilter = btn.dataset.questionFilter || "open";
+    renderDoctorQuestions(state.patientProfile);
+  });
+});
+
+document.getElementById("btn-copy-open-questions")?.addEventListener("click", () => {
+  copyOpenDoctorQuestions().catch((error) => toast(error.message || "Could not copy", "error"));
+});
+
+document.getElementById("doctor-questions-list")?.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-question-id]");
+  if (!card) {
+    const copyBtn = event.target.closest("[data-copy-doctor]");
+    if (copyBtn) {
+      copyOpenDoctorQuestions(copyBtn.dataset.copyDoctor || "").catch((error) =>
+        toast(error.message || "Could not copy", "error")
+      );
+    }
+    return;
+  }
+  const id = card.dataset.questionId;
+  const item = doctorQuestionsFromProfile().find((row) => row.id === id);
+  if (event.target.closest("[data-question-edit]")) {
+    beginDoctorQuestionEdit(item);
+    return;
+  }
+  if (event.target.closest("[data-question-delete]")) {
+    if (!confirm("Remove this question?")) return;
+    api(`/api/patients/${state.activePatientId}/doctor-questions/${id}`, { method: "DELETE" })
+      .then((data) => {
+        applyProfileResponse(data);
+        if (state.questionEditId === id) clearDoctorQuestionForm();
+        toast("Question removed");
+      })
+      .catch((error) => toast(error.message || "Could not remove", "error"));
+    return;
+  }
+  const statusBtn = event.target.closest("[data-question-status]");
+  if (statusBtn) {
+    const status = statusBtn.dataset.questionStatus;
+    const body = { status };
+    if (status === "answered") {
+      const typed = card.querySelector(".question-answer-input")?.value?.trim();
+      if (typed) body.answer = typed;
+    }
+    updateDoctorQuestion(id, body)
+      .then(() => toast(status === "open" ? "Question reopened" : QUESTION_STATUS_LABEL[status] || "Updated"))
+      .catch((error) => toast(error.message || "Could not update", "error"));
+  }
+});
+
+document.getElementById("doctor-questions-list")?.addEventListener("focusout", (event) => {
+  const input = event.target.closest(".question-answer-input");
+  if (!input) return;
+  const id = input.dataset.questionAnswer;
+  const next = input.value.trim();
+  const item = doctorQuestionsFromProfile().find((row) => row.id === id);
+  if (!id || !item || (item.answer || "") === next) return;
+  updateDoctorQuestion(id, { answer: next, status: item.status === "open" ? "asked" : item.status }).catch(
+    (error) => toast(error.message || "Could not save the answer", "error")
+  );
+});
+
 document.getElementById("plan-calendar")?.addEventListener("click", (event) => {
   const cell = event.target.closest("[data-plan-day]");
   if (!cell) return;
@@ -17611,6 +18187,18 @@ async function removeTeamMember() {
   toast("Removed from the care team");
 }
 
+const VISIT_FILE_MAX_BYTES = 20 * 1024 * 1024;
+const VISIT_FILE_MAX_COUNT = 12;
+
+function renderTrFileList() {
+  const files = [...(document.getElementById("tr-file")?.files || [])];
+  const el = document.getElementById("tr-file-list");
+  if (!el) return;
+  el.textContent = files.length
+    ? `${files.length} file${files.length === 1 ? "" : "s"}: ${files.map((f) => f.name).join(", ")}`
+    : "";
+}
+
 function openTranscriptForm() {
   const form = document.getElementById("timeline-transcript");
   if (!form) return;
@@ -17618,6 +18206,7 @@ function openTranscriptForm() {
   form.classList.remove("hidden");
   document.getElementById("tr-when").value = tlToLocalInput(new Date());
   document.getElementById("tr-status").textContent = "";
+  renderTrFileList();
   document.getElementById("tr-who")?.focus();
 }
 
@@ -17625,15 +18214,21 @@ function closeTranscriptForm() {
   const form = document.getElementById("timeline-transcript");
   form?.reset();
   form?.classList.add("hidden");
+  renderTrFileList();
 }
 
 async function saveTranscriptForm(event) {
   event?.preventDefault?.();
   const pid = state.activePatientId;
   if (!pid) return toast("Select a patient first", "error");
-  const file = document.getElementById("tr-file")?.files?.[0];
+  const files = [...(document.getElementById("tr-file")?.files || [])];
   const pasted = document.getElementById("tr-text").value;
-  if (!file && !pasted.trim()) return toast("Choose a transcript file or paste the text", "error");
+  if (!files.length && !pasted.trim()) return toast("Choose one or more files, or paste the text", "error");
+  if (files.length > VISIT_FILE_MAX_COUNT) {
+    return toast(`Upload up to ${VISIT_FILE_MAX_COUNT} files at a time`, "error");
+  }
+  const oversized = files.find((f) => f.size > VISIT_FILE_MAX_BYTES);
+  if (oversized) return toast(`${oversized.name} is larger than 20 MB`, "error");
   const whenRaw = document.getElementById("tr-when").value;
   const body = {
     practitioner: document.getElementById("tr-who").value.trim(),
@@ -17641,17 +18236,25 @@ async function saveTranscriptForm(event) {
     location: document.getElementById("tr-where").value.trim(),
     occurred_at: whenRaw ? new Date(whenRaw).toISOString() : null,
     summary: document.getElementById("tr-summary").value.trim(),
+    files: [],
   };
+  if (pasted.trim()) body.text = pasted;
   const status = document.getElementById("tr-status");
   const btn = document.getElementById("btn-tr-save");
   if (btn) btn.disabled = true;
-  if (status) status.textContent = "Saving…";
+  if (status) {
+    status.textContent = body.summary
+      ? files.length > 1
+        ? `Saving ${files.length} files…`
+        : "Saving…"
+      : "Saving and summarizing…";
+  }
   try {
-    if (file) {
-      body.filename = file.name;
-      body.file_base64 = tlArrayBufferToBase64(await file.arrayBuffer());
-    } else {
-      body.text = pasted;
+    for (const file of files) {
+      body.files.push({
+        filename: file.name,
+        file_base64: tlArrayBufferToBase64(await file.arrayBuffer()),
+      });
     }
     const res = await fetch(`/api/patients/${pid}/care-events/transcript`, {
       method: "POST",
@@ -17661,16 +18264,26 @@ async function saveTranscriptForm(event) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Could not save transcript");
+      throw new Error(err.detail || "Could not save visit");
     }
     const data = await res.json();
     timelineState.data = data;
     closeTranscriptForm();
     renderTimeline();
-    toast(`Transcript saved (${(data.document?.words || 0).toLocaleString()} words) and linked to the visit`);
+    const count = (data.documents || []).length || (data.document ? 1 : 0);
+    const summarized = data.summary_source === "ai" || data.summary_source === "fallback";
+    toast(
+      summarized
+        ? count > 1
+          ? `${count} files saved and summarized on the timeline`
+          : "Visit saved and summarized on the timeline"
+        : count > 1
+          ? `${count} files saved and linked to the visit`
+          : "Visit saved and linked on the timeline"
+    );
   } catch (err) {
-    if (status) status.textContent = err.message || "Could not save transcript";
-    toast(err.message || "Could not save transcript", "error");
+    if (status) status.textContent = err.message || "Could not save visit";
+    toast(err.message || "Could not save visit", "error");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -17687,10 +18300,20 @@ function renderTimelineEvent(ev) {
         long ? `<button type="button" class="btn ghost btn-sm tl-more">Show more</button>` : ""
       }`
     : "";
-  const sourceLink = ev.source_document_id
-    ? ` · <button type="button" class="link-button tl-open-doc" data-doc-id="${escapeHtml(ev.source_document_id)}">${escapeHtml(
-        ev.source === "transcript" ? "Read transcript" : ev.source_document_title || "Open source"
-      )}</button>`
+  const attached = Array.isArray(ev.source_documents) && ev.source_documents.length
+    ? ev.source_documents
+    : ev.source_document_id
+      ? [{ id: ev.source_document_id, title: ev.source_document_title }]
+      : [];
+  const sourceLink = attached.length
+    ? attached
+        .map((doc, i) => {
+          const fallback = ev.source === "transcript" && attached.length === 1 ? "Read transcript" : "Open file";
+          const label = doc.title || ev.source_document_title || fallback;
+          const short = attached.length > 1 ? (doc.title || `File ${i + 1}`) : label;
+          return ` · <button type="button" class="link-button tl-open-doc" data-doc-id="${escapeHtml(doc.id)}">${escapeHtml(short)}</button>`;
+        })
+        .join("")
     : ev.source === "whatsapp" && ev.source_document_title
       ? ` · ${escapeHtml(ev.source_document_title)}`
       : "";
@@ -18517,6 +19140,7 @@ document.getElementById("team-form")?.addEventListener("submit", saveTeamForm);
 document.getElementById("btn-timeline-transcript")?.addEventListener("click", openTranscriptForm);
 document.getElementById("btn-tr-cancel")?.addEventListener("click", closeTranscriptForm);
 document.getElementById("timeline-transcript")?.addEventListener("submit", saveTranscriptForm);
+document.getElementById("tr-file")?.addEventListener("change", renderTrFileList);
 document.getElementById("tl-practitioner")?.addEventListener("change", () => tlFillFromMember("tl-practitioner", "tl-role", "tl-location"));
 document.getElementById("tr-who")?.addEventListener("change", () => tlFillFromMember("tr-who", "tr-role", "tr-where"));
 document.getElementById("panel-timeline")?.addEventListener("click", (e) => {

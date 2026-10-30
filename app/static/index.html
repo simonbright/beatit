@@ -19,8 +19,11 @@
   <script>
     (function () {
       var t = localStorage.getItem("bright-health-theme") || localStorage.getItem("beatit-theme");
-      if (t === "day" || t === "night") document.documentElement.setAttribute("data-theme", t);
+      if (t === "day" || t === "night")     document.documentElement.setAttribute("data-theme", t);
       else document.documentElement.setAttribute("data-theme", "day");
+      var view = "simple";
+      try { view = localStorage.getItem("bright-health-view-mode") === "advanced" ? "advanced" : "simple"; } catch (e) {}
+      document.documentElement.setAttribute("data-view-mode", view);
     })();
   </script>
   <link rel="stylesheet" href="/static/styles.css">
@@ -55,6 +58,10 @@
         </div>
       </div>
       <div class="header-actions">
+        <div class="header-view-toggle" role="group" aria-label="Workspace view">
+          <button type="button" class="header-view-btn active" id="btn-view-simple" aria-pressed="true">Simple</button>
+          <button type="button" class="header-view-btn" id="btn-view-advanced" aria-pressed="false">Advanced</button>
+        </div>
         <button type="button" class="header-icon-btn hidden" id="btn-export-pdf-icon" title="Export PDF" aria-label="Export PDF">
           <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
@@ -67,6 +74,12 @@
         <button type="button" class="header-icon-btn" id="btn-header-chat" aria-label="AI Chat" title="AI Chat">
           <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button type="button" class="header-icon-btn" id="btn-push-notify" aria-label="Enable update notifications" title="Notify me of updates" aria-pressed="false">
+          <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M13.7 21a2 2 0 01-3.4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </button>
         <button type="button" class="header-icon-btn" id="btn-journal" aria-label="How are you?" title="How are you?">
@@ -102,11 +115,11 @@
     </div>
     <nav class="header-nav" aria-label="Main navigation">
       <div class="tabs header-tabs header-tabs-icons" role="tablist">
-        <button class="tab tab-icon active" data-tab="analyze" role="tab" aria-selected="true" title="Home" aria-label="Home">
+        <button class="tab tab-icon" data-tab="analyze" role="tab" aria-selected="false" title="Home" aria-label="Home">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
           <span class="tab-icon-label">Home</span>
         </button>
-        <button class="tab tab-icon" data-tab="labs" role="tab" title="Labs" aria-label="Labs">
+        <button class="tab tab-icon" data-tab="labs" data-simple-tab role="tab" title="Labs" aria-label="Labs">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="tab-icon-label">Labs</span>
         </button>
@@ -114,9 +127,13 @@
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
           <span class="tab-icon-label">Plan</span>
         </button>
-        <button class="tab tab-icon" data-tab="timeline" role="tab" title="Family timeline" aria-label="Timeline">
+        <button class="tab tab-icon active" data-tab="timeline" data-simple-tab role="tab" aria-selected="true" title="Family timeline" aria-label="Timeline">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="7" r="2.2" fill="currentColor"/><circle cx="6" cy="17" r="2.2" fill="currentColor"/><path d="M11 7h9M11 12h6M11 17h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="tab-icon-label">Timeline</span>
+        </button>
+        <button class="tab tab-icon" data-tab="questions" data-simple-tab role="tab" title="Questions for the doctor" aria-label="Questions">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.2 9a3 3 0 0 1 5.6 1c0 2-2.8 2.4-2.8 4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor"/></svg>
+          <span class="tab-icon-label">Questions</span>
         </button>
         <button class="tab tab-icon" data-tab="custom-tasks" role="tab" title="Custom Tasks" aria-label="Custom Tasks">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -497,7 +514,7 @@
     </div>
 
     <!-- HOME / ANALYZE -->
-    <section id="panel-analyze" class="panel active">
+    <section id="panel-analyze" class="panel">
       <nav id="home-subnav" class="section-subnav" role="tablist" aria-label="Home sections">
         <div class="section-subnav-track">
         <button type="button" class="section-subtab active" data-home-section="log" role="tab" aria-selected="true" title="Quick log">
@@ -1097,19 +1114,75 @@
       </div>
     </section>
 
+    <!-- QUESTIONS FOR THE DOCTOR -->
+    <section id="panel-questions" class="panel">
+      <div class="card questions-card">
+        <div class="row-between wrap timeline-head">
+          <div>
+            <h3>Questions for the doctor</h3>
+            <p class="muted small">Park what to ask, and which doctor it is for. Copy a list before the visit.</p>
+          </div>
+        </div>
+        <form id="doctor-question-form" class="care-item-form questions-form" autocomplete="off">
+          <label for="dq-text">Question
+            <textarea id="dq-text" rows="2" maxlength="500" required placeholder="e.g. What does the latest scan change about the plan?"></textarea>
+          </label>
+          <label for="dq-doctor">Which doctor
+            <input type="text" id="dq-doctor" list="dq-doctor-list" maxlength="120" placeholder="Pick from the care team, or type a name">
+            <datalist id="dq-doctor-list"></datalist>
+          </label>
+          <label for="dq-role">Role / specialty
+            <input type="text" id="dq-role" list="dq-role-list" maxlength="80" placeholder="e.g. Oncology">
+            <datalist id="dq-role-list"></datalist>
+          </label>
+          <label for="dq-notes" class="care-item-notes">Why / context
+            <textarea id="dq-notes" rows="2" maxlength="2000" placeholder="Optional — what prompted this, or what to mention"></textarea>
+          </label>
+          <div class="care-item-form-actions">
+            <button type="submit" class="btn primary" id="btn-save-doctor-question">Add question</button>
+            <button type="button" class="btn ghost hidden" id="btn-cancel-doctor-question">Cancel edit</button>
+          </div>
+          <input type="hidden" id="dq-edit-id" value="">
+        </form>
+        <div class="questions-toolbar">
+          <div class="plan-list-filters" role="group" aria-label="Question filters">
+            <button type="button" class="btn secondary btn-sm question-filter-btn active" data-question-filter="open">To ask</button>
+            <button type="button" class="btn ghost btn-sm question-filter-btn" data-question-filter="asked">Asked</button>
+            <button type="button" class="btn ghost btn-sm question-filter-btn" data-question-filter="answered">Answered</button>
+            <button type="button" class="btn ghost btn-sm question-filter-btn" data-question-filter="all">All</button>
+          </div>
+          <button type="button" class="btn secondary btn-sm" id="btn-copy-open-questions">Copy open questions</button>
+        </div>
+        <div id="doctor-questions-list" class="doctor-questions-list">
+          <p class="muted small">Nothing to ask yet. Add a question above.</p>
+        </div>
+      </div>
+    </section>
+
     <!-- FAMILY TIMELINE -->
-    <section id="panel-timeline" class="panel">
+    <section id="panel-timeline" class="panel active">
       <div class="card timeline-card">
         <div class="row-between wrap timeline-head">
           <div>
             <h3>Family timeline</h3>
-            <p class="muted small">What happened, who was in, and where each fact came from. Nothing here is AI-generated — every entry shows its source.</p>
+            <p class="muted small">What happened, who was in, and where each fact came from. Visit notes can be summarized into bullets; every entry still shows its source.</p>
           </div>
           <div class="timeline-head-actions">
             <button type="button" class="btn primary btn-sm" id="btn-timeline-log">+ Log what happened</button>
-            <button type="button" class="btn secondary btn-sm" id="btn-timeline-transcript">Add visit transcript</button>
+            <button type="button" class="btn secondary btn-sm" id="btn-timeline-transcript">Record a visit</button>
             <button type="button" class="btn secondary btn-sm" id="btn-timeline-update">Family update</button>
             <button type="button" class="btn ghost btn-sm" id="btn-timeline-import">Import WhatsApp</button>
+          </div>
+        </div>
+
+        <div id="push-prompt" class="push-prompt hidden" role="status">
+          <div>
+            <p><strong>Get notified when something is recorded</strong></p>
+            <p class="muted small">We’ll ping this device for new visits, timeline notes, and WhatsApp imports. On iPhone, add Bright Health to the Home Screen first.</p>
+          </div>
+          <div class="push-prompt-actions">
+            <button type="button" class="btn primary btn-sm" id="btn-push-enable">Notify me</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-push-dismiss">Not now</button>
           </div>
         </div>
 
@@ -1146,8 +1219,8 @@
 
         <form id="timeline-transcript" class="care-item-form timeline-form hidden" autocomplete="off">
           <div class="timeline-form-head">
-            <h4>Add a visit transcript</h4>
-            <p class="muted small">Saved word for word to the Library and linked to this visit on the timeline. Upload a <code>.txt</code>, <code>.vtt</code>, <code>.srt</code>, <code>.md</code> or <code>.docx</code>, or paste the text.</p>
+            <h4>Record a visit</h4>
+            <p class="muted small">Attach one or more files — <code>.txt</code>, <code>.md</code>, <code>.docx</code>, <code>.pdf</code>, <code>.vtt</code>, <code>.srt</code> — and/or paste text. Files are saved to the Library. Notes are summarized into a few timeline bullets.</p>
           </div>
           <label for="tr-who">Who was in
             <input type="text" id="tr-who" list="tl-practitioner-list" maxlength="120" placeholder="Pick from the care team or type a name">
@@ -1161,17 +1234,18 @@
           <label for="tr-where">Where
             <input type="text" id="tr-where" list="tl-env-list" maxlength="120" placeholder="e.g. Hospital — inpatient">
           </label>
-          <label for="tr-file" class="care-item-notes">Transcript file
-            <input type="file" id="tr-file" accept=".txt,.md,.vtt,.srt,.docx,text/plain,text/vtt">
+          <label for="tr-file" class="care-item-notes">Files
+            <input type="file" id="tr-file" multiple accept=".txt,.md,.vtt,.srt,.docx,.pdf,text/plain,text/markdown,text/vtt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
           </label>
-          <label for="tr-text" class="care-item-notes">…or paste the transcript
-            <textarea id="tr-text" rows="5" placeholder="Paste the transcript here"></textarea>
+          <p id="tr-file-list" class="muted small tr-file-list"></p>
+          <label for="tr-text" class="care-item-notes">…and/or paste text
+            <textarea id="tr-text" rows="5" placeholder="Paste notes or a transcript here"></textarea>
           </label>
           <label for="tr-summary" class="care-item-notes">Key points for the timeline (optional)
-            <textarea id="tr-summary" rows="2" maxlength="4000" placeholder="What the family should see at a glance, in the practitioner's words. Leave blank to just link the transcript."></textarea>
+            <textarea id="tr-summary" rows="2" maxlength="4000" placeholder="Leave blank to auto-summarize the notes into a few bullets."></textarea>
           </label>
           <div class="care-item-form-actions">
-            <button type="submit" class="btn primary" id="btn-tr-save">Save transcript</button>
+            <button type="submit" class="btn primary" id="btn-tr-save">Save visit</button>
             <button type="button" class="btn ghost" id="btn-tr-cancel">Cancel</button>
             <span id="tr-status" class="muted small"></span>
           </div>
@@ -1179,7 +1253,7 @@
 
         <div id="timeline-import" class="timeline-panel hidden">
           <h4>Import from WhatsApp</h4>
-          <p class="muted small">On a phone: open the group → tap its name → <strong>Export Chat → Without Media</strong>. Upload the <code>.txt</code> (or the <code>.zip</code> WhatsApp creates). Messages come in exactly as written, with sender and time. Importing a newer export only adds new messages.</p>
+          <p class="muted small">On a phone: open the group → tap its name → <strong>Export Chat → Without Media</strong>. Upload the <code>.txt</code> (or the <code>.zip</code> WhatsApp creates). A full export is fine — messages already on the timeline are skipped; only new ones are added.</p>
           <div class="timeline-import-row">
             <input type="file" id="tl-import-file" accept=".txt,.zip,text/plain,application/zip">
             <input type="text" id="tl-import-name" maxlength="120" placeholder="Chat name (e.g. Susan Health Updates)">
@@ -1812,6 +1886,15 @@
       </details>
 
       <details class="card howto-section">
+        <summary class="howto-section-summary">Questions — what to ask which doctor</summary>
+        <div class="howto-section-body">
+          <p>Use the <strong>Questions</strong> tab to collect what the family wants to ask, and which doctor it is for. Copy the open list before a visit, then mark items asked or answered afterward.</p>
+          <div class="howto-go">
+            <button type="button" class="btn secondary" data-howto-nav="questions">Go to Questions</button>
+          </div>
+        </div>
+      </details>
+      <details class="card howto-section">
         <summary class="howto-section-summary">Library — documents &amp; uploads</summary>
         <div class="howto-section-body">
           <p>Everything you store lives here. Use <strong>Add documents</strong> to bring in:</p>
@@ -1868,6 +1951,10 @@
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a3 3 0 0 1 0 5.74" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Patients</span>
         </button>
+        <button type="button" class="section-subtab" data-settings-section="notifications" role="tab" aria-selected="false" title="Update notifications">
+          <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M13.7 21a2 2 0 01-3.4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="section-subtab-label">Notifications</span>
+        </button>
         <button type="button" class="section-subtab" data-settings-section="profile" role="tab" aria-selected="false" title="Who profile">
           <svg class="section-subtab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="section-subtab-label">Profile</span>
@@ -1898,6 +1985,19 @@
         </button>
               </div>
       </nav>
+
+      <div id="settings-pane-notifications" class="section-pane hidden" data-settings-pane="notifications">
+      <div class="card settings-card">
+        <h3>Update notifications</h3>
+        <p class="muted">Get a push on this device when someone else records a visit, timeline note, or WhatsApp import. You will not be notified of your own saves.</p>
+        <p class="muted small">Safari on iPhone and iPad only delivers these after you add Bright Health to the Home Screen.</p>
+        <p id="push-settings-status" class="push-status">Checking this device…</p>
+        <div class="settings-identity-actions">
+          <button type="button" class="btn primary" id="btn-push-settings-enable">Turn on notifications</button>
+          <button type="button" class="btn ghost hidden" id="btn-push-settings-disable">Turn off on this device</button>
+        </div>
+      </div>
+      </div>
 
       <div id="settings-pane-patients" class="section-pane" data-settings-pane="patients">
       <div class="card settings-card">

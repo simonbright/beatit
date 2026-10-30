@@ -4,7 +4,7 @@ Bright Health is a local-first **patient care workspace** for organizing clinica
 
 It is **not medical advice**. Verify clinical decisions with qualified care teams.
 
-Live production (example): [beatit-m9n1.onrender.com](https://beatit-m9n1.onrender.com) · Project page: [simonbrightman.com/projects/beatit](https://simonbrightman.com/projects/beatit/)
+Live production: [brighthealth.onrender.com](https://brighthealth.onrender.com) · Project page: [simonbrightman.com/projects/beatit](https://simonbrightman.com/projects/beatit/)
 
 ---
 
@@ -19,18 +19,21 @@ Live production (example): [beatit-m9n1.onrender.com](https://beatit-m9n1.onrend
 | **Meds** | Prescriptions, OTC, remedies; photo import; safety oversight |
 | **Log** | Feelings, symptoms, meds taken, food/drink, exercise — quick tiles + journal |
 | **Timeline** | Facts-only family timeline: who was in, tests, moves, meds, family updates — each with its source; WhatsApp import; copyable family update |
+| **Questions** | What to ask which doctor; copy a list before the visit; mark asked / answered |
 | **AI Chat** | Multi-turn treatment discussion scoped to library + Home assessment |
 | **Custom Tasks** | Focused draft analyses you can promote to the record |
 | **Imaging vision** | Optional Ollama vision reads of selected DICOM slices |
 | **PDF export** | Assessments, logs, meds, labs, coverage, and multi-section bundles |
 | **Auth** | Optional sign-in (required on typical Render deploys) |
+| **Notifications** | Web Push on this device when someone else records a visit, timeline note, or WhatsApp import |
 
 ---
 
 ## Global shell
 
-- **Main tabs:** Home · Labs · Plan · Timeline · Tasks · Library · Settings
-- **Header:** Patient photo/name (switch who/case), Export PDF, AI Chat, How are you?, How-to, day/night theme, Sign out
+- **Views:** **Simple** (default) shows Timeline, Labs, and Questions. A header toggle switches to **Advanced** (Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings). The choice is remembered.
+- **Main tabs (Advanced):** Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings
+- **Header:** Simple/Advanced toggle, patient photo/name (switch who/case), Export PDF, AI Chat, update notifications, How are you?, How-to, day/night theme, Sign out
 - **Status:** LLM connection pill, background job bar, toasts, version footer
 - **Export PDF modal:** Choose Assessment / Logs / Medications / Labs (All or None); empty sections are skipped; log range defaults to last 7 days (Today → All)
 
@@ -41,6 +44,7 @@ Live production (example): [beatit-m9n1.onrender.com](https://beatit-m9n1.onrend
 - Email/username + password when auth is enabled (`AUTH_USERNAME` / `AUTH_PASSWORD`, optional per-user `AUTH_USER_PASSWORDS`)
 - Sign out from the header
 - **Settings → Access:** add, update, or remove disk users (useful on Render without editing secrets)
+- **Settings → Notifications:** turn Web Push on or off for this device. The Timeline also offers a first-time prompt. The person who saves an update is not notified.
 - Local development can run without auth (treated as user `local`)
 
 ---
@@ -285,10 +289,10 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 
 **Visit transcripts**
 
-- **Add visit transcript**: pick who was in, when and where, then upload a `.txt`, `.md`, `.vtt`, `.srt` or `.docx` — or paste the text.
-- The transcript is saved **word for word** to the active case's Library (timing cues removed, speaker labels kept) and linked to a *Visit transcript* entry on the timeline (**Read transcript**).
-- *Key points for the timeline* is optional and is yours to write — nothing is summarized automatically.
-- Requires the patient (and a case) to be active, because the transcript is stored in that case's Library.
+- **Record a visit**: pick who was in, when and where, then attach one or more `.txt`, `.md`, `.docx`, `.pdf`, `.vtt` or `.srt` files — and/or paste text.
+- Each file is saved **word for word** to the active case's Library (timing cues removed, speaker labels kept) and linked to one *Visit transcript* entry on the timeline. PDFs keep the original file; a scan with no extractable text is still stored so it can be opened from the Library.
+- Notes are summarized into a few factual bullets on the timeline. *Key points for the timeline* is optional — leave it blank to auto-summarize, or write your own.
+- Requires the patient (and a case) to be active, because the files are stored in that case's Library.
 
 **Using it**
 
@@ -297,9 +301,21 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 - Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
 - **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role) while keeping the original text and sender.
 - **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
-- **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. Re-importing a newer export only adds new messages (dedupe on sender + time + text).
+- **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added.
 
 Timeline entries are patient-wide (not case-scoped) and stored in the patient profile (`care_events`). Add, edit, delete and imports are written to the audit trail (Settings → Audit → *timeline*).
+
+---
+
+## 12b. Questions for the doctor
+
+A family list of what to ask at the next visit, stored on the patient (not a case).
+
+- Add a question, pick **which doctor** from the professional care team (or type a name), and an optional specialty / context note
+- Filter: To ask · Asked · Answered · All
+- Grouped by doctor, with **Copy for visit** and a page-level **Copy open questions**
+- Mark asked after the appointment; add what they said and mark answered
+- Visible in Simple view alongside Timeline and Labs
 
 ---
 

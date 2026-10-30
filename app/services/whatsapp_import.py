@@ -160,7 +160,7 @@ def parse_whatsapp_export(text: str, *, tz_name: str = "America/Toronto") -> lis
         if not dt:
             continue
         iso = dt.isoformat()
-        ref = hashlib.sha1(f"{sender}|{iso}|{msg}".encode("utf-8")).hexdigest()[:20]
+        ref = whatsapp_fingerprint(sender, iso, msg)
         messages.append(
             {
                 "sender": sender,
@@ -171,6 +171,48 @@ def parse_whatsapp_export(text: str, *, tz_name: str = "America/Toronto") -> lis
             }
         )
     return messages
+
+
+def normalize_wa_text(text: str) -> str:
+    t = _EDITED.sub("", _clean_line(text or ""))
+    return " ".join(t.split())
+
+
+def normalize_wa_sender(name: str) -> str:
+    return " ".join((name or "").split()).casefold()
+
+
+def _occurred_minute(iso: str) -> str:
+    """Wall-clock minute, ignoring seconds and timezone offset."""
+    return (iso or "").replace(" ", "T")[:16]
+
+
+def whatsapp_fingerprint(sender: str, sent_at: str, text: str) -> str:
+    """Stable id across full re-exports (seconds, TZ label, hidden chars)."""
+    raw = f"{normalize_wa_sender(sender)}|{_occurred_minute(sent_at)}|{normalize_wa_text(text)}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def whatsapp_dedupe_keys(sender: str, sent_at: str, text: str, *, source_ref: str | None = None) -> set[str]:
+    """All keys that should treat this message as already imported."""
+    keys: set[str] = set()
+    if source_ref:
+        keys.add(source_ref)
+    fp = whatsapp_fingerprint(sender, sent_at, text)
+    keys.add(f"wa:{fp}")
+    keys.add(fp)
+    minute = _occurred_minute(sent_at)
+    if minute:
+        try:
+            from datetime import datetime, timedelta
+
+            dt = datetime.fromisoformat(minute)
+            for delta in (-1, 0, 1):
+                neighbor = (dt + timedelta(minutes=delta)).strftime("%Y-%m-%dT%H:%M")
+                keys.add(f"wa:{whatsapp_fingerprint(sender, neighbor, text)}")
+        except ValueError:
+            pass
+    return {k for k in keys if k}
 
 
 def messages_to_care_events(messages: list[dict[str, Any]], *, chat_name: str = "") -> list[dict[str, Any]]:

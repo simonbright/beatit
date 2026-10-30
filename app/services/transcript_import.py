@@ -1,8 +1,8 @@
 """Turn a recorded-visit transcript file into clean, verbatim text.
 
-Supports plain text / Markdown, WebVTT (.vtt), SubRip (.srt) and Word (.docx).
-Timing cues and cue numbers are removed; speaker labels and wording are kept
-exactly. Nothing is summarized or rewritten.
+Supports plain text / Markdown, WebVTT (.vtt), SubRip (.srt), Word (.docx)
+and PDF. Timing cues and cue numbers are removed; speaker labels and wording
+are kept exactly. Nothing is summarized or rewritten.
 """
 
 from __future__ import annotations
@@ -13,7 +13,13 @@ import re
 import zipfile
 from xml.etree import ElementTree
 
-SUPPORTED_EXTENSIONS = (".txt", ".md", ".vtt", ".srt", ".docx")
+SUPPORTED_EXTENSIONS = (".txt", ".md", ".vtt", ".srt", ".docx", ".pdf")
+MAX_VISIT_FILES = 12
+VISIT_FILE_MAX_BYTES = 20 * 1024 * 1024
+PDF_NO_TEXT_NOTE = (
+    "This PDF was saved to the Library. No extractable text was found "
+    "(it may be a scan)."
+)
 
 _CUE_TIME = re.compile(
     r"^\s*(\d{1,2}:)?\d{1,2}:\d{2}[.,]\d{1,3}\s*-->\s*(\d{1,2}:)?\d{1,2}:\d{2}[.,]\d{1,3}.*$"
@@ -75,6 +81,37 @@ def _from_docx(data: bytes) -> str:
     return "\n".join(paras)
 
 
+def _from_pdf(data: bytes) -> str:
+    from app.ingest.pdf import EMPTY_PDF_PLACEHOLDER, extract_pdf_text_quick
+
+    try:
+        body, _meta = extract_pdf_text_quick(data)
+    except Exception as exc:  # noqa: BLE001 — surface a visit-friendly error
+        raise ValueError("That PDF could not be read") from exc
+    body = (body or "").strip()
+    if not body or body == EMPTY_PDF_PLACEHOLDER:
+        return PDF_NO_TEXT_NOTE
+    # Drop the "--- Page N ---" markers so the Library copy stays readable.
+    body = re.sub(r"^--- Page \d+ ---\n", "", body, flags=re.MULTILINE)
+    return body
+
+
+def decode_visit_file(file_base64: str) -> bytes:
+    try:
+        data = base64.b64decode(file_base64 or "", validate=False)
+    except ValueError as exc:
+        raise ValueError("That file could not be read") from exc
+    if not data:
+        raise ValueError("That file is empty")
+    if len(data) > VISIT_FILE_MAX_BYTES:
+        raise ValueError("Each file must be 20 MB or smaller")
+    return data
+
+
+def is_pdf_filename(filename: str | None) -> bool:
+    return (filename or "").lower().endswith(".pdf")
+
+
 def transcript_text(
     *,
     text: str | None = None,
@@ -85,13 +122,12 @@ def transcript_text(
     name = (filename or "").lower()
     if file_base64:
         if name and not name.endswith(SUPPORTED_EXTENSIONS):
-            raise ValueError("Use a .txt, .md, .vtt, .srt or .docx transcript, or paste the text")
-        try:
-            data = base64.b64decode(file_base64, validate=False)
-        except ValueError as exc:
-            raise ValueError("That file could not be read") from exc
+            raise ValueError("Use a .txt, .md, .vtt, .srt, .docx or .pdf file, or paste the text")
+        data = decode_visit_file(file_base64)
         if name.endswith(".docx"):
             body = _from_docx(data)
+        elif name.endswith(".pdf"):
+            body = _from_pdf(data)
         else:
             body = data.decode("utf-8", errors="replace")
     else:

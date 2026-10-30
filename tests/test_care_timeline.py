@@ -86,6 +86,30 @@ def test_import_is_idempotent(patient):
     assert all(e["source"] == "whatsapp" for e in profile["care_events"])
 
 
+ANDROID_REEXPORT = """27/10/2026, 11:07 - Hadas Brajtman: 1. Mom's blood pressure is too low and not improving with fluids.
+27/10/2026, 11:07 - Hadas Brajtman: 2. Mom is getting a catheter
+so they can monitor output
+27/10/2026, 11:09 - Simon Brightman: Thanks Das
+29/10/2026, 18:07 - Aron Brajtman: 6pm update. Finished supper ‎<This message was edited>
+29/10/2026, 09:01 - Hadas Brajtman: Morning labs are back
+"""
+
+
+def test_full_reexport_does_not_duplicate(patient):
+    first = messages_to_care_events(parse_whatsapp_export(IOS_EXPORT), chat_name="Susan Health Updates")
+    case_manager.import_patient_care_events(patient, first)
+    again = messages_to_care_events(
+        parse_whatsapp_export(ANDROID_REEXPORT, tz_name="America/Chicago"),
+        chat_name="Susan Health Updates",
+    )
+    result = case_manager.import_patient_care_events(patient, again)
+    assert result["added"] == 1
+    assert result["skipped"] == 4
+    texts = [e["summary"] for e in case_manager.get_patient_profile(patient)["care_events"]]
+    assert texts.count("Morning labs are back") == 1
+    assert sum(1 for t in texts if t.startswith("1. Mom's blood pressure")) == 1
+
+
 def test_manual_event_and_timeline_merge(patient):
     entry = case_manager.add_patient_care_event(
         patient,
@@ -212,6 +236,91 @@ def test_srt_and_docx_transcripts():
     assert out == "Dr. Lee: Plan is unchanged.\nAron: Thank you."
     with pytest.raises(ValueError):
         transcript_text(file_base64="aGk=", filename="visit.m4a")
+
+
+def test_pdf_transcript_keeps_words():
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(
+        0,
+        10,
+        "Dr. Lee: Plan is unchanged. Continue IV antibiotics and check the white count again tomorrow morning.",
+    )
+    data = pdf.output()
+    if isinstance(data, str):
+        data = data.encode("latin-1")
+    out = transcript_text(file_base64=base64.b64encode(data).decode(), filename="visit.pdf")
+    assert "Plan is unchanged" in out
+
+
+def test_source_documents_are_kept_together(patient):
+    entry = case_manager.add_patient_care_event(
+        patient,
+        kind="transcript",
+        occurred_at="2026-10-29T17:40:00-04:00",
+        practitioner="Dr. Lee",
+        summary="Rounds",
+        source_document_id="doc-1",
+        source_document_title="Notes.txt",
+        source_documents=[
+            {"id": "doc-1", "title": "Notes.txt"},
+            {"id": "doc-2", "title": "Consult.pdf"},
+        ],
+        source="transcript",
+    )
+    assert [d["id"] for d in entry["source_documents"]] == ["doc-1", "doc-2"]
+    profile = case_manager.get_patient_profile(patient)
+    docs = [
+        {"id": "doc-1", "title": "Notes.txt", "source_type": "text", "created_at": "2026-10-29T21:41:00+00:00"},
+        {"id": "doc-2", "title": "Consult.pdf", "source_type": "pdf", "created_at": "2026-10-29T21:42:00+00:00"},
+        {"id": "doc-3", "title": "CT report", "source_type": "pdf", "created_at": "2026-10-29T21:43:00+00:00"},
+    ]
+    rows = build_timeline(profile, docs)
+    visit = next(r for r in rows if r.get("care_event_id") == entry["id"])
+    assert [d["id"] for d in visit["source_documents"]] == ["doc-1", "doc-2"]
+    assert [r["title"] for r in rows if r["category"] == "document"] == ["CT report"]
+
+
+def test_visit_notes_use_llm_bullets():
+    import asyncio
+
+    from app.services.visit_summary import summarize_visit_notes
+
+    class FakeLLM:
+        async def generate(self, **_kwargs):
+            return "- White count is coming down\n- Keep antibiotics another 48 hours\n- Next CT is not scheduled"
+
+    text, source = asyncio.run(
+        summarize_visit_notes(
+            [("notes.txt", "Dr. Lee: Her white count is coming down. Keep antibiotics 48 hours. CT not scheduled.")],
+            llm=FakeLLM(),
+            who="Dr. Lee",
+            role="Oncology",
+        )
+    )
+    assert source == "ai"
+    assert text.startswith("- ")
+    assert "white count" in text.lower()
+
+
+def test_visit_notes_fallback_to_bullets():
+    from app.services.visit_summary import fallback_visit_bullets, format_visit_bullets, parse_visit_bullets
+
+    text = (
+        "Dr. Lee: Her white count is coming down and we will keep the antibiotics another 48 hours.\n"
+        "Simon: When is the next CT?\n"
+        "Dr. Lee: Not scheduled yet. Continue IV fluids overnight."
+    )
+    out = fallback_visit_bullets([("notes.txt", text)])
+    lines = out.splitlines()
+    assert 2 <= len(lines) <= 6
+    assert all(line.startswith("- ") for line in lines)
+    assert "white count" in out.lower()
+    assert parse_visit_bullets("1. First fact\n- Second fact") == ["First fact", "Second fact"]
+    assert format_visit_bullets(["Keep antibiotics", "Keep antibiotics"]) == "- Keep antibiotics."
 
 
 def test_plain_text_untouched():

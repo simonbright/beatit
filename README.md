@@ -113,6 +113,10 @@ Step-by-step guide: **[docs/TAILSCALE_OLLAMA_SETUP.md](docs/TAILSCALE_OLLAMA_SET
 
 When auth vars are set, visitors see a sign-in page. Leave them empty for local development.
 
+Production URL: [https://brighthealth.onrender.com](https://brighthealth.onrender.com)
+
+Family members can turn on **update notifications** (header bell, Timeline prompt, or Settings → Notifications). New visits, timeline notes, and WhatsApp imports notify every other signed-in device that opted in.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md).

@@ -197,6 +197,9 @@ from app.services.case_manager import (
     update_patient_care_item,
     add_patient_care_item_activity,
     delete_patient_care_item,
+    add_patient_doctor_question,
+    update_patient_doctor_question,
+    delete_patient_doctor_question,
     add_patient_care_event,
     update_patient_care_event,
     delete_patient_care_event,
@@ -313,6 +316,11 @@ class DocumentCitationUpdateRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=1, max_length=200)
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str = Field(min_length=8, max_length=2048)
+    keys: dict[str, str] = Field(default_factory=dict)
 
 
 class AuthUserUpsertRequest(BaseModel):
@@ -703,6 +711,55 @@ async def api_delete_auth_user(username: str, request: Request):
         metadata={"action": "delete_auth_user", "username": username.strip()},
     )
     return {"ok": True}
+
+
+@router.get("/push/public-key")
+async def api_push_public_key():
+    from app.services.push_notify import ensure_vapid_keys
+
+    return {"public_key": ensure_vapid_keys()["public_key"]}
+
+
+@router.get("/push/status")
+async def api_push_status(request: Request):
+    from app.services.push_notify import user_has_subscription
+
+    username = _actor(request) or "local"
+    return {
+        "supported": True,
+        "subscribed": user_has_subscription(username),
+        "username": username if settings.auth_enabled else None,
+    }
+
+
+@router.post("/push/subscribe")
+async def api_push_subscribe(body: PushSubscribeRequest, request: Request):
+    from app.services.push_notify import send_subscription_confirmation, upsert_subscription
+
+    username = _actor(request) or "local"
+    try:
+        record = upsert_subscription(
+            username=username,
+            endpoint=body.endpoint,
+            keys=body.keys or {},
+            user_agent=request.headers.get("user-agent") or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        await send_subscription_confirmation(record)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "subscribed": True}
+
+
+@router.post("/push/unsubscribe")
+async def api_push_unsubscribe(body: PushSubscribeRequest, request: Request):
+    from app.services.push_notify import remove_subscription
+
+    username = _actor(request) or "local"
+    removed = remove_subscription(endpoint=body.endpoint, username=username)
+    return {"ok": True, "subscribed": False, "removed": removed}
 
 
 @router.get("/auth/me")
@@ -4442,6 +4499,90 @@ async def api_delete_patient_care_item(patient_id: str, item_id: str):
     return payload
 
 
+class DoctorQuestionCreateRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    doctor: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=80)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class DoctorQuestionUpdateRequest(BaseModel):
+    question: str | None = Field(default=None, max_length=500)
+    doctor: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=80)
+    notes: str | None = Field(default=None, max_length=2000)
+    answer: str | None = Field(default=None, max_length=2000)
+    status: str | None = Field(default=None, max_length=20)
+
+
+def _doctor_question_payload(patient_id: str, entry: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = _patient_profile_payload(patient_id)
+    if entry is not None:
+        payload["doctor_question"] = entry
+    return payload
+
+
+@router.get("/patients/{patient_id}/doctor-questions")
+async def api_list_patient_doctor_questions(patient_id: str):
+    payload = _patient_profile_payload(patient_id)
+    payload["doctor_questions"] = (payload.get("profile") or {}).get("doctor_questions") or []
+    return payload
+
+
+@router.post("/patients/{patient_id}/doctor-questions")
+async def api_add_patient_doctor_question(
+    patient_id: str,
+    body: DoctorQuestionCreateRequest,
+    request: Request,
+):
+    try:
+        entry = add_patient_doctor_question(
+            patient_id,
+            question=body.question,
+            doctor=body.doctor,
+            role=body.role,
+            notes=body.notes,
+            recorded_by=_actor(request) or "local",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    doctor = entry.get("doctor") or "the care team"
+    _queue_family_push(request, patient_id, body=f"New question for {doctor}")
+    return _doctor_question_payload(patient_id, entry)
+
+
+@router.patch("/patients/{patient_id}/doctor-questions/{question_id}")
+async def api_update_patient_doctor_question(
+    patient_id: str,
+    question_id: str,
+    body: DoctorQuestionUpdateRequest,
+):
+    fields = body.model_fields_set
+    kwargs: dict[str, Any] = {}
+    for key in ("question", "doctor", "role", "notes", "answer", "status"):
+        if key in fields:
+            kwargs[key] = getattr(body, key)
+    try:
+        entry = update_patient_doctor_question(patient_id, question_id, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return _doctor_question_payload(patient_id, entry)
+
+
+@router.delete("/patients/{patient_id}/doctor-questions/{question_id}")
+async def api_delete_patient_doctor_question(patient_id: str, question_id: str):
+    removed = delete_patient_doctor_question(patient_id, question_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Question not found")
+    payload = _doctor_question_payload(patient_id)
+    payload["ok"] = True
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Family timeline (facts-only care events + merged dated records)
 # ---------------------------------------------------------------------------
@@ -4492,6 +4633,24 @@ def _timeline_actor(request: Request | None) -> str:
     if not actor or actor == "local":
         return "local user"
     return actor
+
+
+def _queue_family_push(request: Request | None, patient_id: str, *, body: str, url_path: str = "/#timeline") -> None:
+    from app.services.push_notify import patient_display_name, schedule_patient_update_push
+
+    snippet = " ".join((body or "").split())
+    if not snippet:
+        snippet = "There is a new update."
+    label = patient_display_name(patient_id)
+    if not snippet.lower().startswith(label.lower()):
+        snippet = f"{label}: {snippet}"
+    schedule_patient_update_push(
+        patient_id=patient_id,
+        actor=_actor(request),
+        title="Bright Health",
+        body=snippet[:220],
+        url_path=url_path,
+    )
 
 
 async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -> dict[str, Any]:
@@ -4619,6 +4778,12 @@ async def api_add_patient_care_event(
     )
     payload = await _timeline_payload(patient_id)
     payload["care_event"] = entry
+    summary = " ".join(str(entry.get("summary") or "").split())
+    _queue_family_push(
+        request,
+        patient_id,
+        body=summary or "New timeline update",
+    )
     return payload
 
 
@@ -4879,10 +5044,16 @@ async def api_set_family_role(
     return await _timeline_payload(patient_id)
 
 
+class VisitAttachmentRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    file_base64: str = Field(min_length=1, max_length=30_000_000)
+
+
 class PatientTranscriptImportRequest(BaseModel):
     text: str | None = Field(default=None, max_length=400_000)
     file_base64: str | None = Field(default=None, max_length=30_000_000)
     filename: str | None = Field(default=None, max_length=200)
+    files: list[VisitAttachmentRequest] | None = Field(default=None, max_length=12)
     title: str | None = Field(default=None, max_length=200)
     occurred_at: str | None = Field(default=None, max_length=40)
     practitioner: str | None = Field(default=None, max_length=120)
@@ -4891,22 +5062,45 @@ class PatientTranscriptImportRequest(BaseModel):
     summary: str | None = Field(default=None, max_length=4000)
 
 
+def _visit_attachment_title(base: str, filename: str | None, *, many: bool) -> str:
+    name = (filename or "").strip()
+    if many and name:
+        return name[:200]
+    return base[:200]
+
+
 @router.post("/patients/{patient_id}/care-events/transcript")
 async def api_import_visit_transcript(
     patient_id: str, body: PatientTranscriptImportRequest, request: Request
 ):
-    """Save a recorded visit verbatim to the Library and link it to a visit on the timeline."""
+    """Save one or more visit files to the Library and link them to a timeline visit."""
     from app.services.care_timeline import parse_event_datetime
-    from app.services.transcript_import import speakers, transcript_text
+    from app.services.transcript_import import (
+        MAX_VISIT_FILES,
+        PDF_NO_TEXT_NOTE,
+        decode_visit_file,
+        is_pdf_filename,
+        speakers,
+        transcript_text,
+    )
 
     ctx = get_active_context()
     if ctx.get("patient_id") != patient_id or not ctx.get("case_id"):
         raise HTTPException(
             status_code=400,
-            detail="Switch to this patient (and a case) first — the transcript is saved to that case's Library.",
+            detail="Switch to this patient (and a case) first — the files are saved to that case's Library.",
         )
+    attachments = list(body.files or [])
+    if body.file_base64:
+        attachments.append(
+            VisitAttachmentRequest(filename=body.filename or "visit.txt", file_base64=body.file_base64)
+        )
+    pasted = (body.text or "").strip()
+    if not attachments and not pasted:
+        raise HTTPException(status_code=400, detail="Choose one or more files, or paste the text")
+    if len(attachments) > MAX_VISIT_FILES:
+        raise HTTPException(status_code=400, detail=f"Upload up to {MAX_VISIT_FILES} files at a time")
     try:
-        text = transcript_text(text=body.text, file_base64=body.file_base64, filename=body.filename)
         occurred = parse_event_datetime(body.occurred_at)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4922,34 +5116,125 @@ async def api_import_visit_transcript(
         )
     except ValueError:
         when_label = occurred[:10]
-    title = " ".join((body.title or "").split()) or (
+    base_title = " ".join((body.title or "").split()) or (
         f"Visit transcript — {who} — {when_label}" if who else f"Visit transcript — {when_label}"
     )
-    db, store, _, _, _ = await _get_services()
-    doc = await ingest_text(
-        store,
-        title=title[:200],
-        content=text,
-        metadata={
-            "kind": "visit_transcript",
-            "practitioner": who or None,
-            "role": body.role or None,
-            "occurred_at": occurred,
-            "filename": body.filename or None,
-            "speakers": speakers(text),
-            "recorded_by": _timeline_actor(request),
-        },
-    )
-    await _audit(
-        db,
-        request,
-        DOCUMENT_CREATED,
-        resource_type="document",
-        resource_id=doc["id"],
-        metadata={"title": doc.get("title"), "source_type": doc.get("source_type"), "kind": "visit_transcript"},
-    )
-    word_count = len(text.split())
-    summary = (body.summary or "").strip() or f"Recorded visit — transcript saved to the Library ({word_count:,} words)."
+    extra_count = 1 if pasted else 0
+    many = (len(attachments) + extra_count) > 1
+    db, store, llm, _, _ = await _get_services()
+    actor = _timeline_actor(request)
+    created: list[dict[str, Any]] = []
+    note_chunks: list[tuple[str, str]] = []
+    total_words = 0
+
+    async def _save_text_doc(*, title: str, content: str, filename: str | None) -> dict[str, Any]:
+        doc = await ingest_text(
+            store,
+            title=title[:200],
+            content=content,
+            metadata={
+                "kind": "visit_transcript",
+                "practitioner": who or None,
+                "role": body.role or None,
+                "occurred_at": occurred,
+                "filename": filename,
+                "speakers": speakers(content),
+                "recorded_by": actor,
+            },
+        )
+        await _audit(
+            db,
+            request,
+            DOCUMENT_CREATED,
+            resource_type="document",
+            resource_id=doc["id"],
+            metadata={"title": doc.get("title"), "source_type": doc.get("source_type"), "kind": "visit_transcript"},
+        )
+        return doc
+
+    if pasted:
+        try:
+            text = transcript_text(text=pasted)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        created.append(
+            await _save_text_doc(
+                title=_visit_attachment_title(base_title, "pasted notes.txt", many=many),
+                content=text,
+                filename=None,
+            )
+        )
+        note_chunks.append(("Pasted notes", text))
+        total_words += len(text.split())
+
+    for attachment in attachments:
+        filename = attachment.filename
+        try:
+            if is_pdf_filename(filename):
+                text = transcript_text(file_base64=attachment.file_base64, filename=filename)
+                raw = decode_visit_file(attachment.file_base64)
+                doc = await ingest_pdf_file(
+                    store,
+                    filename=filename,
+                    content=raw,
+                    title=_visit_attachment_title(base_title, filename, many=many),
+                    metadata={
+                        "kind": "visit_transcript",
+                        "practitioner": who or None,
+                        "role": body.role or None,
+                        "occurred_at": occurred,
+                        "filename": filename,
+                        "recorded_by": actor,
+                    },
+                    defer_heavy=True,
+                )
+                await _audit(
+                    db,
+                    request,
+                    DOCUMENT_CREATED,
+                    resource_type="document",
+                    resource_id=doc["id"],
+                    metadata={
+                        "title": doc.get("title"),
+                        "source_type": doc.get("source_type"),
+                        "kind": "visit_transcript",
+                    },
+                )
+                if text != PDF_NO_TEXT_NOTE:
+                    note_chunks.append((filename, text))
+                    total_words += len(text.split())
+                created.append(doc)
+            else:
+                text = transcript_text(file_base64=attachment.file_base64, filename=filename)
+                created.append(
+                    await _save_text_doc(
+                        title=_visit_attachment_title(base_title, filename, many=many),
+                        content=text,
+                        filename=filename,
+                    )
+                )
+                note_chunks.append((filename, text))
+                total_words += len(text.split())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{filename}: {exc}") from exc
+
+    if not created:
+        raise HTTPException(status_code=400, detail="Choose one or more files, or paste the text")
+    file_label = f"{len(created)} file{'s' if len(created) != 1 else ''}"
+    user_summary = (body.summary or "").strip()
+    if user_summary:
+        summary = user_summary
+        summary_source = "user"
+    else:
+        from app.services.visit_summary import summarize_visit_notes
+
+        summary, summary_source = await summarize_visit_notes(
+            note_chunks, llm=llm, who=who, role=body.role or ""
+        )
+        if not summary:
+            summary = f"Recorded visit — {file_label} saved to the Library ({total_words:,} words)."
+            summary_source = "fallback"
+    source_documents = [{"id": doc["id"], "title": doc.get("title") or ""} for doc in created]
     try:
         entry = add_patient_care_event(
             patient_id,
@@ -4959,9 +5244,11 @@ async def api_import_visit_transcript(
             role=body.role,
             location=body.location,
             summary=summary,
-            source_document_id=doc["id"],
-            source_document_title=doc.get("title"),
-            recorded_by=_timeline_actor(request),
+            summary_source=summary_source,
+            source_document_id=created[0]["id"],
+            source_document_title=created[0].get("title"),
+            source_documents=source_documents,
+            recorded_by=actor,
             source="transcript",
         )
     except ValueError as exc:
@@ -4971,11 +5258,24 @@ async def api_import_visit_transcript(
         TIMELINE_EVENT_ADDED,
         resource_type="care_event",
         resource_id=(entry or {}).get("id"),
-        metadata={"patient_id": patient_id, "kind": "transcript", "practitioner": who, "document_id": doc["id"]},
+        metadata={
+            "patient_id": patient_id,
+            "kind": "transcript",
+            "practitioner": who,
+            "document_id": created[0]["id"],
+            "document_ids": [doc["id"] for doc in created],
+        },
     )
     payload = await _timeline_payload(patient_id)
     payload["care_event"] = entry
-    payload["document"] = {"id": doc["id"], "title": doc.get("title"), "words": word_count}
+    payload["documents"] = [
+        {"id": doc["id"], "title": doc.get("title"), "words": len(str(doc.get("extracted_text") or "").split())}
+        for doc in created
+    ]
+    payload["document"] = payload["documents"][0]
+    payload["document"]["words"] = total_words
+    payload["summary_source"] = summary_source
+    _queue_family_push(request, patient_id, body="New visit notes")
     return payload
 
 
@@ -5028,6 +5328,10 @@ async def api_import_whatsapp_care_events(
     )
     payload = await _timeline_payload(patient_id)
     payload["import"] = {**result, "messages": len(messages)}
+    added = int(result.get("added") or 0)
+    if added:
+        noun = "message" if added == 1 else "messages"
+        _queue_family_push(request, patient_id, body=f"{added} new WhatsApp {noun}")
     return payload
 
 

@@ -19,3 +19,4 @@ numpy>=2.0.0
 pillow>=11.0.0
 pylibjpeg>=2.0.0
 pylibjpeg-libjpeg>=2.2.0
+pywebpush>=2.0.3
