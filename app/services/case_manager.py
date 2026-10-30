@@ -175,6 +175,10 @@ def _empty_profile() -> dict[str, Any]:
         "medications": [],
         "food_drinks": _default_food_drinks(),
         "care_items": [],
+        "care_events": [],
+        "care_team": [],
+        "family_team": [],
+        "family_role_history": [],
         "log_custom_tiles": [],
         "log_tile_order": [],
         "log_tile_hidden": [],
@@ -311,6 +315,10 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
             reverse=True,
         )
     profile["care_items"] = _normalize_care_items(data.get("care_items"))
+    profile["care_events"] = _normalize_care_events(data.get("care_events"))
+    profile["care_team"] = _normalize_team(data.get("care_team"))
+    profile["family_team"] = _normalize_family(data.get("family_team"))
+    profile["family_role_history"] = _normalize_role_history(data.get("family_role_history"))
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
@@ -347,6 +355,10 @@ def get_patient_log_bootstrap(patient_id: str) -> dict[str, Any]:
         "medications": [],
         "food_drinks": [],
         "care_items": [],
+        "care_events": [],
+        "care_team": [],
+        "family_team": [],
+        "family_role_history": [],
         "log_custom_tiles": [],
         "log_tile_order": [],
         "log_tile_hidden": [],
@@ -475,6 +487,10 @@ def save_patient_profile(
             m for m in (profile.get("milestones") or []) if isinstance(m, dict)
         ],
         "care_items": _normalize_care_items(profile.get("care_items")),
+        "care_events": _normalize_care_events(profile.get("care_events")),
+        "care_team": _normalize_team(profile.get("care_team")),
+        "family_team": _normalize_family(profile.get("family_team")),
+        "family_role_history": _normalize_role_history(profile.get("family_role_history")),
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
@@ -1772,6 +1788,472 @@ def delete_patient_care_item(patient_id: str, item_id: str) -> dict[str, Any] | 
     profile["care_items"] = [row for row in items if row.get("id") != item_id]
     save_patient_profile(patient_id, profile)
     return removed
+
+
+def _normalize_care_events(raw: Any) -> list[dict[str, Any]]:
+    from app.services.care_timeline import normalize_care_events
+
+    return normalize_care_events(raw)
+
+
+def _normalize_team(raw: Any) -> list[dict[str, Any]]:
+    from app.services.care_timeline import normalize_team_members
+
+    return normalize_team_members(raw)
+
+
+def _ensure_team_member(
+    profile: dict[str, Any],
+    name: str | None,
+    role: str | None,
+    environment: str | None,
+) -> None:
+    """Add a practitioner to the directory the first time they are recorded."""
+    from app.services.care_timeline import find_team_member, normalize_team_member
+
+    cleaned = " ".join(str(name or "").split())
+    if not cleaned:
+        return
+    team = list(profile.get("care_team") or [])
+    existing = find_team_member(team, cleaned)
+    if existing:
+        changed = False
+        if role and not existing.get("role"):
+            existing["role"] = role
+            changed = True
+        env = " ".join(str(environment or "").split())
+        if env and env.lower() not in {e.lower() for e in existing.get("environments") or []}:
+            existing.setdefault("environments", []).append(env)
+            changed = True
+        if changed:
+            existing["updated_at"] = _now_iso()
+        profile["care_team"] = team
+        return
+    member = normalize_team_member(
+        {
+            "name": cleaned,
+            "role": role,
+            "environments": [environment] if environment else [],
+            "notes": "Added from a timeline entry",
+        }
+    )
+    if member:
+        team.append(member)
+        profile["care_team"] = team
+
+
+def add_patient_team_member(
+    patient_id: str,
+    *,
+    name: str,
+    role: str | None = None,
+    environments: list[str] | str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    contact_other: str | None = None,
+    preferred_contact: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any] | None:
+    from app.services.care_timeline import find_team_member, normalize_team_member
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    member = normalize_team_member(
+        {
+            "name": name,
+            "role": role,
+            "environments": environments,
+            "phone": phone,
+            "email": email,
+            "contact_other": contact_other,
+            "preferred_contact": preferred_contact,
+            "notes": notes,
+        }
+    )
+    if not member:
+        raise ValueError("Name is required")
+    profile = get_patient_profile(patient_id)
+    team = list(profile.get("care_team") or [])
+    if find_team_member(team, member["name"]):
+        raise ValueError(f"{member['name']} is already on the care team")
+    team.append(member)
+    profile["care_team"] = team
+    save_patient_profile(patient_id, profile, reload=False)
+    return member
+
+
+def update_patient_team_member(
+    patient_id: str,
+    member_id: str,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    """Edit a member. A rename also updates their past timeline entries."""
+    from app.services.care_timeline import _name_key, normalize_team_member
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    team = list(profile.get("care_team") or [])
+    idx = next((i for i, m in enumerate(team) if m.get("id") == member_id), None)
+    if idx is None:
+        return None
+    member = dict(team[idx])
+    old_name = member.get("name")
+    for key in (
+        "name",
+        "role",
+        "environments",
+        "phone",
+        "email",
+        "contact_other",
+        "preferred_contact",
+        "notes",
+    ):
+        if key in fields and fields[key] is not None:
+            member[key] = fields[key]
+    member["updated_at"] = _now_iso()
+    normalized = normalize_team_member(member)
+    if not normalized:
+        raise ValueError("Name is required")
+    new_key = _name_key(normalized["name"])
+    if any(i != idx and _name_key(m.get("name")) == new_key for i, m in enumerate(team)):
+        raise ValueError(f"{normalized['name']} is already on the care team")
+    team[idx] = normalized
+    profile["care_team"] = team
+    if _name_key(old_name) != new_key:
+        for ev in profile.get("care_events") or []:
+            if _name_key(ev.get("practitioner")) == _name_key(old_name):
+                ev["practitioner"] = normalized["name"]
+    save_patient_profile(patient_id, profile, reload=False)
+    return normalized
+
+
+def delete_patient_team_member(patient_id: str, member_id: str) -> dict[str, Any] | None:
+    """Remove from the directory only; past timeline entries keep the name."""
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    team = list(profile.get("care_team") or [])
+    removed = next((m for m in team if m.get("id") == member_id), None)
+    if not removed:
+        return None
+    profile["care_team"] = [m for m in team if m.get("id") != member_id]
+    save_patient_profile(patient_id, profile, reload=False)
+    return removed
+
+
+def _normalize_family(raw: Any) -> list[dict[str, Any]]:
+    from app.services.care_timeline import normalize_family_members
+
+    return normalize_family_members(raw)
+
+
+def _normalize_role_history(raw: Any) -> list[dict[str, Any]]:
+    from app.services.care_timeline import normalize_role_history
+
+    return normalize_role_history(raw)
+
+
+def _apply_family_roles(
+    profile: dict[str, Any],
+    member: dict[str, Any],
+    new_roles: list[str],
+    by: str | None,
+) -> None:
+    """Set a member's roles, stamping since-dates and logging each change."""
+    from app.services.care_timeline import family_role_key
+
+    now = _now_iso()
+    old = list(member.get("roles") or [])
+    cleaned: list[str] = []
+    for r in new_roles or []:
+        key = family_role_key(r)
+        if key and key not in cleaned:
+            cleaned.append(key)
+    since = dict(member.get("role_since") or {})
+    history = list(profile.get("family_role_history") or [])
+    for r in cleaned:
+        if r not in old:
+            since[r] = now
+            history.append({"at": now, "role": r, "person": member["name"], "action": "assigned", "by": by})
+    for r in old:
+        if r not in cleaned:
+            since.pop(r, None)
+            history.append({"at": now, "role": r, "person": member["name"], "action": "unassigned", "by": by})
+    member["roles"] = cleaned
+    member["role_since"] = {k: v for k, v in since.items() if k in cleaned}
+    profile["family_role_history"] = history
+
+
+def add_patient_family_member(
+    patient_id: str,
+    *,
+    by: str | None = None,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    from app.services.care_timeline import _name_key, normalize_family_member
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    roles = fields.pop("roles", None) or []
+    member = normalize_family_member({**fields, "roles": []})
+    if not member:
+        raise ValueError("Name is required")
+    profile = get_patient_profile(patient_id)
+    family = list(profile.get("family_team") or [])
+    if any(_name_key(m["name"]) == _name_key(member["name"]) for m in family):
+        raise ValueError(f"{member['name']} is already on the family team")
+    _apply_family_roles(profile, member, roles, by)
+    family.append(member)
+    profile["family_team"] = family
+    save_patient_profile(patient_id, profile, reload=False)
+    return member
+
+
+def update_patient_family_member(
+    patient_id: str,
+    member_id: str,
+    *,
+    by: str | None = None,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    from app.services.care_timeline import _name_key, normalize_family_member
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    family = list(profile.get("family_team") or [])
+    idx = next((i for i, m in enumerate(family) if m.get("id") == member_id), None)
+    if idx is None:
+        return None
+    member = dict(family[idx])
+    for key in ("name", "relationship", "phone", "email", "preferred_contact", "availability"):
+        if key in fields and fields[key] is not None:
+            member[key] = fields[key]
+    member["updated_at"] = _now_iso()
+    normalized = normalize_family_member(member)
+    if not normalized:
+        raise ValueError("Name is required")
+    if any(i != idx and _name_key(m["name"]) == _name_key(normalized["name"]) for i, m in enumerate(family)):
+        raise ValueError(f"{normalized['name']} is already on the family team")
+    if "roles" in fields and fields["roles"] is not None:
+        _apply_family_roles(profile, normalized, list(fields["roles"]), by)
+    family[idx] = normalized
+    profile["family_team"] = family
+    save_patient_profile(patient_id, profile, reload=False)
+    return normalized
+
+
+def set_patient_family_role(
+    patient_id: str,
+    role: str,
+    member_ids: list[str],
+    *,
+    by: str | None = None,
+) -> list[dict[str, Any]] | None:
+    """Assign one role to exactly these family members (from the role board)."""
+    from app.services.care_timeline import family_role_key
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    key = family_role_key(role)
+    if not key:
+        raise ValueError("Role is required")
+    wanted = set(member_ids or [])
+    profile = get_patient_profile(patient_id)
+    family = list(profile.get("family_team") or [])
+    for i, m in enumerate(family):
+        member = dict(m)
+        roles = list(member.get("roles") or [])
+        has = key in roles
+        if m["id"] in wanted and not has:
+            _apply_family_roles(profile, member, [*roles, key], by)
+        elif m["id"] not in wanted and has:
+            _apply_family_roles(profile, member, [r for r in roles if r != key], by)
+        family[i] = member
+    profile["family_team"] = family
+    save_patient_profile(patient_id, profile, reload=False)
+    return family
+
+
+def delete_patient_family_member(
+    patient_id: str, member_id: str, *, by: str | None = None
+) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    family = list(profile.get("family_team") or [])
+    removed = next((m for m in family if m.get("id") == member_id), None)
+    if not removed:
+        return None
+    _apply_family_roles(profile, dict(removed), [], by)
+    profile["family_team"] = [m for m in family if m.get("id") != member_id]
+    save_patient_profile(patient_id, profile, reload=False)
+    return removed
+
+
+def add_patient_care_event(
+    patient_id: str,
+    *,
+    kind: str | None,
+    occurred_at: str | None,
+    practitioner: str | None = None,
+    role: str | None = None,
+    location: str | None = None,
+    summary: str | None = None,
+    source_document_id: str | None = None,
+    source_document_title: str | None = None,
+    recorded_by: str | None = None,
+    source: str = "manual",
+) -> dict[str, Any] | None:
+    """Record a fact on the family timeline (visit, test, transfer, note…)."""
+    from uuid import uuid4
+
+    from app.services.care_timeline import normalize_care_event, parse_event_datetime
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    if not (summary or "").strip() and not (practitioner or "").strip():
+        raise ValueError("Add who was in or what happened")
+    profile = get_patient_profile(patient_id)
+    if practitioner and not (role or "").strip():
+        from app.services.care_timeline import find_team_member
+
+        member = find_team_member(profile.get("care_team"), practitioner)
+        if member and member.get("role"):
+            role = member["role"]
+    entry = normalize_care_event(
+        {
+            "id": str(uuid4()),
+            "kind": kind,
+            "occurred_at": parse_event_datetime(occurred_at),
+            "practitioner": practitioner,
+            "role": role,
+            "location": location,
+            "summary": summary,
+            "source_document_id": source_document_id,
+            "source_document_title": source_document_title,
+            "recorded_by": recorded_by,
+            "source": source or "manual",
+            "created_at": _now_iso(),
+        }
+    )
+    if not entry:
+        raise ValueError("Add who was in or what happened")
+    events = list(profile.get("care_events") or [])
+    events.append(entry)
+    profile["care_events"] = events
+    _ensure_team_member(profile, entry.get("practitioner"), entry.get("role"), entry.get("location"))
+    save_patient_profile(patient_id, profile, reload=False)
+    return entry
+
+
+def update_patient_care_event(
+    patient_id: str,
+    event_id: str,
+    *,
+    updated_by: str | None = None,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    from app.services.care_timeline import normalize_care_event, parse_event_datetime
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    events = list(profile.get("care_events") or [])
+    idx = next((i for i, e in enumerate(events) if e.get("id") == event_id), None)
+    if idx is None:
+        return None
+    entry = dict(events[idx])
+    allowed = {
+        "kind",
+        "occurred_at",
+        "practitioner",
+        "role",
+        "location",
+        "summary",
+        "source_document_id",
+        "source_document_title",
+    }
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key == "occurred_at":
+            value = parse_event_datetime(value)
+        entry[key] = value
+    if not str(entry.get("summary") or "").strip() and not str(entry.get("practitioner") or "").strip():
+        raise ValueError("Add who was in or what happened")
+    entry["updated_at"] = _now_iso()
+    entry["updated_by"] = updated_by
+    normalized = normalize_care_event(entry)
+    if not normalized:
+        raise ValueError("Add who was in or what happened")
+    events[idx] = normalized
+    profile["care_events"] = events
+    _ensure_team_member(
+        profile, normalized.get("practitioner"), normalized.get("role"), normalized.get("location")
+    )
+    save_patient_profile(patient_id, profile, reload=False)
+    return normalized
+
+
+def delete_patient_care_event(patient_id: str, event_id: str) -> dict[str, Any] | None:
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    events = list(profile.get("care_events") or [])
+    removed = next((e for e in events if e.get("id") == event_id), None)
+    if not removed:
+        return None
+    profile["care_events"] = [e for e in events if e.get("id") != event_id]
+    save_patient_profile(patient_id, profile, reload=False)
+    return removed
+
+
+def import_patient_care_events(
+    patient_id: str,
+    incoming: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Append imported events (e.g. WhatsApp), skipping ones already stored."""
+    from uuid import uuid4
+
+    from app.services.care_timeline import normalize_care_event
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    events = list(profile.get("care_events") or [])
+    seen = {e.get("source_ref") for e in events if e.get("source_ref")}
+    added = 0
+    skipped = 0
+    now = _now_iso()
+    for raw in incoming or []:
+        ref = raw.get("source_ref")
+        if ref and ref in seen:
+            skipped += 1
+            continue
+        entry = normalize_care_event({**raw, "id": str(uuid4()), "created_at": now})
+        if not entry:
+            skipped += 1
+            continue
+        events.append(entry)
+        if ref:
+            seen.add(ref)
+        added += 1
+    profile["care_events"] = events
+    save_patient_profile(patient_id, profile, reload=False)
+    return {"added": added, "skipped": skipped, "total": len(events)}
 
 
 def _normalize_log_tile_label(label: str) -> str:

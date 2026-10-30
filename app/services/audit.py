@@ -9,6 +9,11 @@ SETTINGS_PATIENT_CONTEXT_UPDATED = "settings.patient_context_updated"
 SETTINGS_REVIEWER_CONTEXT_UPDATED = "settings.reviewer_context_updated"
 SETTINGS_SOURCE_LABELS_UPDATED = "settings.source_labels_updated"
 SETTINGS_MEDICATION_DELETED = "settings.medication_deleted"
+TIMELINE_EVENT_ADDED = "timeline.event_added"
+TIMELINE_EVENT_UPDATED = "timeline.event_updated"
+TIMELINE_EVENT_DELETED = "timeline.event_deleted"
+TIMELINE_WHATSAPP_IMPORTED = "timeline.whatsapp_imported"
+TIMELINE_TEAM_UPDATED = "timeline.care_team_updated"
 DOCUMENT_CITATION_UPDATED = "document.citation_updated"
 ANALYSIS_REQUESTED = "analysis.requested"
 ANALYSIS_COMPLETED = "analysis.completed"
@@ -60,6 +65,11 @@ EVENT_LABELS: dict[str, str] = {
     ANALYSIS_ANNOTATIONS_UPDATED: "Custom task annotations updated",
     ANALYSIS_SHARED_EMAIL: "Custom task shared by email",
     SETTINGS_MEDICATION_DELETED: "Medication deleted",
+    TIMELINE_EVENT_ADDED: "Timeline entry added",
+    TIMELINE_EVENT_UPDATED: "Timeline entry edited",
+    TIMELINE_EVENT_DELETED: "Timeline entry deleted",
+    TIMELINE_WHATSAPP_IMPORTED: "WhatsApp updates imported",
+    TIMELINE_TEAM_UPDATED: "Care team updated",
 }
 
 CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
@@ -92,6 +102,13 @@ CATEGORY_PREFIXES: dict[str, tuple[str, ...]] = {
         SETTINGS_MEDICATION_DELETED,
     ),
     "auth": (AUTH_LOGIN, AUTH_LOGOUT, AUTH_USER_UPSERTED, AUTH_USER_DELETED),
+    "timeline": (
+        TIMELINE_EVENT_ADDED,
+        TIMELINE_EVENT_UPDATED,
+        TIMELINE_EVENT_DELETED,
+        TIMELINE_WHATSAPP_IMPORTED,
+        TIMELINE_TEAM_UPDATED,
+    ),
 }
 
 
@@ -166,6 +183,17 @@ def format_audit_summary(event: dict[str, Any]) -> str:
     if event_type == SETTINGS_MEDICATION_DELETED:
         name = meta.get("name") or meta.get("official_name") or "medication"
         return f'Deleted "{name}"'
+    if event_type in {TIMELINE_EVENT_ADDED, TIMELINE_EVENT_DELETED}:
+        who = meta.get("practitioner") or ""
+        verb = "Added" if event_type == TIMELINE_EVENT_ADDED else "Deleted"
+        return f'{verb} {meta.get("kind") or "entry"}' + (f" · {who}" if who else "")
+    if event_type == TIMELINE_EVENT_UPDATED:
+        return "Edited " + ", ".join(meta.get("fields") or []) if meta.get("fields") else "Edited entry"
+    if event_type == TIMELINE_TEAM_UPDATED:
+        return f'{(meta.get("action") or "updated").capitalize()} {meta.get("name") or "member"}'
+    if event_type == TIMELINE_WHATSAPP_IMPORTED:
+        return f'{meta.get("added", 0)} new of {meta.get("messages", 0)} WhatsApp messages'
+
     if event_type == ANALYSIS_REQUESTED:
         return f'{meta.get("job_type", "analysis")} job queued'
     if event_type == ANALYSIS_COMPLETED:

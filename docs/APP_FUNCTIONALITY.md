@@ -18,6 +18,7 @@ Live production (example): [beatit-m9n1.onrender.com](https://beatit-m9n1.onrend
 | **Labs** | Charted/tabled blood trends; Canada SI ↔ US units; PDF import |
 | **Meds** | Prescriptions, OTC, remedies; photo import; safety oversight |
 | **Log** | Feelings, symptoms, meds taken, food/drink, exercise — quick tiles + journal |
+| **Timeline** | Facts-only family timeline: who was in, tests, moves, meds, family updates — each with its source; WhatsApp import; copyable family update |
 | **AI Chat** | Multi-turn treatment discussion scoped to library + Home assessment |
 | **Custom Tasks** | Focused draft analyses you can promote to the record |
 | **Imaging vision** | Optional Ollama vision reads of selected DICOM slices |
@@ -28,7 +29,7 @@ Live production (example): [beatit-m9n1.onrender.com](https://beatit-m9n1.onrend
 
 ## Global shell
 
-- **Main tabs:** Home · Tasks · Library · Settings
+- **Main tabs:** Home · Labs · Plan · Timeline · Tasks · Library · Settings
 - **Header:** Patient photo/name (switch who/case), Export PDF, AI Chat, How are you?, How-to, day/night theme, Sign out
 - **Status:** LLM connection pill, background job bar, toasts, version footer
 - **Export PDF modal:** Choose Assessment / Logs / Medications / Labs (All or None); empty sections are skipped; log range defaults to last 7 days (Today → All)
@@ -234,6 +235,71 @@ Multi-turn **treatment-options** discussion:
 - Can ask the model to read a document by name
 
 Chat does **not** auto-replace Home unless you Update Home / promote.
+
+---
+
+## 12a. Timeline (family updates)
+
+A chronological, **facts-only** view of the patient's care for the whole family. Nothing on it is AI-generated; every row shows where it came from.
+
+**What feeds it**
+
+| Source | Shows as | Provenance line |
+|--------|----------|-----------------|
+| **Log what happened** (manual) | Practitioner visit, call, family meeting, test ordered/done, result shared, procedure, medication change, admitted / transfer / discharged, status observed, family note | "Recorded by &lt;user&gt;" (+ "edited by" when changed) |
+| **WhatsApp import** | Each message verbatim, with sender and time sent | "From WhatsApp · sent by &lt;name&gt;" |
+| Labs | One row per collection date with values | "From the Labs record" |
+| Medications | Start / dose change / stop | "From the Medications record" |
+| Plan | Scheduled items ("Coming up"), done items, sent/call activity | "From the Plan" |
+| Profile milestones | Milestones | "From Profile → Timeline milestones" |
+| Library | Uploads (imaging collapsed per day) | "Library upload" |
+
+**What's missing** (top of the tab)
+
+Deterministic checks over what has been recorded — no AI. Every flag says *not recorded*, because a gap can mean something happened but nobody logged it.
+
+- **Hospital stay** comes from *Admitted* / *Discharged* entries ("In hospital since Fri Oct 23 · day 7"). With no admission logged, the panel offers **Log admission**.
+- For each day of the stay (last 14 days): **no care-team visit**, **no tests or results** (timeline tests/results or Labs readings for that date), **no family update**. Past days are warnings; today is shown softly as "today so far".
+- When that day's WhatsApp messages mention the care team or tests, the flag says so ("9 family messages mention the care team; use Classify to record it").
+- **Results not shared**: a test ordered/done more than 24 hours ago with no result or lab reading after it.
+- **Not seen recently**: a practitioner seen during the current stay but not in the last 2+ days.
+- **Overdue** plan items, and **no point person / no bedside rotation** on the family team.
+- Each flag has a one-tap action (Log a visit for that day, Log a test, Add the result, Open plan, Assign). Day headers in the timeline carry the same flags, and days with nothing at all show "Nothing recorded this day."
+- The **Family update** lists what wasn't recorded for the period.
+
+**Family care team**
+
+- A **role board** shows every family role at a glance — who holds it and since when. Unfilled roles are flagged *Unassigned*.
+- Preset roles: Point person, Bedside rotation, Medical liaison, Records keeper, Family communicator, Admin & insurance, Logistics, Emotional support. Custom roles can be added per person (e.g. *Pharmacy runs*).
+- Tap a role tile to reassign it (tick who covers it). Tap a person's card to edit their relationship, contact (phone, email, best way to reach them), availability and roles.
+- **From the family chat**: people who posted in the imported WhatsApp group but aren't on the team yet appear as one-tap suggestions.
+- Every role change is recorded on the timeline (*Family role* entries: "Aron — Point person", "Hadas no longer Point person") with who made the change, and the **Family update** starts with the current roles.
+
+**Professional care team directory**
+
+- **+ Add person**: name, role, and where they work — one or several places (e.g. *Hospital — inpatient, Cancer centre, Home care*).
+- Contact info (all optional): phone, email, other (pager, portal, assistant, nurse station…), and **preferred way to reach them** — phone call, text message, email, pager, patient portal message, through the nurse station, or in person / at rounds. The card shows the preferred method first; phone and email are tap-to-call / text / email links.
+- Logging a visit with a new name adds that person automatically; their role fills in from the directory next time.
+- **Edit** on a card changes name, role or places. Renaming updates that person's past timeline entries. **Remove from team** keeps past entries as they are.
+- When more than one place is recorded, a place filter appears above the cards.
+
+**Visit transcripts**
+
+- **Add visit transcript**: pick who was in, when and where, then upload a `.txt`, `.md`, `.vtt`, `.srt` or `.docx` — or paste the text.
+- The transcript is saved **word for word** to the active case's Library (timing cues removed, speaker labels kept) and linked to a *Visit transcript* entry on the timeline (**Read transcript**).
+- *Key points for the timeline* is optional and is yours to write — nothing is summarized automatically.
+- Requires the patient (and a case) to be active, because the transcript is stored in that case's Library.
+
+**Using it**
+
+- **Care team** cards: everyone in the directory or recorded on a visit — role, places, when they were last in, number of contacts. Tap one to filter the timeline to that person; dashed cards are people recorded on visits but not yet added to the team.
+- Filters: Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search.
+- Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
+- **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role) while keeping the original text and sender.
+- **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
+- **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. Re-importing a newer export only adds new messages (dedupe on sender + time + text).
+
+Timeline entries are patient-wide (not case-scoped) and stored in the patient profile (`care_events`). Add, edit, delete and imports are written to the audit trail (Settings → Audit → *timeline*).
 
 ---
 

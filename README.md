@@ -18,6 +18,7 @@ Full product walkthrough: **[docs/APP_FUNCTIONALITY.md](docs/APP_FUNCTIONALITY.m
 - **AI Chat** — multi-turn treatment-options discussion scoped to your library and current assessment
 - **Chat observations** — pin excerpts from chat into the next assessment or save them to the library
 - **Imaging vision** — optional slice-level reads via Ollama vision models
+- **Family timeline** — facts-only care timeline (practitioner visits, tests, moves, meds, family updates) with sources, care-team roll-up, WhatsApp chat import, and a copyable family update
 - **Labs / Meds / Log** — patient-wide trends, medications, and self-reports with Canada/US lab units
 - **PDF export** — download assessments, logs, meds, labs, and coverage
 - **Deploy** — Render blueprint with optional auth and persistent disk

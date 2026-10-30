@@ -126,6 +126,11 @@ from app.services.audit import (
     SETTINGS_REVIEWER_CONTEXT_UPDATED,
     SETTINGS_SOURCE_LABELS_UPDATED,
     SETTINGS_MEDICATION_DELETED,
+    TIMELINE_EVENT_ADDED,
+    TIMELINE_EVENT_UPDATED,
+    TIMELINE_EVENT_DELETED,
+    TIMELINE_WHATSAPP_IMPORTED,
+    TIMELINE_TEAM_UPDATED,
     enrich_audit_event,
     log_audit,
     preview_text,
@@ -192,6 +197,17 @@ from app.services.case_manager import (
     update_patient_care_item,
     add_patient_care_item_activity,
     delete_patient_care_item,
+    add_patient_care_event,
+    update_patient_care_event,
+    delete_patient_care_event,
+    import_patient_care_events,
+    add_patient_team_member,
+    update_patient_team_member,
+    delete_patient_team_member,
+    add_patient_family_member,
+    update_patient_family_member,
+    delete_patient_family_member,
+    set_patient_family_role,
     add_patient_log_tile,
     delete_patient_log_tile,
     rename_patient_log_tile,
@@ -4423,6 +4439,595 @@ async def api_delete_patient_care_item(patient_id: str, item_id: str):
         raise HTTPException(status_code=404, detail="Item not found")
     payload = _care_item_profile_payload(patient_id)
     payload["ok"] = True
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Family timeline (facts-only care events + merged dated records)
+# ---------------------------------------------------------------------------
+
+
+class PatientCareEventCreateRequest(BaseModel):
+    kind: str | None = Field(default="visit", max_length=40)
+    occurred_at: str | None = Field(default=None, max_length=40)
+    practitioner: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=80)
+    location: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=4000)
+    source_document_id: str | None = Field(default=None, max_length=80)
+    source_document_title: str | None = Field(default=None, max_length=200)
+
+
+class PatientCareEventUpdateRequest(BaseModel):
+    kind: str | None = Field(default=None, max_length=40)
+    occurred_at: str | None = Field(default=None, max_length=40)
+    practitioner: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=80)
+    location: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=4000)
+    source_document_id: str | None = Field(default=None, max_length=80)
+    source_document_title: str | None = Field(default=None, max_length=200)
+
+
+class PatientWhatsAppImportRequest(BaseModel):
+    text: str | None = Field(default=None, max_length=5_000_000)
+    zip_base64: str | None = Field(default=None, max_length=60_000_000)
+    chat_name: str | None = Field(default=None, max_length=120)
+    timezone: str | None = Field(default="America/Toronto", max_length=60)
+
+
+async def _timeline_audit(request: Request, event_type: str, **kwargs: Any) -> None:
+    """Audit is best-effort here: a missing case DB must not block a family record."""
+    try:
+        db, _, _, _, _ = await _get_services()
+        await _audit(db, request, event_type, **kwargs)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _timeline_actor(request: Request | None) -> str:
+    from app.services.user_context import current_actor
+
+    actor = _actor(request) or current_actor()
+    if not actor or actor == "local":
+        return "local user"
+    return actor
+
+
+async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -> dict[str, Any]:
+    from app.services.care_timeline import (
+        build_gaps,
+        FAMILY_ROLE_PRESETS,
+        _name_key,
+        family_roles_payload,
+        CONTACT_METHODS,
+        ENVIRONMENT_PRESETS,
+        ROLE_PRESETS,
+        build_care_team,
+        build_timeline,
+        kinds_payload,
+        linkable_documents,
+    )
+    from app.services.patient_documents import list_patient_documents
+
+    profile = get_patient_profile(patient_id)
+    try:
+        active = get_active_context()
+        active_case = active.get("case_id") if active.get("patient_id") == patient_id else None
+        documents = await list_patient_documents(patient_id, active_case_id=active_case)
+    except Exception:  # noqa: BLE001 — library read must not break the timeline
+        documents = []
+    care_events = profile.get("care_events") or []
+    members = profile.get("care_team") or []
+    known_roles = sorted(
+        {str(e.get("role") or "").strip() for e in [*care_events, *members] if e.get("role")}
+    )
+    roles = list(dict.fromkeys([*ROLE_PRESETS, *known_roles]))
+    family = profile.get("family_team") or []
+    family_keys = {_name_key(m["name"]) for m in family} | {
+        _name_key(a) for m in family for a in (m.get("aliases") or [])
+    }
+    chat_senders = list(
+        dict.fromkeys(
+            str(e.get("recorded_by") or "").strip()
+            for e in care_events
+            if e.get("source") == "whatsapp" and e.get("recorded_by")
+        )
+    )
+    known_envs = [env for m in members for env in (m.get("environments") or [])]
+    known_envs += [str(e.get("location") or "").strip() for e in care_events if e.get("location")]
+    environments = list(dict.fromkeys([*known_envs, *ENVIRONMENT_PRESETS]))
+    return {
+        "patient_id": patient_id,
+        "patient": {"id": patient_id},
+        "events": build_timeline(profile, documents),
+        "care_team": build_care_team(care_events, members),
+        "team_members": members,
+        "environment_presets": environments[:40],
+        "contact_methods": [{"value": k, "label": v} for k, v in CONTACT_METHODS.items()],
+        "gaps": build_gaps(profile, tz_name=tz_name),
+        "family_team": family,
+        "family_roles": family_roles_payload(family),
+        "family_role_presets": FAMILY_ROLE_PRESETS,
+        "chat_senders_not_on_family_team": [
+            name for name in chat_senders if _name_key(name) not in family_keys
+        ],
+        "kinds": kinds_payload(),
+        "role_presets": roles,
+        "known_practitioners": sorted(
+            {str(e.get("practitioner") or "").strip() for e in care_events if e.get("practitioner")}
+            | {m["name"] for m in members}
+        ),
+        "documents": linkable_documents(documents),
+        "counts": {
+            "care_events": len(care_events),
+            "whatsapp": sum(1 for e in care_events if e.get("source") == "whatsapp"),
+        },
+    }
+
+
+@router.get("/patients/{patient_id}/timeline")
+async def api_patient_timeline(patient_id: str, tz: str | None = Query(default=None, max_length=60)):
+    if not any(p["id"] == patient_id for p in list_patients()):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    tz_name = "America/Toronto"
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(tz)
+            tz_name = tz
+        except Exception:  # noqa: BLE001 — unknown zone falls back to Eastern
+            pass
+    return await _timeline_payload(patient_id, tz_name)
+
+
+@router.post("/patients/{patient_id}/care-events")
+async def api_add_patient_care_event(
+    patient_id: str,
+    body: PatientCareEventCreateRequest,
+    request: Request,
+):
+    try:
+        entry = add_patient_care_event(
+            patient_id,
+            kind=body.kind,
+            occurred_at=body.occurred_at,
+            practitioner=body.practitioner,
+            role=body.role,
+            location=body.location,
+            summary=body.summary,
+            source_document_id=body.source_document_id,
+            source_document_title=body.source_document_title,
+            recorded_by=_timeline_actor(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_EVENT_ADDED,
+        resource_type="care_event",
+        resource_id=entry["id"],
+        metadata={
+            "patient_id": patient_id,
+            "kind": entry.get("kind"),
+            "practitioner": entry.get("practitioner"),
+            "occurred_at": entry.get("occurred_at"),
+        },
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["care_event"] = entry
+    return payload
+
+
+@router.patch("/patients/{patient_id}/care-events/{event_id}")
+async def api_update_patient_care_event(
+    patient_id: str,
+    event_id: str,
+    body: PatientCareEventUpdateRequest,
+    request: Request,
+):
+    fields = {k: getattr(body, k) for k in body.model_fields_set}
+    try:
+        entry = update_patient_care_event(
+            patient_id, event_id, updated_by=_timeline_actor(request), **fields
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Timeline entry not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_EVENT_UPDATED,
+        resource_type="care_event",
+        resource_id=event_id,
+        metadata={"patient_id": patient_id, "fields": sorted(fields.keys())},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["care_event"] = entry
+    return payload
+
+
+@router.delete("/patients/{patient_id}/care-events/{event_id}")
+async def api_delete_patient_care_event(patient_id: str, event_id: str, request: Request):
+    removed = delete_patient_care_event(patient_id, event_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Timeline entry not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_EVENT_DELETED,
+        resource_type="care_event",
+        resource_id=event_id,
+        metadata={
+            "patient_id": patient_id,
+            "kind": removed.get("kind"),
+            "practitioner": removed.get("practitioner"),
+            "occurred_at": removed.get("occurred_at"),
+            "summary": (removed.get("summary") or "")[:500],
+        },
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["ok"] = True
+    return payload
+
+
+class PatientTeamMemberRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=80)
+    environments: list[str] | None = Field(default=None, max_length=8)
+    phone: str | None = Field(default=None, max_length=60)
+    email: str | None = Field(default=None, max_length=120)
+    contact_other: str | None = Field(default=None, max_length=160)
+    preferred_contact: str | None = Field(default=None, max_length=30)
+    notes: str | None = Field(default=None, max_length=400)
+
+
+def _validate_team_contact(body: "PatientTeamMemberRequest") -> None:
+    import re as _re
+
+    email = (body.email or "").strip()
+    if email and not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=400, detail="That email address doesn't look right")
+    method = (body.preferred_contact or "").strip()
+    if method in {"phone", "text"} and "phone" in body.model_fields_set and not (body.phone or "").strip():
+        raise HTTPException(status_code=400, detail="Add a phone number for the preferred method")
+    if method == "email" and "email" in body.model_fields_set and not email:
+        raise HTTPException(status_code=400, detail="Add an email address for the preferred method")
+
+
+@router.post("/patients/{patient_id}/care-team")
+async def api_add_team_member(patient_id: str, body: PatientTeamMemberRequest, request: Request):
+    _validate_team_contact(body)
+    try:
+        member = add_patient_team_member(
+            patient_id,
+            name=body.name or "",
+            role=body.role,
+            environments=body.environments,
+            phone=body.phone,
+            email=body.email,
+            contact_other=body.contact_other,
+            preferred_contact=body.preferred_contact,
+            notes=body.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if member is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="care_team",
+        resource_id=member["id"],
+        metadata={"patient_id": patient_id, "action": "added", "name": member["name"], "role": member["role"]},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["member"] = member
+    return payload
+
+
+@router.patch("/patients/{patient_id}/care-team/{member_id}")
+async def api_update_team_member(
+    patient_id: str, member_id: str, body: PatientTeamMemberRequest, request: Request
+):
+    _validate_team_contact(body)
+    fields = {k: getattr(body, k) for k in body.model_fields_set}
+    try:
+        member = update_patient_team_member(patient_id, member_id, **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if member is None:
+        raise HTTPException(status_code=404, detail="Care team member not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="care_team",
+        resource_id=member_id,
+        metadata={"patient_id": patient_id, "action": "edited", "name": member["name"], "fields": sorted(fields)},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["member"] = member
+    return payload
+
+
+@router.delete("/patients/{patient_id}/care-team/{member_id}")
+async def api_delete_team_member(patient_id: str, member_id: str, request: Request):
+    removed = delete_patient_team_member(patient_id, member_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Care team member not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="care_team",
+        resource_id=member_id,
+        metadata={"patient_id": patient_id, "action": "removed", "name": removed.get("name")},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["ok"] = True
+    return payload
+
+
+class PatientFamilyMemberRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    relationship: str | None = Field(default=None, max_length=60)
+    phone: str | None = Field(default=None, max_length=60)
+    email: str | None = Field(default=None, max_length=120)
+    preferred_contact: str | None = Field(default=None, max_length=30)
+    availability: str | None = Field(default=None, max_length=200)
+    roles: list[str] | None = Field(default=None, max_length=12)
+
+
+class PatientFamilyRoleRequest(BaseModel):
+    member_ids: list[str] = Field(default_factory=list, max_length=40)
+
+
+def _validate_family_contact(body: PatientFamilyMemberRequest) -> None:
+    import re as _re
+
+    email = (body.email or "").strip()
+    if email and not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=400, detail="That email address doesn't look right")
+
+
+@router.post("/patients/{patient_id}/family-team")
+async def api_add_family_member(patient_id: str, body: PatientFamilyMemberRequest, request: Request):
+    _validate_family_contact(body)
+    fields = {k: getattr(body, k) for k in body.model_fields_set}
+    try:
+        member = add_patient_family_member(patient_id, by=_timeline_actor(request), **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if member is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="family_team",
+        resource_id=member["id"],
+        metadata={"patient_id": patient_id, "action": "added", "name": member["name"], "roles": member["roles"]},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["family_member"] = member
+    return payload
+
+
+@router.patch("/patients/{patient_id}/family-team/{member_id}")
+async def api_update_family_member(
+    patient_id: str, member_id: str, body: PatientFamilyMemberRequest, request: Request
+):
+    _validate_family_contact(body)
+    fields = {k: getattr(body, k) for k in body.model_fields_set}
+    try:
+        member = update_patient_family_member(patient_id, member_id, by=_timeline_actor(request), **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if member is None:
+        raise HTTPException(status_code=404, detail="Family member not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="family_team",
+        resource_id=member_id,
+        metadata={"patient_id": patient_id, "action": "edited", "name": member["name"], "fields": sorted(fields)},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["family_member"] = member
+    return payload
+
+
+@router.delete("/patients/{patient_id}/family-team/{member_id}")
+async def api_delete_family_member(patient_id: str, member_id: str, request: Request):
+    removed = delete_patient_family_member(patient_id, member_id, by=_timeline_actor(request))
+    if not removed:
+        raise HTTPException(status_code=404, detail="Family member not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="family_team",
+        resource_id=member_id,
+        metadata={"patient_id": patient_id, "action": "removed", "name": removed.get("name")},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["ok"] = True
+    return payload
+
+
+@router.put("/patients/{patient_id}/family-roles/{role}")
+async def api_set_family_role(
+    patient_id: str, role: str, body: PatientFamilyRoleRequest, request: Request
+):
+    try:
+        family = set_patient_family_role(patient_id, role, body.member_ids, by=_timeline_actor(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if family is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="family_team",
+        resource_id=role,
+        metadata={
+            "patient_id": patient_id,
+            "action": "role set",
+            "name": role,
+            "holders": [m["name"] for m in family if role in (m.get("roles") or [])],
+        },
+    )
+    return await _timeline_payload(patient_id)
+
+
+class PatientTranscriptImportRequest(BaseModel):
+    text: str | None = Field(default=None, max_length=400_000)
+    file_base64: str | None = Field(default=None, max_length=30_000_000)
+    filename: str | None = Field(default=None, max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+    occurred_at: str | None = Field(default=None, max_length=40)
+    practitioner: str | None = Field(default=None, max_length=120)
+    role: str | None = Field(default=None, max_length=80)
+    location: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=4000)
+
+
+@router.post("/patients/{patient_id}/care-events/transcript")
+async def api_import_visit_transcript(
+    patient_id: str, body: PatientTranscriptImportRequest, request: Request
+):
+    """Save a recorded visit verbatim to the Library and link it to a visit on the timeline."""
+    from app.services.care_timeline import parse_event_datetime
+    from app.services.transcript_import import speakers, transcript_text
+
+    ctx = get_active_context()
+    if ctx.get("patient_id") != patient_id or not ctx.get("case_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Switch to this patient (and a case) first — the transcript is saved to that case's Library.",
+        )
+    try:
+        text = transcript_text(text=body.text, file_base64=body.file_base64, filename=body.filename)
+        occurred = parse_event_datetime(body.occurred_at)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    who = " ".join((body.practitioner or "").split())
+    try:
+        from zoneinfo import ZoneInfo
+
+        when_dt = datetime.fromisoformat(occurred)
+        when_label = (
+            when_dt.astimezone(ZoneInfo("America/Toronto")).date().isoformat()
+            if when_dt.tzinfo
+            else occurred[:10]
+        )
+    except ValueError:
+        when_label = occurred[:10]
+    title = " ".join((body.title or "").split()) or (
+        f"Visit transcript — {who} — {when_label}" if who else f"Visit transcript — {when_label}"
+    )
+    db, store, _, _, _ = await _get_services()
+    doc = await ingest_text(
+        store,
+        title=title[:200],
+        content=text,
+        metadata={
+            "kind": "visit_transcript",
+            "practitioner": who or None,
+            "role": body.role or None,
+            "occurred_at": occurred,
+            "filename": body.filename or None,
+            "speakers": speakers(text),
+            "recorded_by": _timeline_actor(request),
+        },
+    )
+    await _audit(
+        db,
+        request,
+        DOCUMENT_CREATED,
+        resource_type="document",
+        resource_id=doc["id"],
+        metadata={"title": doc.get("title"), "source_type": doc.get("source_type"), "kind": "visit_transcript"},
+    )
+    word_count = len(text.split())
+    summary = (body.summary or "").strip() or f"Recorded visit — transcript saved to the Library ({word_count:,} words)."
+    try:
+        entry = add_patient_care_event(
+            patient_id,
+            kind="transcript",
+            occurred_at=occurred,
+            practitioner=who,
+            role=body.role,
+            location=body.location,
+            summary=summary,
+            source_document_id=doc["id"],
+            source_document_title=doc.get("title"),
+            recorded_by=_timeline_actor(request),
+            source="transcript",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _timeline_audit(
+        request,
+        TIMELINE_EVENT_ADDED,
+        resource_type="care_event",
+        resource_id=(entry or {}).get("id"),
+        metadata={"patient_id": patient_id, "kind": "transcript", "practitioner": who, "document_id": doc["id"]},
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["care_event"] = entry
+    payload["document"] = {"id": doc["id"], "title": doc.get("title"), "words": word_count}
+    return payload
+
+
+@router.post("/patients/{patient_id}/care-events/import/whatsapp")
+async def api_import_whatsapp_care_events(
+    patient_id: str,
+    body: PatientWhatsAppImportRequest,
+    request: Request,
+):
+    from app.services.whatsapp_import import (
+        messages_to_care_events,
+        parse_whatsapp_export,
+        text_from_export_zip,
+    )
+
+    text = body.text or ""
+    if not text and body.zip_base64:
+        try:
+            text = text_from_export_zip(body.zip_base64)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)")
+    try:
+        messages = parse_whatsapp_export(text, tz_name=body.timezone or "America/Toronto")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not read that export: {exc}") from exc
+    if not messages:
+        raise HTTPException(
+            status_code=400,
+            detail="No messages found. Use WhatsApp → group info → Export Chat → Without Media, and upload the .txt.",
+        )
+    result = import_patient_care_events(
+        patient_id, messages_to_care_events(messages, chat_name=body.chat_name or "")
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_WHATSAPP_IMPORTED,
+        resource_type="care_event",
+        resource_id=patient_id,
+        metadata={
+            "patient_id": patient_id,
+            "chat_name": body.chat_name,
+            "messages": len(messages),
+            "added": result["added"],
+            "skipped": result["skipped"],
+        },
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["import"] = {**result, "messages": len(messages)}
     return payload
 
 

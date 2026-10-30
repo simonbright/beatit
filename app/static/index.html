@@ -114,6 +114,10 @@
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
           <span class="tab-icon-label">Plan</span>
         </button>
+        <button class="tab tab-icon" data-tab="timeline" role="tab" title="Family timeline" aria-label="Timeline">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="7" r="2.2" fill="currentColor"/><circle cx="6" cy="17" r="2.2" fill="currentColor"/><path d="M11 7h9M11 12h6M11 17h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="tab-icon-label">Timeline</span>
+        </button>
         <button class="tab tab-icon" data-tab="custom-tasks" role="tab" title="Custom Tasks" aria-label="Custom Tasks">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="tab-icon-label">Tasks</span>
@@ -1089,6 +1093,250 @@
               <p class="muted small">Select a patient to see planned items.</p>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAMILY TIMELINE -->
+    <section id="panel-timeline" class="panel">
+      <div class="card timeline-card">
+        <div class="row-between wrap timeline-head">
+          <div>
+            <h3>Family timeline</h3>
+            <p class="muted small">What happened, who was in, and where each fact came from. Nothing here is AI-generated — every entry shows its source.</p>
+          </div>
+          <div class="timeline-head-actions">
+            <button type="button" class="btn primary btn-sm" id="btn-timeline-log">+ Log what happened</button>
+            <button type="button" class="btn secondary btn-sm" id="btn-timeline-transcript">Add visit transcript</button>
+            <button type="button" class="btn secondary btn-sm" id="btn-timeline-update">Family update</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-timeline-import">Import WhatsApp</button>
+          </div>
+        </div>
+
+        <form id="timeline-form" class="care-item-form timeline-form hidden" autocomplete="off">
+          <label for="tl-kind">What
+            <select id="tl-kind"></select>
+          </label>
+          <label for="tl-when">When
+            <input type="datetime-local" id="tl-when">
+          </label>
+          <label for="tl-practitioner">Who was in
+            <input type="text" id="tl-practitioner" list="tl-practitioner-list" maxlength="120" placeholder="e.g. Dr. Gupta">
+            <datalist id="tl-practitioner-list"></datalist>
+          </label>
+          <label for="tl-role">Role / specialty
+            <input type="text" id="tl-role" list="tl-role-list" maxlength="80" placeholder="e.g. Oncology">
+            <datalist id="tl-role-list"></datalist>
+          </label>
+          <label for="tl-location">Where
+            <input type="text" id="tl-location" list="tl-env-list" maxlength="120" placeholder="Unit, room, clinic">
+          </label>
+          <label for="tl-source">Source (optional)
+            <select id="tl-source"><option value="">— None —</option></select>
+          </label>
+          <label for="tl-summary" class="care-item-notes">What happened / what was said
+            <textarea id="tl-summary" rows="4" maxlength="4000" placeholder="Stick to what was said or done. e.g. Blood cultures still pending. Continuing IV antibiotics. CT abdomen ordered for tomorrow."></textarea>
+          </label>
+          <div class="care-item-form-actions">
+            <button type="submit" class="btn primary" id="btn-tl-save">Add to timeline</button>
+            <button type="button" class="btn ghost" id="btn-tl-cancel">Cancel</button>
+          </div>
+          <input type="hidden" id="tl-edit-id" value="">
+        </form>
+
+        <form id="timeline-transcript" class="care-item-form timeline-form hidden" autocomplete="off">
+          <div class="timeline-form-head">
+            <h4>Add a visit transcript</h4>
+            <p class="muted small">Saved word for word to the Library and linked to this visit on the timeline. Upload a <code>.txt</code>, <code>.vtt</code>, <code>.srt</code>, <code>.md</code> or <code>.docx</code>, or paste the text.</p>
+          </div>
+          <label for="tr-who">Who was in
+            <input type="text" id="tr-who" list="tl-practitioner-list" maxlength="120" placeholder="Pick from the care team or type a name">
+          </label>
+          <label for="tr-role">Role
+            <input type="text" id="tr-role" list="tl-role-list" maxlength="80" placeholder="e.g. Oncology">
+          </label>
+          <label for="tr-when">When
+            <input type="datetime-local" id="tr-when">
+          </label>
+          <label for="tr-where">Where
+            <input type="text" id="tr-where" list="tl-env-list" maxlength="120" placeholder="e.g. Hospital — inpatient">
+          </label>
+          <label for="tr-file" class="care-item-notes">Transcript file
+            <input type="file" id="tr-file" accept=".txt,.md,.vtt,.srt,.docx,text/plain,text/vtt">
+          </label>
+          <label for="tr-text" class="care-item-notes">…or paste the transcript
+            <textarea id="tr-text" rows="5" placeholder="Paste the transcript here"></textarea>
+          </label>
+          <label for="tr-summary" class="care-item-notes">Key points for the timeline (optional)
+            <textarea id="tr-summary" rows="2" maxlength="4000" placeholder="What the family should see at a glance, in the practitioner's words. Leave blank to just link the transcript."></textarea>
+          </label>
+          <div class="care-item-form-actions">
+            <button type="submit" class="btn primary" id="btn-tr-save">Save transcript</button>
+            <button type="button" class="btn ghost" id="btn-tr-cancel">Cancel</button>
+            <span id="tr-status" class="muted small"></span>
+          </div>
+        </form>
+
+        <div id="timeline-import" class="timeline-panel hidden">
+          <h4>Import from WhatsApp</h4>
+          <p class="muted small">On a phone: open the group → tap its name → <strong>Export Chat → Without Media</strong>. Upload the <code>.txt</code> (or the <code>.zip</code> WhatsApp creates). Messages come in exactly as written, with sender and time. Importing a newer export only adds new messages.</p>
+          <div class="timeline-import-row">
+            <input type="file" id="tl-import-file" accept=".txt,.zip,text/plain,application/zip">
+            <input type="text" id="tl-import-name" maxlength="120" placeholder="Chat name (e.g. Susan Health Updates)">
+            <button type="button" class="btn primary btn-sm" id="btn-tl-import-run">Import</button>
+          </div>
+          <p id="tl-import-status" class="muted small"></p>
+        </div>
+
+        <div id="timeline-update" class="timeline-panel hidden">
+          <div class="row-between wrap">
+            <h4>Family update</h4>
+            <div class="timeline-filter-group" role="group" aria-label="Update period">
+              <button type="button" class="btn secondary btn-sm tl-update-range active" data-range="today">Today</button>
+              <button type="button" class="btn ghost btn-sm tl-update-range" data-range="24h">Last 24h</button>
+              <button type="button" class="btn ghost btn-sm tl-update-range" data-range="3d">3 days</button>
+              <button type="button" class="btn ghost btn-sm tl-update-range" data-range="7d">7 days</button>
+            </div>
+          </div>
+          <p class="muted small">Built only from timeline entries. Review it, then copy or share.</p>
+          <textarea id="tl-update-text" rows="12" class="timeline-update-text"></textarea>
+          <div class="care-item-form-actions">
+            <button type="button" class="btn primary btn-sm" id="btn-tl-update-copy">Copy</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-tl-update-share">Share…</button>
+          </div>
+        </div>
+
+        <section id="timeline-gaps" class="timeline-gaps" aria-label="What's missing">
+          <div class="timeline-team-head">
+            <h4>What's missing <span class="muted small" id="timeline-gaps-count"></span></h4>
+          </div>
+          <p id="timeline-stay" class="timeline-stay"></p>
+          <div id="timeline-gaps-list" class="timeline-gaps-list"></div>
+          <p class="muted small timeline-gaps-note">Based only on what's been recorded here — a gap may mean it happened but nobody logged it.</p>
+        </section>
+
+        <div class="family-team-wrap">
+          <div class="timeline-team-head">
+            <h4>Family care team <span class="muted small">· who's covering what</span></h4>
+            <button type="button" class="btn ghost btn-sm" id="btn-family-add">+ Add family member</button>
+          </div>
+          <div id="family-suggest" class="family-suggest hidden"></div>
+          <form id="family-form" class="care-item-form timeline-form hidden" autocomplete="off">
+            <label for="fam-name">Name
+              <input type="text" id="fam-name" maxlength="120" required placeholder="e.g. Hadas">
+            </label>
+            <label for="fam-rel">Relationship
+              <input type="text" id="fam-rel" list="fam-rel-list" maxlength="60" placeholder="e.g. Daughter">
+              <datalist id="fam-rel-list">
+                <option value="Spouse"></option><option value="Partner"></option><option value="Daughter"></option><option value="Son"></option>
+                <option value="Sister"></option><option value="Brother"></option><option value="Son-in-law"></option><option value="Daughter-in-law"></option>
+                <option value="Grandchild"></option><option value="Niece"></option><option value="Nephew"></option><option value="Friend"></option>
+              </datalist>
+            </label>
+            <label for="fam-phone">Phone
+              <input type="tel" id="fam-phone" maxlength="60">
+            </label>
+            <label for="fam-email">Email
+              <input type="email" id="fam-email" maxlength="120">
+            </label>
+            <label for="fam-preferred">Best way to reach them
+              <select id="fam-preferred"><option value="">— Not set —</option></select>
+            </label>
+            <label for="fam-availability">Availability
+              <input type="text" id="fam-availability" maxlength="200" placeholder="e.g. Local; evenings and weekends">
+            </label>
+            <fieldset class="family-role-picker care-item-notes">
+              <legend>Roles</legend>
+              <div id="fam-roles" class="family-role-checks"></div>
+              <input type="text" id="fam-role-custom" maxlength="60" placeholder="Another role (optional), e.g. Pharmacy runs">
+            </fieldset>
+            <div class="care-item-form-actions">
+              <button type="submit" class="btn primary" id="btn-family-save">Add to family team</button>
+              <button type="button" class="btn ghost" id="btn-family-cancel">Cancel</button>
+              <button type="button" class="btn danger btn-sm hidden" id="btn-family-remove">Remove</button>
+            </div>
+            <input type="hidden" id="fam-edit-id" value="">
+          </form>
+          <div id="family-role-board" class="family-role-board"></div>
+          <div id="family-role-assign" class="timeline-panel hidden">
+            <h4 id="family-role-assign-title">Role</h4>
+            <p id="family-role-assign-hint" class="muted small"></p>
+            <div id="family-role-assign-list" class="family-role-checks"></div>
+            <div class="care-item-form-actions">
+              <button type="button" class="btn primary btn-sm" id="btn-family-role-save">Save</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-family-role-cancel">Cancel</button>
+            </div>
+          </div>
+          <div id="family-people" class="timeline-team family-people"></div>
+        </div>
+
+        <div class="timeline-team-wrap">
+          <div class="timeline-team-head">
+            <h4>Professional care team <span class="muted small" id="timeline-team-hint"></span></h4>
+            <button type="button" class="btn ghost btn-sm" id="btn-team-add">+ Add person</button>
+          </div>
+          <div id="timeline-env-filter" class="timeline-filter-group hidden" role="group" aria-label="Where"></div>
+          <form id="team-form" class="care-item-form timeline-form hidden" autocomplete="off">
+            <label for="team-name">Name
+              <input type="text" id="team-name" maxlength="120" required placeholder="e.g. Dr. Gupta">
+            </label>
+            <label for="team-role">Role
+              <input type="text" id="team-role" list="tl-role-list" maxlength="80" placeholder="e.g. Infectious disease">
+            </label>
+            <label for="team-envs">Where they work
+              <input type="text" id="team-envs" list="tl-env-list" maxlength="300" placeholder="e.g. Hospital — inpatient, Cancer centre">
+              <span class="muted small">Separate several places with commas.</span>
+            </label>
+            <label for="team-phone">Phone
+              <input type="tel" id="team-phone" maxlength="60" placeholder="e.g. 613-555-0142 ext. 4410">
+            </label>
+            <label for="team-email">Email
+              <input type="email" id="team-email" maxlength="120" placeholder="name@hospital.ca">
+            </label>
+            <label for="team-other">Other contact
+              <input type="text" id="team-other" maxlength="160" placeholder="Pager, portal, assistant, nurse station…">
+            </label>
+            <label for="team-preferred">Preferred way to reach them
+              <select id="team-preferred"><option value="">— Not set —</option></select>
+            </label>
+            <div class="care-item-form-actions">
+              <button type="submit" class="btn primary" id="btn-team-save">Add to care team</button>
+              <button type="button" class="btn ghost" id="btn-team-cancel">Cancel</button>
+              <button type="button" class="btn danger btn-sm hidden" id="btn-team-remove">Remove from team</button>
+            </div>
+            <input type="hidden" id="team-edit-id" value="">
+          </form>
+          <datalist id="tl-env-list"></datalist>
+          <div id="timeline-team" class="timeline-team"><p class="muted small">No practitioners recorded yet.</p></div>
+        </div>
+
+        <div class="timeline-filters">
+          <div class="timeline-filter-group" role="group" aria-label="Time range">
+            <button type="button" class="btn ghost btn-sm tl-range" data-range="today">Today</button>
+            <button type="button" class="btn ghost btn-sm tl-range" data-range="3d">3 days</button>
+            <button type="button" class="btn secondary btn-sm tl-range active" data-range="7d">7 days</button>
+            <button type="button" class="btn ghost btn-sm tl-range" data-range="30d">30 days</button>
+            <button type="button" class="btn ghost btn-sm tl-range" data-range="all">All</button>
+          </div>
+          <div class="timeline-filter-group" role="group" aria-label="Entry type">
+            <button type="button" class="btn secondary btn-sm tl-cat active" data-cat="all">All</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="visit">Care team</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="test">Tests &amp; results</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="care">Moves &amp; procedures</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="medication">Meds</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="family">Family updates</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="plan">Plan</button>
+            <button type="button" class="btn ghost btn-sm tl-cat" data-cat="document">Documents</button>
+          </div>
+          <div class="timeline-filter-row">
+            <input type="search" id="tl-search" placeholder="Search timeline" aria-label="Search timeline">
+            <label class="timeline-toggle"><input type="checkbox" id="tl-show-chatter"> Show chat replies (“thanks”, “ok”)</label>
+          </div>
+          <p id="tl-active-filter" class="muted small"></p>
+        </div>
+
+        <div id="timeline-list" class="timeline-list">
+          <p class="muted small">Select a patient to see the timeline.</p>
         </div>
       </div>
     </section>
@@ -2095,6 +2343,7 @@
               <option value="analysis">Analysis</option>
               <option value="open_items">Open items &amp; comments</option>
               <option value="settings">Settings</option>
+              <option value="timeline">Timeline</option>
               <option value="auth">Sign in / out</option>
             </select>
           </label>

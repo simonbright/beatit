@@ -1994,6 +1994,9 @@ function switchTab(name, options = {}) {
     refreshActivePatientProfile().catch(() => {});
     renderCarePlan(state.patientProfile);
   }
+  if (name === "timeline") {
+    loadTimeline({ quiet: Boolean(timelineState.data && timelineState.patientId === state.activePatientId) });
+  }
   if (name === "options-chat") loadOptionsChatPanel();
   if (name === "custom-tasks") {
     loadCustomTasks();
@@ -3704,6 +3707,7 @@ const VALID_TABS = new Set([
   "analyze",
   "labs",
   "plan",
+  "timeline",
   "options-chat",
   "custom-tasks",
   "library",
@@ -3716,6 +3720,7 @@ const MAIN_NAV_TABS = new Set([
   "analyze",
   "labs",
   "plan",
+  "timeline",
   "custom-tasks",
   "library",
   "settings",
@@ -9221,6 +9226,12 @@ async function loadCaseContext() {
     state.activeCaseId = ctx.case_id || null;
     state.activePatientLabel = ctx.patient_label || label || null;
     if (prevPatientId !== state.activePatientId) {
+      if (typeof timelineState !== "undefined" && timelineState) {
+        timelineState.data = null;
+        if (document.getElementById("panel-timeline")?.classList.contains("active")) {
+          loadTimeline().catch(() => {});
+        }
+      }
       clearPatientScopedLogState({ keepPatientId: true, deferRender: true });
       if (!restorePatientProfileFromCache(state.activePatientId)) {
         renderLogObservations([]);
@@ -17296,3 +17307,1243 @@ async function loadCrossCaseDocs(caseId, caseLabel, tabBtn) {
 // Load context on startup — Log tiles first, then the rest.
 void bootApp();
 loadCrossCaseSiblings();
+
+/* ===========================================================================
+ * Family timeline — facts-only, sourced, chronological
+ * ======================================================================== */
+
+const TIMELINE_CATEGORY_LABELS = {
+  visit: "Care team",
+  test: "Test",
+  result: "Result",
+  care: "Care",
+  medication: "Meds",
+  family: "Family",
+  plan: "Plan",
+  document: "Document",
+};
+
+const TIMELINE_CAT_FILTER = {
+  all: null,
+  visit: ["visit"],
+  test: ["test", "result"],
+  care: ["care"],
+  medication: ["medication"],
+  family: ["family"],
+  plan: ["plan"],
+  document: ["document"],
+};
+
+var timelineState = {
+  data: null,
+  patientId: null,
+  range: "7d",
+  cat: "all",
+  search: "",
+  showChatter: false,
+  practitioner: "",
+  env: "",
+  gapsExpanded: false,
+  updateRange: "today",
+  loading: false,
+};
+
+function tlParseAt(at) {
+  const s = String(at || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split("-").map(Number);
+    return new Date(y, m - 1, d, 12, 0, 0);
+  }
+  const dt = new Date(s);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function tlDayKey(dt) {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function tlTime(dt) {
+  return dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function tlDayLabel(dt) {
+  const today = new Date();
+  const yest = new Date();
+  yest.setDate(today.getDate() - 1);
+  const key = tlDayKey(dt);
+  const base = dt.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" });
+  if (key === tlDayKey(today)) return `Today · ${base}`;
+  if (key === tlDayKey(yest)) return `Yesterday · ${base}`;
+  return base;
+}
+
+function tlShortWhen(at, hasTime) {
+  const dt = tlParseAt(at);
+  if (!dt) return "";
+  const day = dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return hasTime ? `${day}, ${tlTime(dt)}` : day;
+}
+
+function tlRangeStart(range) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (range === "today") return start;
+  if (range === "24h") return new Date(now.getTime() - 24 * 3600 * 1000);
+  const days = { "3d": 2, "7d": 6, "30d": 29 }[range];
+  if (days == null) return null;
+  start.setDate(start.getDate() - days);
+  return start;
+}
+
+function tlIsChatter(ev) {
+  return ev.source === "whatsapp" && ev.minor;
+}
+
+function tlFilteredEvents() {
+  const events = timelineState.data?.events || [];
+  const start = tlRangeStart(timelineState.range);
+  const cats = TIMELINE_CAT_FILTER[timelineState.cat];
+  const q = timelineState.search.trim().toLowerCase();
+  const who = timelineState.practitioner.trim().toLowerCase();
+  return events.filter((ev) => {
+    const dt = tlParseAt(ev.at);
+    if (!dt) return false;
+    if (start && dt < start && !ev.upcoming) return false;
+    if (cats && !cats.includes(ev.category)) return false;
+    if (!timelineState.showChatter && tlIsChatter(ev)) return false;
+    if (who && String(ev.practitioner || "").toLowerCase() !== who && !(`${ev.role || ""}`.toLowerCase() === who && !ev.practitioner)) return false;
+    if (q) {
+      const hay = `${ev.title} ${ev.detail} ${ev.provenance} ${ev.practitioner || ""} ${ev.role || ""} ${ev.location || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function tlSetToggleGroup(selector, attr, value) {
+  document.querySelectorAll(selector).forEach((btn) => {
+    const active = btn.dataset[attr] === value;
+    btn.classList.toggle("active", active);
+    btn.classList.toggle("secondary", active);
+    btn.classList.toggle("ghost", !active);
+  });
+}
+
+function tlTeamEnvironments() {
+  const team = timelineState.data?.care_team || [];
+  const envs = [];
+  for (const t of team) for (const e of t.environments || []) if (!envs.includes(e)) envs.push(e);
+  return envs;
+}
+
+function tlContactHref(kind, value) {
+  const v = String(value || "").trim();
+  if (!v) return "";
+  if (kind === "email") return `mailto:${encodeURIComponent(v).replace(/%40/g, "@")}`;
+  const digits = v.split(/ext|x|,/i)[0].replace(/[^\d+]/g, "");
+  if (!digits) return "";
+  return kind === "text" ? `sms:${digits}` : `tel:${digits}`;
+}
+
+function tlContactHtml(t) {
+  const methods = Object.fromEntries((timelineState.data?.contact_methods || []).map((m) => [m.value, m.label]));
+  const pref = t.preferred_contact || "";
+  const link = (kind, value, label) => {
+    const href = tlContactHref(kind, value);
+    return href
+      ? `<a class="timeline-contact-link" href="${escapeHtml(href)}" data-stop>${escapeHtml(label || value)}</a>`
+      : escapeHtml(label || value);
+  };
+  let prefLine = "";
+  if (pref) {
+    let how = "";
+    if ((pref === "phone" || pref === "text") && t.phone) how = link(pref, t.phone, t.phone);
+    else if (pref === "email" && t.email) how = link("email", t.email, t.email);
+    else if (t.contact_other) how = escapeHtml(t.contact_other);
+    prefLine = `<span class="timeline-contact-pref">Prefers: <strong>${escapeHtml(methods[pref] || pref)}</strong>${how ? ` · ${how}` : ""}</span>`;
+  }
+  const others = [];
+  if (t.phone && !(pref === "phone" || pref === "text")) others.push(link("phone", t.phone, t.phone));
+  if (t.email && pref !== "email") others.push(link("email", t.email, t.email));
+  if (t.contact_other && (pref === "phone" || pref === "text" || pref === "email" || !pref)) others.push(escapeHtml(t.contact_other));
+  const otherLine = others.length ? `<span class="timeline-team-meta">${others.join(" · ")}</span>` : "";
+  return prefLine + otherLine;
+}
+
+function renderTimelineTeam() {
+  const el = document.getElementById("timeline-team");
+  const hint = document.getElementById("timeline-team-hint");
+  const envEl = document.getElementById("timeline-env-filter");
+  if (!el) return;
+  const team = timelineState.data?.care_team || [];
+  const envs = tlTeamEnvironments();
+  if (timelineState.env && !envs.includes(timelineState.env)) timelineState.env = "";
+  if (envEl) {
+    envEl.classList.toggle("hidden", envs.length < 2);
+    envEl.innerHTML = envs.length < 2 ? "" : [
+      `<button type="button" class="btn ${timelineState.env ? "ghost" : "secondary"} btn-sm" data-tl-env="">All places</button>`,
+      ...envs.map(
+        (e) => `<button type="button" class="btn ${timelineState.env === e ? "secondary" : "ghost"} btn-sm" data-tl-env="${escapeHtml(e)}">${escapeHtml(e)}</button>`
+      ),
+    ].join("");
+  }
+  if (hint) hint.textContent = team.length ? "· tap a card to see their entries" : "";
+  const shown = timelineState.env ? team.filter((t) => (t.environments || []).includes(timelineState.env)) : team;
+  if (!team.length) {
+    el.innerHTML = `<p class="muted small">No one yet. Use <strong>+ Add person</strong>, or log a visit — new names are added automatically.</p>`;
+    return;
+  }
+  el.innerHTML = shown
+    .map((t) => {
+      const key = t.name || t.role || "";
+      const active = timelineState.practitioner && timelineState.practitioner.toLowerCase() === key.toLowerCase();
+      const last = t.last_contact_at || t.last_at;
+      const lastHasTime = String(last || "").length > 10;
+      const envChips = (t.environments || [])
+        .map((e) => `<span class="timeline-env-chip">${escapeHtml(e)}</span>`)
+        .join("");
+      const action = t.member_id
+        ? `<span class="timeline-team-action" data-team-edit="${escapeHtml(t.member_id)}" role="button" tabindex="0">Edit</span>`
+        : t.name
+          ? `<span class="timeline-team-action" data-team-adopt="${escapeHtml(t.name)}" role="button" tabindex="0">+ Add to team</span>`
+          : "";
+      return `<div class="timeline-team-card${active ? " is-active" : ""}${t.member_id ? "" : " is-unlisted"}" data-tl-who="${escapeHtml(key)}" role="button" tabindex="0">
+        <div class="timeline-team-top"><strong>${escapeHtml(t.name || "Unnamed")}</strong>${action}</div>
+        ${t.role ? `<span class="timeline-team-role">${escapeHtml(t.role)}</span>` : `<span class="timeline-team-meta">No role yet</span>`}
+        ${envChips ? `<span class="timeline-env-chips">${envChips}</span>` : ""}
+        <span class="timeline-team-meta">${last ? `Last in: ${escapeHtml(tlShortWhen(last, lastHasTime))}` : "Not seen yet"} · ${t.contacts} contact${t.contacts === 1 ? "" : "s"}</span>
+        ${tlContactHtml(t)}
+      </div>`;
+    })
+    .join("") || `<p class="muted small">No one recorded at ${escapeHtml(timelineState.env)} yet.</p>`;
+}
+
+function tlMemberByName(name) {
+  const key = String(name || "").toLowerCase().replace(/\./g, " ").replace(/\s+/g, " ").trim();
+  if (!key) return null;
+  return (timelineState.data?.team_members || []).find(
+    (m) => m.name.toLowerCase().replace(/\./g, " ").replace(/\s+/g, " ").trim() === key
+  );
+}
+
+function tlFillFromMember(nameInputId, roleInputId, whereInputId) {
+  const member = tlMemberByName(document.getElementById(nameInputId)?.value);
+  if (!member) return;
+  const role = document.getElementById(roleInputId);
+  if (role && !role.value.trim() && member.role) role.value = member.role;
+  const where = document.getElementById(whereInputId);
+  if (where && !where.value.trim() && member.environments?.length) where.value = member.environments[0];
+}
+
+function openTeamForm(member = null, presetName = "") {
+  const form = document.getElementById("team-form");
+  if (!form) return;
+  populateTimelineForm();
+  form.classList.remove("hidden");
+  document.getElementById("team-edit-id").value = member?.id || "";
+  document.getElementById("team-name").value = member?.name || presetName || "";
+  const fromTeam = presetName ? (timelineState.data?.care_team || []).find((t) => t.name === presetName) : null;
+  document.getElementById("team-role").value = member?.role || fromTeam?.role || "";
+  document.getElementById("team-envs").value = (member?.environments || fromTeam?.environments || []).join(", ");
+  document.getElementById("team-phone").value = member?.phone || "";
+  document.getElementById("team-email").value = member?.email || "";
+  document.getElementById("team-other").value = member?.contact_other || "";
+  document.getElementById("team-preferred").value = member?.preferred_contact || "";
+  document.getElementById("btn-team-save").textContent = member ? "Save" : "Add to care team";
+  document.getElementById("btn-team-remove")?.classList.toggle("hidden", !member);
+  (member || presetName ? document.getElementById("team-role") : document.getElementById("team-name"))?.focus();
+}
+
+function closeTeamForm() {
+  const form = document.getElementById("team-form");
+  form?.reset();
+  form?.classList.add("hidden");
+  const id = document.getElementById("team-edit-id");
+  if (id) id.value = "";
+}
+
+async function saveTeamForm(event) {
+  event?.preventDefault?.();
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  const id = document.getElementById("team-edit-id").value;
+  const body = {
+    name: document.getElementById("team-name").value.trim(),
+    role: document.getElementById("team-role").value.trim(),
+    environments: document.getElementById("team-envs").value.split(",").map((x) => x.trim()).filter(Boolean),
+    phone: document.getElementById("team-phone").value.trim(),
+    email: document.getElementById("team-email").value.trim(),
+    contact_other: document.getElementById("team-other").value.trim(),
+    preferred_contact: document.getElementById("team-preferred").value,
+  };
+  if (!body.name) return toast("Enter a name", "error");
+  try {
+    const res = await fetch(id ? `/api/patients/${pid}/care-team/${id}` : `/api/patients/${pid}/care-team`, {
+      method: id ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save");
+    }
+    timelineState.data = await res.json();
+    closeTeamForm();
+    renderTimeline();
+    toast(id ? "Care team updated" : `${body.name} added to the care team`);
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  }
+}
+
+async function removeTeamMember() {
+  const pid = state.activePatientId;
+  const id = document.getElementById("team-edit-id").value;
+  if (!pid || !id) return;
+  const name = document.getElementById("team-name").value;
+  if (!confirm(`Remove ${name} from the care team?\n\nPast timeline entries keep their name.`)) return;
+  const res = await fetch(`/api/patients/${pid}/care-team/${id}`, { method: "DELETE", credentials: "include" });
+  if (!res.ok) return toast("Could not remove", "error");
+  timelineState.data = await res.json();
+  closeTeamForm();
+  renderTimeline();
+  toast("Removed from the care team");
+}
+
+function openTranscriptForm() {
+  const form = document.getElementById("timeline-transcript");
+  if (!form) return;
+  populateTimelineForm();
+  form.classList.remove("hidden");
+  document.getElementById("tr-when").value = tlToLocalInput(new Date());
+  document.getElementById("tr-status").textContent = "";
+  document.getElementById("tr-who")?.focus();
+}
+
+function closeTranscriptForm() {
+  const form = document.getElementById("timeline-transcript");
+  form?.reset();
+  form?.classList.add("hidden");
+}
+
+async function saveTranscriptForm(event) {
+  event?.preventDefault?.();
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  const file = document.getElementById("tr-file")?.files?.[0];
+  const pasted = document.getElementById("tr-text").value;
+  if (!file && !pasted.trim()) return toast("Choose a transcript file or paste the text", "error");
+  const whenRaw = document.getElementById("tr-when").value;
+  const body = {
+    practitioner: document.getElementById("tr-who").value.trim(),
+    role: document.getElementById("tr-role").value.trim(),
+    location: document.getElementById("tr-where").value.trim(),
+    occurred_at: whenRaw ? new Date(whenRaw).toISOString() : null,
+    summary: document.getElementById("tr-summary").value.trim(),
+  };
+  const status = document.getElementById("tr-status");
+  const btn = document.getElementById("btn-tr-save");
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = "Saving…";
+  try {
+    if (file) {
+      body.filename = file.name;
+      body.file_base64 = tlArrayBufferToBase64(await file.arrayBuffer());
+    } else {
+      body.text = pasted;
+    }
+    const res = await fetch(`/api/patients/${pid}/care-events/transcript`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save transcript");
+    }
+    const data = await res.json();
+    timelineState.data = data;
+    closeTranscriptForm();
+    renderTimeline();
+    toast(`Transcript saved (${(data.document?.words || 0).toLocaleString()} words) and linked to the visit`);
+  } catch (err) {
+    if (status) status.textContent = err.message || "Could not save transcript";
+    toast(err.message || "Could not save transcript", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderTimelineEvent(ev) {
+  const dt = tlParseAt(ev.at);
+  const timeLabel = ev.has_time && dt ? tlTime(dt) : ev.upcoming ? "Planned" : "—";
+  const cat = TIMELINE_CATEGORY_LABELS[ev.category] || ev.category;
+  const detail = String(ev.detail || "");
+  const long = detail.length > 420;
+  const detailHtml = detail
+    ? `<div class="timeline-detail${long ? " is-clamped" : ""}">${escapeHtml(detail)}</div>${
+        long ? `<button type="button" class="btn ghost btn-sm tl-more">Show more</button>` : ""
+      }`
+    : "";
+  const sourceLink = ev.source_document_id
+    ? ` · <button type="button" class="link-button tl-open-doc" data-doc-id="${escapeHtml(ev.source_document_id)}">${escapeHtml(
+        ev.source === "transcript" ? "Read transcript" : ev.source_document_title || "Open source"
+      )}</button>`
+    : ev.source === "whatsapp" && ev.source_document_title
+      ? ` · ${escapeHtml(ev.source_document_title)}`
+      : "";
+  const where = ev.location ? ` · ${escapeHtml(ev.location)}` : "";
+  const actions = ev.editable
+    ? `<div class="timeline-actions">
+        <button type="button" class="btn ghost btn-sm tl-edit" data-id="${escapeHtml(ev.care_event_id)}">${ev.source === "whatsapp" ? "Classify" : "Edit"}</button>
+        <button type="button" class="btn ghost btn-sm tl-delete" data-id="${escapeHtml(ev.care_event_id)}">Delete</button>
+      </div>`
+    : "";
+  return `<article class="timeline-item cat-${escapeHtml(ev.category)}${ev.upcoming ? " is-upcoming" : ""}${tlIsChatter(ev) ? " is-chatter" : ""}">
+    <div class="timeline-time">${escapeHtml(timeLabel)}</div>
+    <div class="timeline-dot" aria-hidden="true"></div>
+    <div class="timeline-body">
+      <div class="timeline-title-row">
+        <span class="timeline-pill cat-${escapeHtml(ev.category)}">${escapeHtml(ev.kind_label || cat)}</span>
+        ${ev.title ? `<strong class="timeline-title">${escapeHtml(ev.title)}</strong>` : ""}
+      </div>
+      ${detailHtml}
+      <p class="timeline-prov">${escapeHtml(ev.provenance || "")}${where}${sourceLink}</p>
+      ${actions}
+    </div>
+  </article>`;
+}
+
+function renderTimelineList() {
+  const listEl = document.getElementById("timeline-list");
+  const filterEl = document.getElementById("tl-active-filter");
+  if (!listEl) return;
+  tlSetToggleGroup(".tl-range", "range", timelineState.range);
+  tlSetToggleGroup(".tl-cat", "cat", timelineState.cat);
+  if (!state.activePatientId) {
+    listEl.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see the timeline."))}</p>`;
+    return;
+  }
+  if (!timelineState.data) {
+    listEl.innerHTML = `<p class="muted small">Loading timeline…</p>`;
+    return;
+  }
+  if (filterEl) {
+    filterEl.innerHTML = timelineState.practitioner
+      ? `Showing entries for <strong>${escapeHtml(timelineState.practitioner)}</strong> · <button type="button" class="link-button" id="tl-clear-who">clear</button>`
+      : "";
+  }
+  const events = tlFilteredEvents();
+  const anyFlags = Object.keys(timelineState.data?.gaps?.day_flags || {}).length && timelineState.cat === "all";
+  if (!events.length && !anyFlags) {
+    const total = (timelineState.data.events || []).length;
+    listEl.innerHTML = `<p class="muted small">${
+      total ? "Nothing matches these filters. Try a longer range or All." : "No entries yet. Log a visit, or import the family WhatsApp group."
+    }</p>`;
+    return;
+  }
+  const upcoming = events.filter((e) => e.upcoming);
+  const past = events.filter((e) => !e.upcoming);
+  const dayFlags = timelineState.data?.gaps?.day_flags || {};
+  const flagHtml = (key) => {
+    const flags = dayFlags[key] || [];
+    return flags.length
+      ? `<span class="timeline-day-flags">${flags.map((f) => `<span class="timeline-day-flag">${escapeHtml(GAP_SHORT[f] || f)}</span>`).join("")}</span>`
+      : "";
+  };
+  // Days in the stay with nothing recorded still get a header, so the gap is visible.
+  if (timelineState.cat === "all" && !timelineState.search && !timelineState.practitioner) {
+    const start = tlRangeStart(timelineState.range);
+    const seen = new Set(past.map((e) => tlDayKey(tlParseAt(e.at))));
+    for (const key of Object.keys(dayFlags)) {
+      const [y, m, d] = key.split("-").map(Number);
+      const dt = new Date(y, m - 1, d, 12);
+      if (seen.has(key) || (start && dt < start)) continue;
+      past.push({ __emptyDay: true, at: key, category: "gap" });
+    }
+    past.sort((a, b) => tlParseAt(b.at) - tlParseAt(a.at));
+  }
+  let html = "";
+  if (upcoming.length) {
+    const sorted = upcoming.slice().sort((a, b) => (tlParseAt(a.at) || 0) - (tlParseAt(b.at) || 0));
+    html += `<section class="timeline-day"><h4 class="timeline-day-head">Planned — not done yet</h4>${sorted
+      .map((ev) => renderTimelineEvent(ev))
+      .join("")}</section>`;
+  }
+  let currentKey = null;
+  let open = false;
+  for (const ev of past) {
+    const dt = tlParseAt(ev.at);
+    const key = tlDayKey(dt);
+    if (key !== currentKey) {
+      if (open) html += `</section>`;
+      html += `<section class="timeline-day"><h4 class="timeline-day-head">${escapeHtml(tlDayLabel(dt))}${flagHtml(key)}</h4>`;
+      currentKey = key;
+      open = true;
+    }
+    html += ev.__emptyDay
+      ? `<p class="timeline-empty-day">Nothing recorded this day.</p>`
+      : renderTimelineEvent(ev);
+  }
+  if (open) html += `</section>`;
+  listEl.innerHTML = html;
+}
+
+function populateTimelineForm() {
+  const data = timelineState.data || {};
+  const kindEl = document.getElementById("tl-kind");
+  if (kindEl && kindEl.options.length === 0) {
+    kindEl.innerHTML = (data.kinds || [])
+      .map((k) => `<option value="${escapeHtml(k.value)}">${escapeHtml(k.label)}</option>`)
+      .join("");
+  }
+  const roleList = document.getElementById("tl-role-list");
+  if (roleList) roleList.innerHTML = (data.role_presets || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
+  for (const prefId of ["team-preferred", "fam-preferred"]) {
+    const prefEl = document.getElementById(prefId);
+    if (prefEl && prefEl.options.length <= 1) {
+      prefEl.innerHTML =
+        `<option value="">— Not set —</option>` +
+        (data.contact_methods || []).map((m) => `<option value="${escapeHtml(m.value)}">${escapeHtml(m.label)}</option>`).join("");
+    }
+  }
+  const envList = document.getElementById("tl-env-list");
+  if (envList) envList.innerHTML = (data.environment_presets || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
+  const whoList = document.getElementById("tl-practitioner-list");
+  if (whoList) whoList.innerHTML = (data.known_practitioners || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
+  const srcEl = document.getElementById("tl-source");
+  if (srcEl) {
+    const current = srcEl.value;
+    srcEl.innerHTML =
+      `<option value="">— None —</option>` +
+      (data.documents || [])
+        .map((d) => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.title)}${d.case_label ? ` (${escapeHtml(d.case_label)})` : ""}</option>`)
+        .join("");
+    srcEl.value = current;
+  }
+}
+
+function renderFamilyTeam() {
+  const board = document.getElementById("family-role-board");
+  const people = document.getElementById("family-people");
+  const suggest = document.getElementById("family-suggest");
+  if (!board || !people) return;
+  const data = timelineState.data || {};
+  const family = data.family_team || [];
+  const roles = data.family_roles || [];
+  const sinceLabel = (iso) => {
+    const dt = tlParseAt(iso);
+    return dt ? dt.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  };
+  board.innerHTML = roles
+    .map((r) => {
+      const names = r.holders.map((h) => h.name.split(" ")[0]);
+      const empty = !r.holders.length;
+      const since = r.holders.length === 1 && r.holders[0].since ? `since ${sinceLabel(r.holders[0].since)}` : "";
+      return `<button type="button" class="family-role-tile${empty ? " is-empty" : ""}" data-family-role="${escapeHtml(r.key)}" title="${escapeHtml(r.hint || "")}">
+        <span class="family-role-name">${escapeHtml(r.label)}</span>
+        <span class="family-role-holders">${empty ? "Unassigned" : escapeHtml(names.join(" · "))}</span>
+        ${since ? `<span class="family-role-since">${escapeHtml(since)}</span>` : ""}
+      </button>`;
+    })
+    .join("");
+  const roleLabel = Object.fromEntries(roles.map((r) => [r.key, r.label]));
+  people.innerHTML = family.length
+    ? family
+        .map((m) => {
+          const chips = (m.roles || [])
+            .map((r) => `<span class="timeline-env-chip family-role-chip">${escapeHtml(roleLabel[r] || r)}</span>`)
+            .join("");
+          return `<div class="timeline-team-card family-card" data-family-edit="${escapeHtml(m.id)}" role="button" tabindex="0">
+            <div class="timeline-team-top"><strong>${escapeHtml(m.name)}</strong><span class="timeline-team-action">Edit</span></div>
+            ${m.relationship ? `<span class="timeline-team-role">${escapeHtml(m.relationship)}</span>` : ""}
+            ${chips ? `<span class="timeline-env-chips">${chips}</span>` : `<span class="timeline-team-meta">No role yet</span>`}
+            ${m.availability ? `<span class="timeline-team-meta">${escapeHtml(m.availability)}</span>` : ""}
+            ${tlContactHtml(m)}
+          </div>`;
+        })
+        .join("")
+    : `<p class="muted small">Add the people helping — then tap a role above to assign it.</p>`;
+  const senders = data.chat_senders_not_on_family_team || [];
+  if (suggest) {
+    suggest.classList.toggle("hidden", !senders.length);
+    suggest.innerHTML = senders.length
+      ? `<span class="muted small">From the family chat:</span> ${senders
+          .map((n) => `<button type="button" class="btn ghost btn-sm" data-family-suggest="${escapeHtml(n)}">+ ${escapeHtml(n)}</button>`)
+          .join("")}`
+      : "";
+  }
+}
+
+function renderFamilyRoleChecks(containerId, selected = []) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const roles = timelineState.data?.family_roles || [];
+  el.innerHTML = roles
+    .map(
+      (r) => `<label class="family-role-check" title="${escapeHtml(r.hint || "")}">
+        <input type="checkbox" value="${escapeHtml(r.key)}" ${selected.includes(r.key) ? "checked" : ""}>
+        <span>${escapeHtml(r.label)}</span>
+      </label>`
+    )
+    .join("");
+}
+
+function openFamilyForm(member = null, presetName = "") {
+  const form = document.getElementById("family-form");
+  if (!form) return;
+  populateTimelineForm();
+  form.classList.remove("hidden");
+  document.getElementById("fam-edit-id").value = member?.id || "";
+  document.getElementById("fam-name").value = member?.name || presetName || "";
+  document.getElementById("fam-rel").value = member?.relationship || "";
+  document.getElementById("fam-phone").value = member?.phone || "";
+  document.getElementById("fam-email").value = member?.email || "";
+  document.getElementById("fam-preferred").value = member?.preferred_contact || "";
+  document.getElementById("fam-availability").value = member?.availability || "";
+  document.getElementById("fam-role-custom").value = "";
+  renderFamilyRoleChecks("fam-roles", member?.roles || []);
+  document.getElementById("btn-family-save").textContent = member ? "Save" : "Add to family team";
+  document.getElementById("btn-family-remove")?.classList.toggle("hidden", !member);
+  (member || presetName ? document.getElementById("fam-rel") : document.getElementById("fam-name"))?.focus();
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeFamilyForm() {
+  const form = document.getElementById("family-form");
+  form?.reset();
+  form?.classList.add("hidden");
+  const id = document.getElementById("fam-edit-id");
+  if (id) id.value = "";
+}
+
+async function tlSendTimeline(url, method, body) {
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not save");
+  }
+  timelineState.data = await res.json();
+  renderTimeline();
+  return timelineState.data;
+}
+
+async function saveFamilyForm(event) {
+  event?.preventDefault?.();
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  const id = document.getElementById("fam-edit-id").value;
+  const roles = [...document.querySelectorAll("#fam-roles input:checked")].map((i) => i.value);
+  const custom = document.getElementById("fam-role-custom").value.trim();
+  if (custom) roles.push(custom);
+  const body = {
+    name: document.getElementById("fam-name").value.trim(),
+    relationship: document.getElementById("fam-rel").value.trim(),
+    phone: document.getElementById("fam-phone").value.trim(),
+    email: document.getElementById("fam-email").value.trim(),
+    preferred_contact: document.getElementById("fam-preferred").value,
+    availability: document.getElementById("fam-availability").value.trim(),
+    roles,
+  };
+  if (!body.name) return toast("Enter a name", "error");
+  try {
+    await tlSendTimeline(
+      id ? `/api/patients/${pid}/family-team/${id}` : `/api/patients/${pid}/family-team`,
+      id ? "PATCH" : "POST",
+      body
+    );
+    closeFamilyForm();
+    toast(id ? "Family team updated" : `${body.name} added to the family team`);
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+async function removeFamilyMember() {
+  const pid = state.activePatientId;
+  const id = document.getElementById("fam-edit-id").value;
+  if (!pid || !id) return;
+  const name = document.getElementById("fam-name").value;
+  if (!confirm(`Remove ${name} from the family team?\n\nTheir role changes stay in the timeline history.`)) return;
+  try {
+    await tlSendTimeline(`/api/patients/${pid}/family-team/${id}`, "DELETE");
+    closeFamilyForm();
+    toast("Removed from the family team");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+function openRoleAssign(roleKey) {
+  const panel = document.getElementById("family-role-assign");
+  const role = (timelineState.data?.family_roles || []).find((r) => r.key === roleKey);
+  const family = timelineState.data?.family_team || [];
+  if (!panel || !role) return;
+  if (!family.length) {
+    openFamilyForm();
+    return toast("Add a family member first, then assign roles");
+  }
+  panel.dataset.role = roleKey;
+  document.getElementById("family-role-assign-title").textContent = role.label;
+  document.getElementById("family-role-assign-hint").textContent = role.hint || "Who covers this?";
+  const holders = new Set(role.holders.map((h) => h.id));
+  document.getElementById("family-role-assign-list").innerHTML = family
+    .map(
+      (m) => `<label class="family-role-check"><input type="checkbox" value="${escapeHtml(m.id)}" ${holders.has(m.id) ? "checked" : ""}><span>${escapeHtml(m.name)}${m.relationship ? ` <span class="muted">(${escapeHtml(m.relationship)})</span>` : ""}</span></label>`
+    )
+    .join("");
+  panel.classList.remove("hidden");
+}
+
+async function saveRoleAssign() {
+  const pid = state.activePatientId;
+  const panel = document.getElementById("family-role-assign");
+  const role = panel?.dataset.role;
+  if (!pid || !role) return;
+  const ids = [...document.querySelectorAll("#family-role-assign-list input:checked")].map((i) => i.value);
+  try {
+    await tlSendTimeline(`/api/patients/${pid}/family-roles/${encodeURIComponent(role)}`, "PUT", { member_ids: ids });
+    panel.classList.add("hidden");
+    toast("Role updated");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+function familyRolesSummaryLines() {
+  const roles = (timelineState.data?.family_roles || []).filter((r) => r.holders.length);
+  if (!roles.length) return [];
+  return ["", "Family roles:", ...roles.map((r) => `• ${r.label}: ${r.holders.map((h) => h.name).join(", ")}`)];
+}
+
+const GAP_ACTIONS = {
+  log_visit: { label: "Log a visit", kind: "visit" },
+  log_test: { label: "Log a test", kind: "test_done" },
+  log_result: { label: "Add the result", kind: "result" },
+  family_note: { label: "Add an update", kind: "status" },
+  log_admission: { label: "Log admission", kind: "admission" },
+  open_plan: { label: "Open plan" },
+  assign_role: { label: "Assign" },
+};
+
+const GAP_SHORT = { no_visit: "No visit", no_tests: "No tests", no_family_update: "No family update" };
+
+function renderTimelineGaps() {
+  const wrap = document.getElementById("timeline-gaps");
+  const list = document.getElementById("timeline-gaps-list");
+  const stayEl = document.getElementById("timeline-stay");
+  const countEl = document.getElementById("timeline-gaps-count");
+  if (!wrap || !list) return;
+  const gaps = timelineState.data?.gaps;
+  if (!gaps) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  const stay = gaps.stay;
+  if (stayEl) {
+    if (stay) {
+      const adm = tlParseAt(stay.admitted_at);
+      const admLabel = adm ? adm.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "";
+      stayEl.innerHTML = stay.active
+        ? `<span class="stay-dot is-active"></span>In hospital since <strong>${escapeHtml(admLabel)}</strong> · day ${stay.days}${stay.location ? ` · ${escapeHtml(stay.location)}` : ""}`
+        : `<span class="stay-dot"></span>Last stay: ${escapeHtml(admLabel)} – ${escapeHtml(tlShortWhen(stay.discharged_at, false))} (${stay.days} days)`;
+    } else {
+      stayEl.innerHTML = `<span class="stay-dot"></span>Not marked as in hospital`;
+    }
+  }
+  const items = (gaps.items || []).filter((i) => i.kind !== "no_stay" || !stay);
+  if (countEl) {
+    const w = gaps.counts?.warn || 0;
+    countEl.textContent = w ? `· ${w} need${w === 1 ? "s" : ""} attention` : items.length ? "· nothing urgent" : "";
+  }
+  if (!items.length) {
+    list.innerHTML = `<p class="muted small">Nothing missing from what's been recorded.</p>`;
+    return;
+  }
+  const expanded = timelineState.gapsExpanded;
+  const limit = 6;
+  const shown = expanded ? items : items.slice(0, limit);
+  list.innerHTML =
+    shown
+      .map((i, idx) => {
+        const act = GAP_ACTIONS[i.action];
+        return `<div class="timeline-gap is-${escapeHtml(i.severity)}">
+          <span class="timeline-gap-icon" aria-hidden="true">${i.severity === "warn" ? "!" : "·"}</span>
+          <span class="timeline-gap-text">${escapeHtml(i.text)}</span>
+          ${act ? `<button type="button" class="btn ghost btn-sm" data-gap-idx="${items.indexOf(i)}">${escapeHtml(act.label)}</button>` : ""}
+        </div>`;
+      })
+      .join("") +
+    (items.length > limit
+      ? `<button type="button" class="link-button tl-gaps-more">${expanded ? "Show fewer" : `Show all ${items.length}`}</button>`
+      : "");
+}
+
+function runGapAction(idx) {
+  const items = (timelineState.data?.gaps?.items || []).filter((i) => i.kind !== "no_stay" || !timelineState.data?.gaps?.stay);
+  const item = items[idx];
+  if (!item) return;
+  const act = GAP_ACTIONS[item.action];
+  if (item.action === "open_plan") return switchTab("plan");
+  if (item.action === "assign_role") {
+    if (!(timelineState.data?.family_team || []).length) return openFamilyForm();
+    return openRoleAssign(item.ref);
+  }
+  if (act?.kind) openTimelineForm(null, { kind: act.kind, day: item.day });
+}
+
+function renderTimeline() {
+  renderTimelineGaps();
+  renderFamilyTeam();
+  renderTimelineTeam();
+  renderTimelineList();
+  populateTimelineForm();
+  if (!document.getElementById("timeline-update")?.classList.contains("hidden")) refreshFamilyUpdateText();
+}
+
+async function loadTimeline({ quiet = false } = {}) {
+  const pid = state.activePatientId;
+  if (!pid) {
+    timelineState.data = null;
+    renderTimeline();
+    return;
+  }
+  if (timelineState.patientId !== pid) {
+    timelineState.data = null;
+    timelineState.practitioner = "";
+    const kindEl = document.getElementById("tl-kind");
+    if (kindEl) kindEl.innerHTML = "";
+  }
+  timelineState.patientId = pid;
+  if (!quiet) renderTimelineList();
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto";
+    const res = await fetch(`/api/patients/${pid}/timeline?tz=${encodeURIComponent(tz)}`, { credentials: "include" });
+    if (!res.ok) throw new Error("Could not load timeline");
+    const data = await res.json();
+    if (state.activePatientId !== pid) return;
+    timelineState.data = data;
+    renderTimeline();
+  } catch (err) {
+    toast(err.message || "Could not load timeline", "error");
+  }
+}
+
+function tlToLocalInput(dt) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+function openTimelineForm(ev = null, preset = null) {
+  const form = document.getElementById("timeline-form");
+  if (!form) return;
+  populateTimelineForm();
+  form.classList.remove("hidden");
+  document.getElementById("tl-edit-id").value = ev?.care_event_id || "";
+  document.getElementById("tl-kind").value = ev ? ev.kind : preset?.kind || "visit";
+  let dt = ev ? tlParseAt(ev.at) : new Date();
+  if (!ev && preset?.day && preset.day !== tlDayKey(new Date())) {
+    const [y, m, d] = preset.day.split("-").map(Number);
+    dt = new Date(y, m - 1, d, 12, 0, 0);
+  }
+  document.getElementById("tl-when").value = dt ? tlToLocalInput(dt) : "";
+  document.getElementById("tl-practitioner").value = ev?.practitioner || "";
+  document.getElementById("tl-role").value = ev?.role || "";
+  document.getElementById("tl-location").value = ev?.location || "";
+  document.getElementById("tl-summary").value = ev?.detail || "";
+  const srcEl = document.getElementById("tl-source");
+  if (srcEl) srcEl.value = ev?.source === "whatsapp" ? "" : ev?.source_document_id || "";
+  document.getElementById("btn-tl-save").textContent = ev ? "Save changes" : "Add to timeline";
+  (ev ? document.getElementById("tl-kind") : document.getElementById("tl-practitioner"))?.focus();
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeTimelineForm() {
+  const form = document.getElementById("timeline-form");
+  form?.reset();
+  form?.classList.add("hidden");
+  const idEl = document.getElementById("tl-edit-id");
+  if (idEl) idEl.value = "";
+}
+
+async function saveTimelineForm(event) {
+  event?.preventDefault?.();
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  const editId = document.getElementById("tl-edit-id").value;
+  const whenRaw = document.getElementById("tl-when").value;
+  const srcEl = document.getElementById("tl-source");
+  const srcId = srcEl?.value || "";
+  const srcTitle = srcId ? srcEl.options[srcEl.selectedIndex]?.textContent || "" : "";
+  const body = {
+    kind: document.getElementById("tl-kind").value,
+    occurred_at: whenRaw ? new Date(whenRaw).toISOString() : null,
+    practitioner: document.getElementById("tl-practitioner").value.trim(),
+    role: document.getElementById("tl-role").value.trim(),
+    location: document.getElementById("tl-location").value.trim(),
+    summary: document.getElementById("tl-summary").value.trim(),
+  };
+  const existing = editId ? (timelineState.data?.events || []).find((e) => e.care_event_id === editId) : null;
+  if (!existing || existing.source !== "whatsapp" || srcId) {
+    body.source_document_id = srcId || null;
+    body.source_document_title = srcTitle || null;
+  }
+  if (!body.summary && !body.practitioner) return toast("Add who was in or what happened", "error");
+  const btn = document.getElementById("btn-tl-save");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(editId ? `/api/patients/${pid}/care-events/${editId}` : `/api/patients/${pid}/care-events`, {
+      method: editId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save");
+    }
+    timelineState.data = await res.json();
+    closeTimelineForm();
+    renderTimeline();
+    toast(editId ? "Timeline entry updated" : "Added to timeline");
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteTimelineEvent(id) {
+  const pid = state.activePatientId;
+  const ev = (timelineState.data?.events || []).find((e) => e.care_event_id === id);
+  const label = ev ? `${ev.kind_label}: ${String(ev.detail || ev.title || "").slice(0, 80)}` : "this entry";
+  if (!confirm(`Delete ${label}?\n\nThis is recorded in the audit trail.`)) return;
+  const res = await fetch(`/api/patients/${pid}/care-events/${id}`, { method: "DELETE", credentials: "include" });
+  if (!res.ok) return toast("Could not delete", "error");
+  timelineState.data = await res.json();
+  renderTimeline();
+  toast("Deleted");
+}
+
+function tlArrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function runWhatsAppImport() {
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  const fileEl = document.getElementById("tl-import-file");
+  const status = document.getElementById("tl-import-status");
+  const file = fileEl?.files?.[0];
+  if (!file) return toast("Choose the exported chat file", "error");
+  let chatName = document.getElementById("tl-import-name").value.trim();
+  if (!chatName) {
+    const m = file.name.match(/WhatsApp Chat\s*-\s*(.+?)\.(zip|txt)$/i);
+    if (m) chatName = m[1].trim();
+  }
+  const body = {
+    chat_name: chatName || null,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto",
+  };
+  const isZip = /\.zip$/i.test(file.name) || file.type === "application/zip";
+  const btn = document.getElementById("btn-tl-import-run");
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = "Importing…";
+  try {
+    if (isZip) body.zip_base64 = tlArrayBufferToBase64(await file.arrayBuffer());
+    else body.text = await file.text();
+    const res = await fetch(`/api/patients/${pid}/care-events/import/whatsapp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Import failed");
+    }
+    const data = await res.json();
+    timelineState.data = data;
+    const r = data.import || {};
+    const msg = `${r.added || 0} new message${r.added === 1 ? "" : "s"} added · ${r.skipped || 0} already on the timeline`;
+    if (status) status.textContent = msg;
+    toast(msg);
+    if (fileEl) fileEl.value = "";
+    renderTimeline();
+  } catch (err) {
+    if (status) status.textContent = err.message || "Import failed";
+    toast(err.message || "Import failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function buildFamilyUpdateText(range) {
+  const data = timelineState.data;
+  if (!data) return "";
+  const start = tlRangeStart(range);
+  const now = new Date();
+  const inRange = (data.events || []).filter((ev) => {
+    const dt = tlParseAt(ev.at);
+    return dt && !ev.upcoming && (!start || dt >= start) && dt <= new Date(now.getTime() + 60000) && !tlIsChatter(ev);
+  });
+  inRange.sort((a, b) => tlParseAt(a.at) - tlParseAt(b.at));
+  const multiDay = range !== "today";
+  const stamp = (ev) => {
+    const dt = tlParseAt(ev.at);
+    if (!dt) return "";
+    const day = dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    if (!ev.has_time) return day;
+    return multiDay ? `${day} ${tlTime(dt)}` : tlTime(dt);
+  };
+  const oneLine = (text, max = 400) => {
+    const t = String(text || "").replace(/\s*\n\s*/g, " · ").trim();
+    return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  };
+  const sections = [
+    { title: "Care team", cats: ["visit"] },
+    { title: "Tests & results", cats: ["test", "result"] },
+    { title: "Moves & procedures", cats: ["care"] },
+    { title: "Medications", cats: ["medication"] },
+    { title: "From the family", cats: ["family"] },
+    { title: "Done from the plan", cats: ["plan"] },
+  ];
+  const who = state.activePatientLabel || "Patient";
+  const rangeLabel = { today: "today", "24h": "the last 24 hours", "3d": "the last 3 days", "7d": "the last 7 days" }[range] || "";
+  const lines = [`${who} — update for ${rangeLabel} (${now.toLocaleDateString(undefined, { month: "short", day: "numeric" })})`];
+  lines.push(...familyRolesSummaryLines());
+  let any = false;
+  for (const sec of sections) {
+    let rows = inRange.filter((ev) => sec.cats.includes(ev.category));
+    let hidden = 0;
+    if (sec.cats.includes("family")) {
+      // Chat messages are the raw feed: skip questions, keep the latest few.
+      const isQuestion = (ev) => ev.source === "whatsapp" && /\?\s*$/.test(String(ev.detail || "").trim());
+      rows = rows.filter((ev) => !isQuestion(ev));
+      const cap = 8;
+      if (rows.length > cap) {
+        hidden = rows.length - cap;
+        rows = rows.slice(-cap);
+      }
+    }
+    if (!rows.length) continue;
+    any = true;
+    lines.push("", `${sec.title}:`);
+    if (hidden) lines.push(`(latest ${rows.length} shown — ${hidden} earlier messages are on the timeline)`);
+    for (const ev of rows) {
+      let line;
+      if (ev.category === "family" && ev.source === "whatsapp") {
+        line = `${stamp(ev)} — ${ev.sender || "family"}: ${oneLine(ev.detail)}`;
+      } else if (ev.category === "result" && ev.kind === "lab_results") {
+        line = `${stamp(ev)} — ${ev.title}`;
+      } else {
+        const head = ev.title ? `${ev.kind_label}: ${ev.title}` : ev.kind_label;
+        line = `${stamp(ev)} — ${head}${ev.detail ? ` — ${oneLine(ev.detail)}` : ""}${ev.location ? ` (${ev.location})` : ""}`;
+      }
+      lines.push(`• ${line}`);
+    }
+  }
+  const gapItems = (data.gaps?.items || []).filter((i) => {
+    if (i.kind === "no_stay" || i.kind === "role_unassigned") return false;
+    if (!i.day) return i.severity === "warn";
+    const [y, m, d] = i.day.split("-").map(Number);
+    const dt = new Date(y, m - 1, d, 12);
+    return !start || dt >= start;
+  });
+  if (gapItems.length) {
+    lines.push("", "Not recorded:");
+    for (const g of gapItems.slice(0, 10)) lines.push(`• ${g.text}`);
+  }
+  const upcoming = (data.events || [])
+    .filter((ev) => ev.upcoming)
+    .sort((a, b) => tlParseAt(a.at) - tlParseAt(b.at))
+    .slice(0, 6);
+  if (upcoming.length) {
+    lines.push("", "Coming up:");
+    for (const ev of upcoming) lines.push(`• ${stamp(ev)} — ${ev.title}${ev.detail ? ` (${oneLine(ev.detail, 80)})` : ""}`);
+  }
+  if (!any) lines.push("", "No new recorded updates in this period.");
+  lines.push("", "Facts as recorded on the family timeline (Bright Health). Not medical advice — check with the care team.");
+  return lines.join("\n");
+}
+
+function refreshFamilyUpdateText() {
+  tlSetToggleGroup(".tl-update-range", "range", timelineState.updateRange);
+  const el = document.getElementById("tl-update-text");
+  if (el) el.value = buildFamilyUpdateText(timelineState.updateRange);
+}
+
+function toggleTimelinePanel(id) {
+  ["timeline-import", "timeline-update"].forEach((pid) => {
+    const el = document.getElementById(pid);
+    if (!el) return;
+    if (pid === id) el.classList.toggle("hidden");
+    else el.classList.add("hidden");
+  });
+  if (id === "timeline-update" && !document.getElementById("timeline-update")?.classList.contains("hidden")) {
+    refreshFamilyUpdateText();
+  }
+}
+
+document.getElementById("btn-timeline-log")?.addEventListener("click", () => openTimelineForm());
+document.getElementById("btn-tl-cancel")?.addEventListener("click", closeTimelineForm);
+document.getElementById("timeline-form")?.addEventListener("submit", saveTimelineForm);
+document.getElementById("btn-timeline-import")?.addEventListener("click", () => toggleTimelinePanel("timeline-import"));
+document.getElementById("btn-timeline-update")?.addEventListener("click", () => toggleTimelinePanel("timeline-update"));
+document.getElementById("btn-tl-import-run")?.addEventListener("click", runWhatsAppImport);
+document.getElementById("btn-tl-update-copy")?.addEventListener("click", async () => {
+  const text = document.getElementById("tl-update-text")?.value || "";
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Update copied — paste it into the family chat");
+  } catch {
+    toast("Could not copy — select the text and copy manually", "error");
+  }
+});
+document.getElementById("btn-tl-update-share")?.addEventListener("click", async () => {
+  const text = document.getElementById("tl-update-text")?.value || "";
+  if (typeof navigator.share !== "function") return toast("Sharing isn't supported here — use Copy", "error");
+  try {
+    await navigator.share({ title: "Family update", text });
+  } catch (err) {
+    if (err?.name !== "AbortError") toast("Share failed", "error");
+  }
+});
+document.querySelectorAll(".tl-update-range").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    timelineState.updateRange = btn.dataset.range;
+    refreshFamilyUpdateText();
+  })
+);
+document.querySelectorAll(".tl-range").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    timelineState.range = btn.dataset.range;
+    renderTimelineList();
+  })
+);
+document.querySelectorAll(".tl-cat").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    timelineState.cat = btn.dataset.cat;
+    renderTimelineList();
+  })
+);
+document.getElementById("tl-search")?.addEventListener("input", (e) => {
+  timelineState.search = e.target.value || "";
+  renderTimelineList();
+});
+document.getElementById("tl-show-chatter")?.addEventListener("change", (e) => {
+  timelineState.showChatter = Boolean(e.target.checked);
+  renderTimelineList();
+});
+document.getElementById("timeline-gaps-list")?.addEventListener("click", (e) => {
+  if (e.target.closest(".tl-gaps-more")) {
+    timelineState.gapsExpanded = !timelineState.gapsExpanded;
+    renderTimelineGaps();
+    return;
+  }
+  const btn = e.target.closest("[data-gap-idx]");
+  if (btn) runGapAction(Number(btn.dataset.gapIdx));
+});
+document.getElementById("btn-family-add")?.addEventListener("click", () => openFamilyForm());
+document.getElementById("btn-family-cancel")?.addEventListener("click", closeFamilyForm);
+document.getElementById("btn-family-remove")?.addEventListener("click", () => removeFamilyMember());
+document.getElementById("family-form")?.addEventListener("submit", saveFamilyForm);
+document.getElementById("family-role-board")?.addEventListener("click", (e) => {
+  const tile = e.target.closest("[data-family-role]");
+  if (tile) openRoleAssign(tile.dataset.familyRole);
+});
+document.getElementById("btn-family-role-save")?.addEventListener("click", () => saveRoleAssign());
+document.getElementById("btn-family-role-cancel")?.addEventListener("click", () =>
+  document.getElementById("family-role-assign")?.classList.add("hidden")
+);
+document.getElementById("family-people")?.addEventListener("click", (e) => {
+  if (e.target.closest("[data-stop]")) return;
+  const card = e.target.closest("[data-family-edit]");
+  if (!card) return;
+  const member = (timelineState.data?.family_team || []).find((m) => m.id === card.dataset.familyEdit);
+  if (member) openFamilyForm(member);
+});
+document.getElementById("family-suggest")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-family-suggest]");
+  if (btn) openFamilyForm(null, btn.dataset.familySuggest);
+});
+document.getElementById("timeline-team")?.addEventListener("click", (e) => {
+  const edit = e.target.closest("[data-team-edit]");
+  if (edit) {
+    e.stopPropagation();
+    const member = (timelineState.data?.team_members || []).find((m) => m.id === edit.dataset.teamEdit);
+    if (member) openTeamForm(member);
+    return;
+  }
+  const adopt = e.target.closest("[data-team-adopt]");
+  if (adopt) {
+    e.stopPropagation();
+    openTeamForm(null, adopt.dataset.teamAdopt);
+    return;
+  }
+  if (e.target.closest("[data-stop]")) return;
+  const card = e.target.closest("[data-tl-who]");
+  if (!card) return;
+  const who = card.dataset.tlWho || "";
+  timelineState.practitioner = timelineState.practitioner.toLowerCase() === who.toLowerCase() ? "" : who;
+  if (timelineState.practitioner) timelineState.range = "all";
+  renderTimelineTeam();
+  renderTimelineList();
+});
+document.getElementById("timeline-env-filter")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-tl-env]");
+  if (!btn) return;
+  timelineState.env = btn.dataset.tlEnv || "";
+  renderTimelineTeam();
+});
+document.getElementById("btn-team-add")?.addEventListener("click", () => openTeamForm());
+document.getElementById("btn-team-cancel")?.addEventListener("click", closeTeamForm);
+document.getElementById("btn-team-remove")?.addEventListener("click", () => removeTeamMember().catch((err) => toast(err.message, "error")));
+document.getElementById("team-form")?.addEventListener("submit", saveTeamForm);
+document.getElementById("btn-timeline-transcript")?.addEventListener("click", openTranscriptForm);
+document.getElementById("btn-tr-cancel")?.addEventListener("click", closeTranscriptForm);
+document.getElementById("timeline-transcript")?.addEventListener("submit", saveTranscriptForm);
+document.getElementById("tl-practitioner")?.addEventListener("change", () => tlFillFromMember("tl-practitioner", "tl-role", "tl-location"));
+document.getElementById("tr-who")?.addEventListener("change", () => tlFillFromMember("tr-who", "tr-role", "tr-where"));
+document.getElementById("panel-timeline")?.addEventListener("click", (e) => {
+  if (e.target.closest("#tl-clear-who")) {
+    timelineState.practitioner = "";
+    renderTimelineTeam();
+    renderTimelineList();
+    return;
+  }
+  const more = e.target.closest(".tl-more");
+  if (more) {
+    const detail = more.previousElementSibling;
+    const clamped = detail?.classList.toggle("is-clamped");
+    more.textContent = clamped ? "Show more" : "Show less";
+    return;
+  }
+  const edit = e.target.closest(".tl-edit");
+  if (edit) {
+    const ev = (timelineState.data?.events || []).find((x) => x.care_event_id === edit.dataset.id);
+    if (ev) openTimelineForm(ev);
+    return;
+  }
+  const del = e.target.closest(".tl-delete");
+  if (del) {
+    deleteTimelineEvent(del.dataset.id).catch((err) => toast(err.message, "error"));
+    return;
+  }
+  const doc = e.target.closest(".tl-open-doc");
+  if (doc) viewDocument(doc.dataset.docId).catch((err) => toast(err.message, "error"));
+});
