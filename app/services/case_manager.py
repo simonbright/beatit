@@ -15,6 +15,7 @@ data/
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ from typing import Any
 from app.config import settings
 
 REGISTRY_FILENAME = "registry.json"
+# (mtime_ns, size, profile) — skip lab enrichment on every poll / page-load.
+_PROFILE_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 
 
 def _now_iso() -> str:
@@ -188,10 +191,40 @@ def _empty_profile() -> dict[str, Any]:
     }
 
 
+def _profile_cache_get(patient_id: str, path: Path) -> dict[str, Any] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    cached = _PROFILE_CACHE.get(patient_id)
+    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return copy.deepcopy(cached[2])
+    return None
+
+
+def _profile_cache_put(patient_id: str, path: Path, profile: dict[str, Any]) -> None:
+    try:
+        st = path.stat()
+    except OSError:
+        return
+    _PROFILE_CACHE[patient_id] = (st.st_mtime_ns, st.st_size, profile)
+
+
+def _profile_cache_clear(patient_id: str | None = None) -> None:
+    if patient_id is None:
+        _PROFILE_CACHE.clear()
+    else:
+        _PROFILE_CACHE.pop(patient_id, None)
+
+
 def get_patient_profile(patient_id: str) -> dict[str, Any]:
     path = _profile_path(patient_id)
     if not path.exists():
+        _profile_cache_clear(patient_id)
         return _empty_profile()
+    hit = _profile_cache_get(patient_id, path)
+    if hit is not None:
+        return hit
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -338,7 +371,8 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
             save_patient_profile(patient_id, profile, reload=False)
         except OSError:
             pass
-    return profile
+    _profile_cache_put(patient_id, path, profile)
+    return copy.deepcopy(profile)
 
 
 def get_patient_log_bootstrap(patient_id: str) -> dict[str, Any]:
@@ -498,6 +532,7 @@ def save_patient_profile(
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+    _profile_cache_clear(patient_id)
     if not reload:
         return cleaned
     return get_patient_profile(patient_id)

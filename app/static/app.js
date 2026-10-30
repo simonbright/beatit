@@ -3784,6 +3784,7 @@ function applyViewMode(mode) {
 
 function setViewMode(mode, options = {}) {
   const next = mode === "advanced" ? "advanced" : "simple";
+  const wasSimple = isSimpleView();
   applyViewMode(next);
   if (options.persist !== false) {
     try {
@@ -3791,6 +3792,12 @@ function setViewMode(mode, options = {}) {
     } catch {
       /* ignore */
     }
+  }
+  if (next === "advanced" && wasSimple) {
+    void loadAdvancedWorkspaceData().then(() => {
+      updateHomeToolbar();
+      renderHandlingAlerts();
+    });
   }
   if (options.skipTab) return;
   const current =
@@ -7902,20 +7909,29 @@ function initSectionSubnav() {
   });
 }
 
+async function loadAdvancedWorkspaceData() {
+  await Promise.allSettled([
+    loadDocumentIndex(),
+    loadLatestAssessment(),
+    loadCustomTasks(),
+    loadChatObservations(),
+    refreshHandlingFlags(),
+  ]);
+}
+
 async function loadInitialData() {
   state.labUnitSystem = loadLabUnitSystem();
   syncLabUnitToggleUi();
   loadSelectionFromSession();
   loadAssessmentGuidanceFromSession();
   try {
-    // Non-log work loads after Home Log is usable so tiles stay responsive on startup.
-    await Promise.allSettled([
-      loadDocumentIndex(),
-      loadLatestAssessment(),
-      loadCustomTasks(),
-      loadChatObservations(),
-      refreshHandlingFlags(),
-    ]);
+    // Simple view (the default) skips Library / OCR / assessment boot so the
+    // only Render worker can still answer Timeline and health checks.
+    if (isSimpleView()) {
+      await Promise.allSettled([loadCustomTasks()]);
+    } else {
+      await loadAdvancedWorkspaceData();
+    }
   } finally {
     updateHomeToolbar();
     renderHandlingAlerts();
@@ -18883,6 +18899,9 @@ async function runWhatsAppImport() {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto",
   };
   const isZip = /\.zip$/i.test(file.name) || file.type === "application/zip";
+  if (file.size > 8 * 1024 * 1024) {
+    return toast("Export chat without media — that file is too large to import here", "error");
+  }
   const btn = document.getElementById("btn-tl-import-run");
   if (btn) btn.disabled = true;
   if (status) status.textContent = "Importing…";
@@ -18900,13 +18919,12 @@ async function runWhatsAppImport() {
       throw new Error(err.detail || "Import failed");
     }
     const data = await res.json();
-    timelineState.data = data;
     const r = data.import || {};
     const msg = `${r.added || 0} new message${r.added === 1 ? "" : "s"} added · ${r.skipped || 0} already on the timeline`;
     if (status) status.textContent = msg;
     toast(msg);
     if (fileEl) fileEl.value = "";
-    renderTimeline();
+    await loadTimeline({ quiet: true });
   } catch (err) {
     if (status) status.textContent = err.message || "Import failed";
     toast(err.message || "Import failed", "error");

@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as FastAPIResponse
@@ -1056,26 +1058,21 @@ async def document_index():
 
 @router.get("/handling/flagged")
 async def list_handling_flagged():
-    """Labs / diagnostic reports that still need handling."""
-    from app.services.clinical_report_handling import (
-        auto_reextract_needs_ocr_for_patient,
-        list_flagged_documents_for_patient,
-    )
+    """Labs / diagnostic reports that still need handling.
+
+    Listing only — OCR stays on POST /handling/refresh so a page load cannot
+    pin the only web worker and 502 the rest of the app.
+    """
+    from app.services.clinical_report_handling import list_flagged_documents_for_patient
 
     ctx = get_active_context()
     patient_id = ctx.get("patient_id")
     if not patient_id:
         return {"items": [], "count": 0, "critical_count": 0}
-    ocr_result = await auto_reextract_needs_ocr_for_patient(
+    return await list_flagged_documents_for_patient(
         patient_id,
         active_case_id=ctx.get("case_id"),
     )
-    payload = await list_flagged_documents_for_patient(
-        patient_id,
-        active_case_id=ctx.get("case_id"),
-    )
-    payload["auto_ocr"] = ocr_result
-    return payload
 
 
 @router.post("/documents/{doc_id}/handling/dismiss")
@@ -4671,7 +4668,7 @@ class PatientCareEventUpdateRequest(BaseModel):
 
 class PatientWhatsAppImportRequest(BaseModel):
     text: str | None = Field(default=None, max_length=5_000_000)
-    zip_base64: str | None = Field(default=None, max_length=60_000_000)
+    zip_base64: str | None = Field(default=None, max_length=12_000_000)
     chat_name: str | None = Field(default=None, max_length=120)
     timezone: str | None = Field(default="America/Toronto", max_length=60)
 
@@ -5359,7 +5356,9 @@ async def api_import_whatsapp_care_events(
     if not text.strip():
         raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)")
     try:
-        messages = parse_whatsapp_export(text, tz_name=body.timezone or "America/Toronto")
+        messages = await asyncio.to_thread(
+            parse_whatsapp_export, text, tz_name=body.timezone or "America/Toronto"
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not read that export: {exc}") from exc
     if not messages:
@@ -5367,8 +5366,10 @@ async def api_import_whatsapp_care_events(
             status_code=400,
             detail="No messages found. Use WhatsApp → group info → Export Chat → Without Media, and upload the .txt.",
         )
-    result = import_patient_care_events(
-        patient_id, messages_to_care_events(messages, chat_name=body.chat_name or "")
+    result = await asyncio.to_thread(
+        import_patient_care_events,
+        patient_id,
+        messages_to_care_events(messages, chat_name=body.chat_name or ""),
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -5385,13 +5386,16 @@ async def api_import_whatsapp_care_events(
             "skipped": result["skipped"],
         },
     )
-    payload = await _timeline_payload(patient_id)
-    payload["import"] = {**result, "messages": len(messages)}
     added = int(result.get("added") or 0)
     if added:
         noun = "message" if added == 1 else "messages"
         _queue_family_push(request, patient_id, body=f"{added} new WhatsApp {noun}")
-    return payload
+    # Do not rebuild the full library-backed timeline here — that SELECT and
+    # lab enrichment on the same request is what 502s the only Render worker.
+    return {
+        "import": {**result, "messages": len(messages)},
+        "patient_id": patient_id,
+    }
 
 
 class PatientLogTileCreateRequest(BaseModel):

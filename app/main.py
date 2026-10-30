@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
@@ -36,6 +36,23 @@ app = FastAPI(
 
 if settings.auth_enabled:
     app.add_middleware(SessionAuthMiddleware)
+
+WHATSAPP_IMPORT_MAX_BYTES = 10_000_000
+
+
+@app.middleware("http")
+async def limit_whatsapp_import_size(request: Request, call_next):
+    if request.method == "POST" and str(request.url.path).endswith("/care-events/import/whatsapp"):
+        raw = request.headers.get("content-length") or ""
+        if raw.isdigit() and int(raw) > WHATSAPP_IMPORT_MAX_BYTES:
+            return JSONResponse(
+                {
+                    "detail": "Export chat without media — that file is too large to import here",
+                },
+                status_code=413,
+            )
+    return await call_next(request)
+
 
 app.include_router(router)
 
