@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 CARE_EVENT_KINDS: dict[str, dict[str, str]] = {
     "visit": {"label": "Practitioner visit", "category": "visit"},
@@ -28,7 +29,7 @@ CARE_EVENT_KINDS: dict[str, dict[str, str]] = {
     "status": {"label": "Status observed", "category": "family"},
     "family_update": {"label": "Family update", "category": "family"},
     "transcript": {"label": "Visit transcript", "category": "visit"},
-    "vitals": {"label": "Vitals check", "category": "care"},
+    "vitals": {"label": "Vitals check", "category": "result"},
     "note": {"label": "Family note", "category": "family"},
 }
 
@@ -492,15 +493,18 @@ def normalize_care_events(raw: Any) -> list[dict[str, Any]]:
     return rows
 
 
+_DEFAULT_TZ = ZoneInfo("America/Toronto")
+
+
 def _sort_key(value: Any) -> str:
-    """Comparable UTC string. Date-only values sort as midday."""
+    """Comparable UTC string. Naive times are local wall clock, not UTC."""
     text = str(value or "")
     if len(text) == 10:
         return f"{text}T12:00:00+00:00"
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=_DEFAULT_TZ)
         return dt.astimezone(timezone.utc).isoformat()
     except ValueError:
         return text
@@ -648,10 +652,159 @@ def _labs_provenance(items: list[dict[str, Any]]) -> str:
     return "From the Labs record"
 
 
+_VITAL_NAME_KEYS = frozenset(
+    {
+        "temperature",
+        "temp",
+        "body temp",
+        "body temperature",
+        "heart rate",
+        "pulse",
+        "hr",
+        "pulse rate",
+        "systolic bp",
+        "diastolic bp",
+        "blood pressure",
+        "bp",
+        "oxygen saturation",
+        "spo2",
+        "o2 sat",
+        "o2",
+        "blood sugar",
+        "blood glucose",
+        "fingerstick",
+        "glucometer",
+    }
+)
+
+
+def is_vital_diagnostic(item: dict[str, Any] | None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("category") or "").strip().lower() == "vital":
+        return True
+    name = str(item.get("name") or "").strip().lower()
+    if not name:
+        return False
+    if name in _VITAL_NAME_KEYS:
+        return True
+    return any(
+        bit in name
+        for bit in (
+            "blood pressure",
+            "heart rate",
+            "oxygen sat",
+            "temperature",
+            "spo2",
+            "blood sugar",
+            "blood glucose",
+        )
+    )
+
+
+def _vital_stamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if "T" in text:
+        return text.replace("Z", "")[:16]
+    return text[:10]
+
+
+def _vital_line(item: dict[str, Any]) -> str:
+    name = str(item.get("name") or "Reading").strip()
+    if item.get("value") is not None:
+        unit = str(item.get("unit") or "").strip()
+        return f"{name}: {_fmt_number(item.get('value'))}{(' ' + unit) if unit else ''}"
+    text = str(item.get("result") or item.get("notes") or "").strip()
+    return f"{name}: {text}" if text else name
+
+
+def _vital_preview(items: list[dict[str, Any]]) -> str:
+    by_name = {str(d.get("name") or "").strip().lower(): d for d in items}
+    parts: list[str] = []
+    temp = by_name.get("temperature") or by_name.get("temp")
+    if temp and temp.get("value") is not None:
+        unit = str(temp.get("unit") or "°C").strip()
+        parts.append(f"{_fmt_number(temp.get('value'))} {unit}".strip())
+    hr = by_name.get("heart rate") or by_name.get("pulse") or by_name.get("hr")
+    if hr and hr.get("value") is not None:
+        unit = str(hr.get("unit") or "bpm").strip()
+        parts.append(f"{_fmt_number(hr.get('value'))} {unit}".strip())
+    sys = by_name.get("systolic bp")
+    dia = by_name.get("diastolic bp")
+    if sys and dia and sys.get("value") is not None and dia.get("value") is not None:
+        unit = str(sys.get("unit") or dia.get("unit") or "mmHg").strip()
+        parts.append(f"{_fmt_number(sys.get('value'))}/{_fmt_number(dia.get('value'))} {unit}".strip())
+    elif sys and sys.get("value") is not None:
+        parts.append(_vital_line(sys))
+    elif dia and dia.get("value") is not None:
+        parts.append(_vital_line(dia))
+    o2 = by_name.get("oxygen saturation") or by_name.get("spo2")
+    if o2 and o2.get("value") is not None:
+        unit = str(o2.get("unit") or "%").strip()
+        parts.append(f"O₂ {_fmt_number(o2.get('value'))}{unit}")
+    sugar = by_name.get("blood sugar") or by_name.get("blood glucose")
+    if sugar and sugar.get("value") is not None:
+        unit = str(sugar.get("unit") or "mmol/L").strip()
+        parts.append(f"{_fmt_number(sugar.get('value'))} {unit}".strip())
+    used = {
+        str((temp or {}).get("name") or "").strip().lower(),
+        str((hr or {}).get("name") or "").strip().lower(),
+        str((sys or {}).get("name") or "").strip().lower() if sys and dia else "",
+        str((dia or {}).get("name") or "").strip().lower() if sys and dia else "",
+        str((o2 or {}).get("name") or "").strip().lower(),
+        str((sugar or {}).get("name") or "").strip().lower(),
+    }
+    for item in items:
+        name = str(item.get("name") or "").strip().lower()
+        if name in used:
+            continue
+        parts.append(_vital_line(item))
+    return " · ".join(part for part in parts if part)
+
+
+def vitals_rows(
+    diagnostics: list[dict[str, Any]] | None,
+    care_events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    covered = {
+        _vital_stamp(ev.get("occurred_at") or ev.get("created_at"))
+        for ev in (care_events or [])
+        if isinstance(ev, dict) and normalize_care_event_kind(ev.get("kind")) == "vitals"
+    }
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in diagnostics or []:
+        if not is_vital_diagnostic(item):
+            continue
+        when = str(item.get("recorded_at") or "").strip()
+        stamp = _vital_stamp(when)
+        if not stamp or stamp in covered:
+            continue
+        groups.setdefault(stamp, []).append(item)
+    rows: list[dict[str, Any]] = []
+    for stamp, items in groups.items():
+        items.sort(key=lambda d: str(d.get("name") or "").lower())
+        at = str(items[0].get("recorded_at") or stamp)
+        preview = _vital_preview(items)
+        rows.append(
+            _row(
+                row_id=f"vitals:{stamp}",
+                at=at,
+                category="result",
+                kind="vitals",
+                kind_label="Vitals check",
+                title=f"Vitals check — {preview}" if preview else "Vitals check",
+                detail="\n".join(_vital_line(d) for d in items),
+                provenance="Logged from Readings",
+                provenance_type="vitals_record",
+            )
+        )
+    return rows
+
+
 def lab_rows(diagnostics: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     by_date: dict[str, list[dict[str, Any]]] = {}
     for d in diagnostics or []:
-        if not isinstance(d, dict):
+        if not isinstance(d, dict) or is_vital_diagnostic(d):
             continue
         when = _date_only(d.get("recorded_at"))
         if not when:
@@ -877,6 +1030,7 @@ def build_timeline(
     documents = [d for d in documents or [] if str(d.get("id")) not in linked]
     rows = [
         *care_event_rows(profile.get("care_events"), profile.get("care_items")),
+        *vitals_rows(profile.get("diagnostics"), profile.get("care_events")),
         *lab_rows(profile.get("diagnostics")),
         *medication_rows(profile.get("medications")),
         *plan_rows(profile.get("care_items")),

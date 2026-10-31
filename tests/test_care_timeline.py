@@ -609,3 +609,104 @@ def test_dismiss_and_restore_any_timeline_row(patient):
     case_manager.restore_timeline_row(patient, visit["id"])
     shown = build_timeline(case_manager.get_patient_profile(patient))
     assert next(r for r in shown if r["id"] == visit["id"])["dismissed"] is False
+
+
+def test_logged_vitals_are_their_own_timeline_row():
+    rows = build_timeline(
+        {
+            "diagnostics": [
+                {
+                    "name": "Temperature",
+                    "value": 37.2,
+                    "unit": "°C",
+                    "recorded_at": "2026-10-31T16:20",
+                    "category": "vital",
+                },
+                {
+                    "name": "Heart rate",
+                    "value": 82,
+                    "unit": "bpm",
+                    "recorded_at": "2026-10-31T16:20",
+                    "category": "vital",
+                },
+                {
+                    "name": "Blood sugar",
+                    "value": 6.2,
+                    "unit": "mmol/L",
+                    "recorded_at": "2026-10-31T16:20",
+                    "category": "vital",
+                },
+                {
+                    "name": "Hemoglobin",
+                    "value": 98,
+                    "unit": "g/L",
+                    "recorded_at": "2026-10-31",
+                },
+            ]
+        }
+    )
+    vitals = [row for row in rows if row["kind"] == "vitals"]
+    labs = [row for row in rows if row["kind"] == "lab_results"]
+    assert len(vitals) == 1
+    assert vitals[0]["category"] == "result"
+    assert "37.2" in vitals[0]["title"]
+    assert "6.2 mmol/L" in vitals[0]["title"]
+    assert "Heart rate: 82 bpm" in vitals[0]["detail"]
+    assert "Blood sugar: 6.2 mmol/L" in vitals[0]["detail"]
+    assert vitals[0]["provenance"] == "Logged from Readings"
+    assert len(labs) == 1
+    assert "Hemoglobin: 98 g/L" in labs[0]["detail"]
+    assert "Temperature" not in labs[0]["detail"]
+
+
+def test_naive_logged_vitals_sort_as_local_time():
+    rows = build_timeline(
+        {
+            "care_events": [
+                {
+                    "id": "w1",
+                    "kind": "family_update",
+                    "occurred_at": "2026-10-31T15:58:00-04:00",
+                    "summary": "Walk",
+                }
+            ],
+            "diagnostics": [
+                {
+                    "name": "Temperature",
+                    "value": 36.8,
+                    "unit": "°C",
+                    "recorded_at": "2026-10-31T16:34",
+                    "category": "vital",
+                }
+            ],
+        }
+    )
+    assert rows[0]["kind"] == "vitals"
+    assert rows[1]["id"] == "care:w1"
+
+
+def test_manual_vitals_event_does_not_duplicate_logged_readings():
+    rows = build_timeline(
+        {
+            "care_events": [
+                {
+                    "id": "v1",
+                    "kind": "vitals",
+                    "occurred_at": "2026-10-31T16:20:00",
+                    "summary": "BP 110/70",
+                }
+            ],
+            "diagnostics": [
+                {
+                    "name": "Systolic BP",
+                    "value": 110,
+                    "unit": "mmHg",
+                    "recorded_at": "2026-10-31T16:20",
+                    "category": "vital",
+                }
+            ],
+        }
+    )
+    vitals = [row for row in rows if row["kind"] == "vitals"]
+    assert len(vitals) == 1
+    assert vitals[0]["id"] == "care:v1"

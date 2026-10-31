@@ -161,4 +161,6 @@ def test_vital_category_for_basic_readings():
     assert _infer_diagnostic_category("Heart rate") == "vital"
     assert _infer_diagnostic_category("Oxygen saturation") == "vital"
     assert _infer_diagnostic_category("Systolic BP") == "vital"
+    assert _infer_diagnostic_category("Blood sugar") == "vital"
+    assert _infer_diagnostic_category("Glucose fasting") == "blood"
     assert _infer_diagnostic_category("Transferrin Saturation") == "blood"

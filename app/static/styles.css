@@ -1150,6 +1150,12 @@ body {
   overflow: hidden;
 }
 
+.vitals-unit-btn.is-wide {
+  width: auto;
+  min-width: 2.7rem;
+  padding: 0.48rem 0.42rem;
+}
+
 .vitals-unit-btn {
   appearance: none;
   width: 2.15rem;

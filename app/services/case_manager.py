@@ -791,6 +791,7 @@ DIAGNOSTIC_PRESETS = [
     {"name": "Temperature", "unit": "°C", "category": "vital"},
     {"name": "Heart rate", "unit": "bpm", "category": "vital"},
     {"name": "Oxygen saturation", "unit": "%", "category": "vital"},
+    {"name": "Blood sugar", "unit": "mmol/L", "category": "vital"},
 ]
 
 
@@ -840,6 +841,8 @@ def _infer_diagnostic_category(name: str, explicit: str | None = None) -> str:
     if "temperature" in lower or lower in {"temp", "body temp", "body temperature"}:
         return "vital"
     if "oxygen" in lower or "spo2" in lower or "o2 sat" in lower:
+        return "vital"
+    if "blood sugar" in lower or "blood glucose" in lower or lower in {"fingerstick", "glucometer"}:
         return "vital"
     return "blood"
 

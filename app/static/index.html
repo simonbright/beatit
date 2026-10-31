@@ -328,6 +328,16 @@
             <span class="vitals-unit">%</span>
           </span>
         </label>
+        <label for="vitals-sugar">Blood sugar
+          <span class="vitals-input-row">
+            <input type="number" id="vitals-sugar" class="input" min="1" max="40" step="0.1" inputmode="decimal" placeholder="e.g. 6.2">
+            <span class="vitals-unit-toggle" role="group" aria-label="Blood sugar unit">
+              <button type="button" class="vitals-unit-btn is-wide active" data-sugar-unit="mmol/L" aria-pressed="true">mmol</button>
+              <button type="button" class="vitals-unit-btn is-wide" data-sugar-unit="mg/dL" aria-pressed="false">mg</button>
+            </span>
+            <input type="hidden" id="vitals-sugar-unit" value="mmol/L">
+          </span>
+        </label>
         <label for="vitals-when">When
           <input type="datetime-local" id="vitals-when" class="input">
         </label>
@@ -1611,15 +1621,16 @@
 
         <div class="timeline-log-wrap">
           <div class="timeline-team-head">
-            <button type="button" class="tl-fold-btn" id="btn-tl-log-fold" aria-expanded="false" aria-controls="timeline-log-body">
+            <button type="button" class="tl-fold-btn" id="btn-tl-log-fold" aria-expanded="true" aria-controls="timeline-log-body">
               <span class="tl-fold-caret" aria-hidden="true"></span>
               <h4>Timeline <span class="muted small" id="timeline-log-count"></span></h4>
             </button>
           </div>
-          <div id="timeline-log-body" class="tl-fold-body hidden">
+          <div id="timeline-log-body" class="tl-fold-body">
         <div class="timeline-filters">
           <div class="timeline-filter-group" role="group" aria-label="Time range">
-            <button type="button" class="btn secondary btn-sm tl-range active" data-range="today">Today</button>
+            <button type="button" class="btn secondary btn-sm tl-range active" data-range="last5">Last 5</button>
+            <button type="button" class="btn ghost btn-sm tl-range" data-range="today">Today</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="3d">3 days</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="7d">7 days</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="30d">30 days</button>

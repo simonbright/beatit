@@ -2227,7 +2227,7 @@ const BUILTIN_LOG_TILES = {
     label: "Readings",
     mode: "open",
     open: "vitals",
-    hint: "temp · HR · BP · O₂",
+    hint: "temp · HR · BP · O₂ · sugar",
     icon: '<svg viewBox="0 0 24 24"><path d="M4 13h3l2-5 3 10 2-5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 4v5M16 6.5h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   },
 };
@@ -12740,10 +12740,110 @@ function clearPatientScopedLogState({ keepPatientId = false, deferRender = false
   }
 }
 
+function isVitalDiagnostic(item) {
+  if (!item) return false;
+  if (String(item.category || "").toLowerCase() === "vital") return true;
+  const name = String(item.name || "").trim().toLowerCase();
+  return (
+    [
+      "temperature",
+      "temp",
+      "heart rate",
+      "pulse",
+      "hr",
+      "systolic bp",
+      "diastolic bp",
+      "blood pressure",
+      "oxygen saturation",
+      "spo2",
+      "blood sugar",
+      "blood glucose",
+    ].includes(name) ||
+    name.includes("blood pressure") ||
+    name.includes("heart rate") ||
+    name.includes("temperature") ||
+    name.includes("oxygen sat") ||
+    name.includes("blood sugar")
+  );
+}
+
+function vitalStamp(iso) {
+  const text = String(iso || "");
+  return text.includes("T") ? text.replace("Z", "").slice(0, 16) : text.slice(0, 10);
+}
+
+function formatVitalGroup(items) {
+  const byName = Object.fromEntries(
+    (items || []).map((d) => [String(d.name || "").trim().toLowerCase(), d])
+  );
+  const parts = [];
+  const temp = byName.temperature || byName.temp;
+  if (temp?.value != null) parts.push(`${temp.value} ${temp.unit || "°C"}`.trim());
+  const hr = byName["heart rate"] || byName.pulse || byName.hr;
+  if (hr?.value != null) parts.push(`${hr.value} ${hr.unit || "bpm"}`.trim());
+  const sys = byName["systolic bp"];
+  const dia = byName["diastolic bp"];
+  if (sys?.value != null && dia?.value != null) {
+    parts.push(`${sys.value}/${dia.value} ${sys.unit || dia.unit || "mmHg"}`.trim());
+  } else if (sys?.value != null) {
+    parts.push(`Sys ${sys.value}`);
+  } else if (dia?.value != null) {
+    parts.push(`Dia ${dia.value}`);
+  }
+  const o2 = byName["oxygen saturation"] || byName.spo2;
+  if (o2?.value != null) parts.push(`O₂ ${o2.value}${o2.unit || "%"}`);
+  const sugar = byName["blood sugar"] || byName["blood glucose"];
+  if (sugar?.value != null) parts.push(`${sugar.value} ${sugar.unit || "mmol/L"}`.trim());
+  const used = new Set(
+    [temp, hr, sys && dia ? sys : null, sys && dia ? dia : null, o2, sugar]
+      .filter(Boolean)
+      .map((d) => String(d.name || "").trim().toLowerCase())
+  );
+  for (const item of items || []) {
+    const name = String(item.name || "").trim().toLowerCase();
+    if (used.has(name) || item.value == null) continue;
+    parts.push(`${item.name}: ${item.value}${item.unit ? ` ${item.unit}` : ""}`);
+  }
+  return parts.join(" · ");
+}
+
+function vitalJournalEntries(diagnostics) {
+  const groups = new Map();
+  for (const item of diagnostics || []) {
+    if (!isVitalDiagnostic(item)) continue;
+    const stamp = vitalStamp(item.recorded_at);
+    if (!stamp) continue;
+    if (!groups.has(stamp)) groups.set(stamp, []);
+    groups.get(stamp).push(item);
+  }
+  return [...groups.entries()].map(([stamp, items]) => ({
+    id: `vital:${stamp}`,
+    kind: "vitals",
+    label: "Vitals",
+    text: formatVitalGroup(items),
+    recorded_at: items[0].recorded_at,
+    created_at: items[0].recorded_at,
+    source: "vital",
+  }));
+}
+
+function isVitalLogEntry(entry) {
+  return String(entry?.id || "").startsWith("vital:") || entry?.source === "vital";
+}
+
 function journalEntriesForActivePatient() {
   if (!state.activePatientId) return [];
   if (state.patientProfileId && state.patientProfileId !== state.activePatientId) return [];
-  return [...(state.patientProfile?.journal || [])];
+  const journal = [...(state.patientProfile?.journal || [])];
+  const taken = new Set(
+    journal
+      .filter((entry) => /vital/i.test(entry.label || "") || entry.kind === "vitals")
+      .map((entry) => vitalStamp(entry.recorded_at || entry.created_at))
+  );
+  const extra = vitalJournalEntries(state.patientProfile?.diagnostics).filter(
+    (entry) => !taken.has(vitalStamp(entry.recorded_at))
+  );
+  return [...journal, ...extra];
 }
 
 function filterJournalByDayRange(entries, days) {
@@ -12834,15 +12934,21 @@ function renderMobileLogListRows(entries) {
   return entries
     .map((j) => {
       const sev = j.severity != null ? ` · ${j.severity}/5` : "";
-      return `<div class="mobile-log-recent-row" data-id="${escapeHtml(j.id)}">
-        <button type="button" class="mobile-log-recent-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
-          <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}
-          <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
-        </button>
-        <div class="mobile-log-recent-row-actions">
+      const readOnly = isVitalLogEntry(j);
+      const detail = j.text && readOnly ? ` <span class="muted small">${escapeHtml(j.text)}</span>` : "";
+      const mainClass = readOnly ? "mobile-log-recent-main" : "mobile-log-recent-main btn-edit-journal";
+      const actions = readOnly
+        ? ""
+        : `<div class="mobile-log-recent-row-actions">
           <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
           <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
-        </div>
+        </div>`;
+      return `<div class="mobile-log-recent-row" data-id="${escapeHtml(j.id)}">
+        <button type="button" class="${mainClass}" data-id="${escapeHtml(j.id)}" ${readOnly ? "" : 'title="Edit this log"'}>
+          <strong>${escapeHtml(j.label || "")}</strong>${escapeHtml(sev)}${detail}
+          <span class="muted small">${escapeHtml(formatJournalDateTime(j.recorded_at))}</span>
+        </button>
+        ${actions}
       </div>`;
     })
     .join("");
@@ -12857,18 +12963,23 @@ function renderMobileLogTimelineRows(entries) {
           const sev = j.severity != null ? `<span class="log-tl-sev">${escapeHtml(String(j.severity))}/5</span>` : "";
           const detail = j.text ? `<span class="muted small log-tl-detail">${escapeHtml(j.text)}</span>` : "";
           const kind = j.kind ? `<span class="journal-kind-tag">${escapeHtml(j.kind)}</span>` : "";
+          const readOnly = isVitalLogEntry(j);
+          const mainClass = readOnly ? "log-tl-main" : "log-tl-main btn-edit-journal";
+          const actions = readOnly
+            ? ""
+            : `<div class="mobile-log-recent-row-actions">
+                <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
+                <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
+              </div>`;
           return `<li class="log-tl-item" data-id="${escapeHtml(j.id)}">
             <time class="log-tl-time" datetime="${escapeHtml(j.recorded_at || "")}">${escapeHtml(formatJournalTimeOnly(j.recorded_at || j.created_at))}</time>
             <div class="log-tl-rail" aria-hidden="true"><span class="log-tl-dot"></span></div>
             <div class="log-tl-body">
-              <button type="button" class="log-tl-main btn-edit-journal" data-id="${escapeHtml(j.id)}" title="Edit this log">
+              <button type="button" class="${mainClass}" data-id="${escapeHtml(j.id)}" ${readOnly ? "" : 'title="Edit this log"'}>
                 <span class="log-tl-label-row">${kind}<strong>${escapeHtml(j.label || "")}</strong>${sev}</span>
                 ${detail}
               </button>
-              <div class="mobile-log-recent-row-actions">
-                <button type="button" class="btn ghost btn-sm btn-edit-journal" data-id="${escapeHtml(j.id)}">Edit</button>
-                <button type="button" class="btn ghost btn-sm btn-delete-journal" data-id="${escapeHtml(j.id)}">Delete</button>
-              </div>
+              ${actions}
             </div>
           </li>`;
         })
@@ -13274,12 +13385,24 @@ function setVitalsTempUnit(unit) {
   const next = unit === "°F" ? "°F" : "°C";
   const hidden = document.getElementById("vitals-temp-unit");
   if (hidden) hidden.value = next;
-  document.querySelectorAll(".vitals-unit-btn").forEach((btn) => {
+  document.querySelectorAll(".vitals-unit-btn[data-temp-unit]").forEach((btn) => {
     const on = btn.dataset.tempUnit === next;
     btn.classList.toggle("active", on);
     btn.setAttribute("aria-pressed", on ? "true" : "false");
   });
   syncVitalsTempBounds();
+}
+
+function setVitalsSugarUnit(unit) {
+  const next = unit === "mg/dL" ? "mg/dL" : "mmol/L";
+  const hidden = document.getElementById("vitals-sugar-unit");
+  if (hidden) hidden.value = next;
+  document.querySelectorAll(".vitals-unit-btn[data-sugar-unit]").forEach((btn) => {
+    const on = btn.dataset.sugarUnit === next;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  syncVitalsSugarBounds();
 }
 
 function resetVitalsModal() {
@@ -13288,13 +13411,16 @@ function resetVitalsModal() {
   const sys = document.getElementById("vitals-bp-sys");
   const dia = document.getElementById("vitals-bp-dia");
   const o2 = document.getElementById("vitals-o2");
+  const sugar = document.getElementById("vitals-sugar");
   const whenEl = document.getElementById("vitals-when");
   if (temp) temp.value = "";
   if (hr) hr.value = "";
   if (sys) sys.value = "";
   if (dia) dia.value = "";
   if (o2) o2.value = "";
+  if (sugar) sugar.value = "";
   setVitalsTempUnit("°C");
+  setVitalsSugarUnit("mmol/L");
   if (whenEl) whenEl.value = toDatetimeLocalValue(new Date());
 }
 
@@ -13310,6 +13436,23 @@ function syncVitalsTempBounds() {
     temp.min = "30";
     temp.max = "45";
     temp.placeholder = "e.g. 37.2";
+  }
+}
+
+function syncVitalsSugarBounds() {
+  const sugar = document.getElementById("vitals-sugar");
+  const unit = document.getElementById("vitals-sugar-unit")?.value || "mmol/L";
+  if (!sugar) return;
+  if (unit === "mg/dL") {
+    sugar.min = "30";
+    sugar.max = "600";
+    sugar.step = "1";
+    sugar.placeholder = "e.g. 112";
+  } else {
+    sugar.min = "1";
+    sugar.max = "40";
+    sugar.step = "0.1";
+    sugar.placeholder = "e.g. 6.2";
   }
 }
 
@@ -13361,13 +13504,16 @@ async function saveVitalsReadings() {
   const sys = readVitalsNumber("vitals-bp-sys");
   const dia = readVitalsNumber("vitals-bp-dia");
   const o2 = readVitalsNumber("vitals-o2");
+  const sugar = readVitalsNumber("vitals-sugar");
   const tempUnit = document.getElementById("vitals-temp-unit")?.value || "°C";
+  const sugarUnit = document.getElementById("vitals-sugar-unit")?.value || "mmol/L";
   const rows = [];
   if (temp != null) rows.push({ name: "Temperature", value: temp, unit: tempUnit });
   if (hr != null) rows.push({ name: "Heart rate", value: hr, unit: "bpm" });
   if (sys != null) rows.push({ name: "Systolic BP", value: sys, unit: "mmHg" });
   if (dia != null) rows.push({ name: "Diastolic BP", value: dia, unit: "mmHg" });
   if (o2 != null) rows.push({ name: "Oxygen saturation", value: o2, unit: "%" });
+  if (sugar != null) rows.push({ name: "Blood sugar", value: sugar, unit: sugarUnit });
   if (!rows.length) return toast("Enter at least one reading", "error");
   if ((sys != null) !== (dia != null)) {
     return toast("Enter both systolic and diastolic for blood pressure", "error");
@@ -13383,6 +13529,7 @@ async function saveVitalsReadings() {
     closeVitalsModal();
     toast(rows.length === 1 ? `${rows[0].name} logged` : `${rows.length} readings logged`);
     if (state.homeSection === "log") renderMobileLogRecent({ softObservations: true });
+    loadTimeline({ quiet: true }).then(() => setTeamFold("timeline-log-body", true));
   } catch (err) {
     toast(err.message || "Could not save readings", "error");
   } finally {
@@ -16672,8 +16819,11 @@ document.getElementById("btn-save-vitals")?.addEventListener("click", () => {
 document.getElementById("modal-vitals")?.addEventListener("click", (event) => {
   if (event.target?.id === "modal-vitals") closeVitalsModal();
 });
-document.querySelectorAll(".vitals-unit-btn").forEach((btn) => {
+document.querySelectorAll(".vitals-unit-btn[data-temp-unit]").forEach((btn) => {
   btn.addEventListener("click", () => setVitalsTempUnit(btn.dataset.tempUnit));
+});
+document.querySelectorAll(".vitals-unit-btn[data-sugar-unit]").forEach((btn) => {
+  btn.addEventListener("click", () => setVitalsSugarUnit(btn.dataset.sugarUnit));
 });
 document.getElementById("btn-close-exercise")?.addEventListener("click", () => closeExerciseModal());
 document.getElementById("btn-cancel-exercise")?.addEventListener("click", () => closeExerciseModal());
@@ -18503,7 +18653,7 @@ const TIMELINE_CAT_FILTER = {
 var timelineState = {
   data: null,
   patientId: null,
-  range: "today",
+  range: "last5",
   cat: "all",
   search: "",
   showChatter: false,
@@ -18557,6 +18707,7 @@ function tlShortWhen(at, hasTime) {
 function tlRangeStart(range) {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (range === "last5") return null;
   if (range === "today") return start;
   if (range === "24h") return new Date(now.getTime() - 24 * 3600 * 1000);
   const days = { "3d": 2, "7d": 6, "30d": 29 }[range];
@@ -18575,7 +18726,7 @@ function tlFilteredEvents() {
   const cats = TIMELINE_CAT_FILTER[timelineState.cat];
   const q = timelineState.search.trim().toLowerCase();
   const who = timelineState.practitioner.trim().toLowerCase();
-  return events.filter((ev) => {
+  const filtered = events.filter((ev) => {
     const dt = tlParseAt(ev.at);
     if (!dt) return false;
     if (start && dt < start && !ev.upcoming) return false;
@@ -18589,6 +18740,10 @@ function tlFilteredEvents() {
     }
     return true;
   });
+  filtered.sort((a, b) => (tlParseAt(b.at)?.getTime() || 0) - (tlParseAt(a.at)?.getTime() || 0));
+  if (timelineState.range !== "last5") return filtered;
+  const past = filtered.filter((ev) => !ev.upcoming);
+  return past.slice(0, 5);
 }
 
 function tlSetToggleGroup(selector, attr, value) {
@@ -19338,7 +19493,7 @@ function renderTimelineList() {
   if (!events.length && !anyFlags) {
     const total = (timelineState.data.events || []).length;
     listEl.innerHTML = `<p class="muted small">${
-      total ? "Nothing matches these filters. Try a longer range or All." : "No entries yet. Log a visit, or import the family WhatsApp group."
+      total ? "Nothing matches these filters. Try Last 5, a longer range, or All." : "No entries yet. Log a visit, or import the family WhatsApp group."
     }</p>`;
     return;
   }
@@ -19352,7 +19507,7 @@ function renderTimelineList() {
       : "";
   };
   // Days in the stay with nothing recorded still get a header, so the gap is visible.
-  if (timelineState.cat === "all" && !timelineState.search && !timelineState.practitioner) {
+  if (timelineState.cat === "all" && timelineState.range !== "last5" && !timelineState.search && !timelineState.practitioner) {
     const start = tlRangeStart(timelineState.range);
     const seen = new Set(past.map((e) => tlDayKey(tlParseAt(e.at))));
     for (const key of Object.keys(dayFlags)) {
@@ -19839,7 +19994,12 @@ function renderTimelineLogCount() {
   const el = document.getElementById("timeline-log-count");
   if (!el) return;
   const n = (timelineState.data?.events || []).length;
-  el.textContent = n ? `· ${n}` : "";
+  const shown = tlFilteredEvents().length;
+  if (!n) {
+    el.textContent = "";
+    return;
+  }
+  el.textContent = timelineState.range === "last5" && n > shown ? `· last ${shown} of ${n}` : `· ${n}`;
 }
 
 function renderTimeline() {
