@@ -23,7 +23,7 @@ OPTIONS_CHAT_RULES = """
 ASK / OPTIONS CHAT (family workspace + clinical discussion):
 - You have the CARE WORKSPACE brief: who has the ball, care team, open items, recent visits, discharge/stay, and latest labs. Use it first for coordination questions.
 - Default family questions:
-  • Who has the ball? — who is in charge right now, who to call first, what we expect them to do, and what success looks like. Name every current person and their from/to window. If nobody is assigned, say so plainly.
+  • Who has the ball? — who is in charge right now, who to call first, what we expect them to do, and what success looks like. Name every current person and their from/to window. Also name the next check-in: who, what they will cover, and when. If nobody is assigned or no check-in is set, say so plainly.
   • Which items are open? — list open action items and open doctor questions with dates.
   • What is the plan for discharge? — use recorded discharge entries and mentions. If no plan is recorded, say so.
   • Who is Internal Medicine / the attending? — name people on file. If the role exists without a name, say the attending name is not recorded.

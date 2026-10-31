@@ -146,6 +146,17 @@ def normalize_ball_holder(raw: Any) -> dict[str, Any] | None:
     }
 
 
+def normalize_ball_checkin(raw: Any) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+    who = _clean(raw.get("who") or raw.get("name") or raw.get("person"), 120)
+    what = _clean(raw.get("what") or raw.get("role") or raw.get("expect") or raw.get("cover"), 240)
+    at = _due(raw.get("at") or raw.get("when") or raw.get("due_at") or raw.get("checkin"))
+    if not who and not what and not at:
+        return None
+    return {"who": who, "what": what, "at": at or ""}
+
+
 def normalize_ball_holders(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
@@ -398,6 +409,18 @@ def build_care_workspace_brief(patient_id: str | None) -> str:
         lines.append(
             "- Nobody is in charge right now. Say that clearly. Tell the family to set Who has the ball on Timeline so everyone knows who to call."
         )
+
+    checkin = normalize_ball_checkin(profile.get("ball_checkin"))
+    lines += ["", "NEXT CHECK-IN (who, what, when):"]
+    if checkin:
+        bits = [checkin["who"] or "who is not set"]
+        if checkin.get("what"):
+            bits.append(f"— {checkin['what']}")
+        if checkin.get("at"):
+            bits.append(f"at {checkin['at']}")
+        lines.append("- " + " ".join(bits))
+    else:
+        lines.append("- No next check-in is set. Tell the family to add who checks in, what they cover, and when.")
 
     lines += ["", "PROFESSIONAL CARE TEAM:"]
     if team:

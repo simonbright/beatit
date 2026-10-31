@@ -20161,6 +20161,57 @@ function ballContactButtons(holder) {
   return `<span class="who-has-ball-actions">${bits.join("")}</span>`;
 }
 
+function currentBallCheckin() {
+  const raw = timelineState.data?.ball_checkin;
+  if (!raw || typeof raw !== "object") return null;
+  if (!raw.who && !raw.what && !raw.at) return null;
+  return raw;
+}
+
+function collectBallCheckin() {
+  return {
+    who: document.getElementById("ball-checkin-who")?.value.trim() || "",
+    what: document.getElementById("ball-checkin-what")?.value.trim() || "",
+    at: careDueValue(
+      document.getElementById("ball-checkin-date")?.value,
+      document.getElementById("ball-checkin-time")?.value
+    ) || "",
+  };
+}
+
+function fillBallCheckinForm() {
+  const checkin = currentBallCheckin() || {};
+  const who = document.getElementById("ball-checkin-who");
+  const what = document.getElementById("ball-checkin-what");
+  const dateEl = document.getElementById("ball-checkin-date");
+  const timeEl = document.getElementById("ball-checkin-time");
+  if (who) who.value = checkin.who || "";
+  if (what) what.value = checkin.what || "";
+  if (dateEl) dateEl.value = careDueDay(checkin.at);
+  if (timeEl) timeEl.value = careDueTime(checkin.at);
+}
+
+function renderBallCheckin() {
+  const el = document.getElementById("ball-checkin");
+  if (!el) return;
+  const checkin = currentBallCheckin();
+  if (!checkin) {
+    el.innerHTML = `<div class="ball-checkin-card is-empty">
+      <h5>Next check-in</h5>
+      <p class="muted small">Not set — tap Update to say who checks in, what they cover, and when.</p>
+    </div>`;
+    return;
+  }
+  const when = checkin.at ? ballDateLabel(checkin.at) : "Time not set";
+  const overdue = checkin.at ? ballUntilStamp(checkin.at) < ballNowStamp() : false;
+  el.innerHTML = `<div class="ball-checkin-card${overdue ? " is-overdue" : ""}">
+    <h5>Next check-in${overdue ? ` <span class="who-has-ball-lead">Overdue</span>` : ""}</h5>
+    <div class="who-has-ball-name-row"><strong>${escapeHtml(checkin.who || "Who is not set")}</strong></div>
+    <span class="who-has-ball-meta"><span class="ball-field-kicker">What</span> ${escapeHtml(checkin.what || "Not set")}</span>
+    <span class="who-has-ball-meta"><span class="ball-field-kicker">When</span> ${escapeHtml(when)}</span>
+  </div>`;
+}
+
 function renderWhoHasBall() {
   const list = document.getElementById("who-has-ball-list");
   if (!list) return;
@@ -20169,6 +20220,7 @@ function renderWhoHasBall() {
   const glyph = `<span class="who-has-ball-glyph" aria-hidden="true">${ballKindEmoji()}</span>`;
   if (!holders.length) {
     list.innerHTML = `<p class="who-has-ball-empty">${glyph} Nobody is in charge — tap Update so everyone knows who to call.</p>`;
+    renderBallCheckin();
     return;
   }
   const many = holders.length > 1;
@@ -20197,6 +20249,7 @@ function renderWhoHasBall() {
       </div>`;
     })
     .join("");
+  renderBallCheckin();
 }
 
 function fillBallWhoList() {
@@ -20277,6 +20330,7 @@ function openBallForm() {
   const holders = timelineState.data?.ball_holders || [];
   fillBallWhoList();
   renderBallKindPicker();
+  fillBallCheckinForm();
   rows.innerHTML = (holders.length ? holders : [{}]).map((h) => ballFormRowHtml(h)).join("");
   renderBallQuickAdd(holders);
   form.classList.remove("hidden");
@@ -20308,12 +20362,13 @@ async function saveBallHolders(event) {
   const pid = state.activePatientId;
   if (!pid) return toast("Select a patient first", "error");
   const holders = collectBallHolders();
+  const checkin = collectBallCheckin();
   try {
     const res = await fetch(`/api/patients/${pid}/ball-holders`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ holders, ball_kind: selectedBallKind() }),
+      body: JSON.stringify({ holders, ball_kind: selectedBallKind(), checkin }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

@@ -4689,6 +4689,7 @@ class PatientCareEventUpdateRequest(BaseModel):
 class PatientBallHoldersRequest(BaseModel):
     holders: list[dict[str, Any]] = Field(default_factory=list)
     ball_kind: str | None = Field(default=None, max_length=40)
+    checkin: dict[str, Any] | None = None
 
 
 class PatientWhatsAppImportRequest(BaseModel):
@@ -4822,6 +4823,7 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         "action_items": profile.get("care_items") or [],
         "ball_holders": profile.get("ball_holders") or [],
         "ball_kind": profile.get("ball_kind") or "basketball",
+        "ball_checkin": profile.get("ball_checkin") or None,
         "ball_kinds": ball_kinds_payload(),
         "last_whatsapp_chat": profile.get("last_whatsapp_chat") or "",
         "local_whatsapp_mac": _local_whatsapp_mac_enabled(),
@@ -5043,7 +5045,12 @@ async def api_set_ball_holders(
     body: PatientBallHoldersRequest,
     request: Request,
 ):
-    profile = set_patient_ball_holders(patient_id, body.holders, ball_kind=body.ball_kind)
+    profile = set_patient_ball_holders(
+        patient_id,
+        body.holders,
+        ball_kind=body.ball_kind,
+        checkin=body.checkin,
+    )
     if profile is None:
         raise HTTPException(status_code=404, detail="Patient not found")
     await _timeline_audit(

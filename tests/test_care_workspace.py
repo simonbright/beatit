@@ -15,6 +15,7 @@ from app.services.care_workspace import (
     current_ball_holders,
     find_internal_medicine_team,
     is_professional_visit_kind,
+    normalize_ball_checkin,
     normalize_ball_holders,
     normalize_ball_kind,
     normalize_visit_actions,
@@ -205,6 +206,23 @@ def test_ball_holders_persist(patient):
     soccer = case_manager.set_patient_ball_holders(patient, saved["ball_holders"], ball_kind="soccer")
     assert soccer["ball_kind"] == "soccer"
     assert case_manager.get_patient_profile(patient)["ball_kind"] == "soccer"
+    with_checkin = case_manager.set_patient_ball_holders(
+        patient,
+        saved["ball_holders"],
+        checkin={"who": "Hadas", "what": "Confirm IM follow-up on biopsy", "at": "2026-11-01T09:00"},
+    )
+    assert with_checkin["ball_checkin"] == {
+        "who": "Hadas",
+        "what": "Confirm IM follow-up on biopsy",
+        "at": "2026-11-01T09:00",
+    }
+    cleared = case_manager.set_patient_ball_holders(patient, saved["ball_holders"], checkin={})
+    assert cleared.get("ball_checkin") in (None, {})
+
+
+def test_normalize_ball_checkin_needs_something():
+    assert normalize_ball_checkin({}) is None
+    assert normalize_ball_checkin({"who": "Simon", "when": "2026-11-01T18:30"})["at"] == "2026-11-01T18:30"
 
 
 def test_ball_kind_defaults_to_basketball():

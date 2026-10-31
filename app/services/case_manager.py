@@ -282,6 +282,7 @@ def _empty_profile() -> dict[str, Any]:
         "dismissed_timeline": [],
         "ball_holders": [],
         "ball_kind": "basketball",
+        "ball_checkin": None,
         "last_whatsapp_chat": "",
         "log_custom_tiles": [],
         "log_tile_order": [],
@@ -456,10 +457,15 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     profile["family_role_history"] = _normalize_role_history(data.get("family_role_history"))
     profile["dismissed_gaps"] = _normalize_dismissed_gaps(data.get("dismissed_gaps"))
     profile["dismissed_timeline"] = _normalize_dismissed_timeline(data.get("dismissed_timeline"))
-    from app.services.care_workspace import normalize_ball_holders, normalize_ball_kind
+    from app.services.care_workspace import (
+        normalize_ball_checkin,
+        normalize_ball_holders,
+        normalize_ball_kind,
+    )
 
     profile["ball_holders"] = normalize_ball_holders(data.get("ball_holders"))
     profile["ball_kind"] = normalize_ball_kind(data.get("ball_kind"))
+    profile["ball_checkin"] = normalize_ball_checkin(data.get("ball_checkin"))
     profile["last_whatsapp_chat"] = " ".join(str(data.get("last_whatsapp_chat") or "").split())[:120]
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
@@ -640,6 +646,7 @@ def save_patient_profile(
         "dismissed_timeline": _normalize_dismissed_timeline(profile.get("dismissed_timeline")),
         "ball_holders": list(profile.get("ball_holders") or []),
         "ball_kind": profile.get("ball_kind") or "basketball",
+        "ball_checkin": profile.get("ball_checkin") or None,
         "last_whatsapp_chat": " ".join(str(profile.get("last_whatsapp_chat") or "").split())[:120],
         "medication_safety": profile.get("medication_safety") or None,
     }
@@ -1988,8 +1995,13 @@ def set_patient_ball_holders(
     holders: list[dict[str, Any]] | None,
     *,
     ball_kind: str | None = None,
+    checkin: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    from app.services.care_workspace import normalize_ball_holders, normalize_ball_kind
+    from app.services.care_workspace import (
+        normalize_ball_checkin,
+        normalize_ball_holders,
+        normalize_ball_kind,
+    )
 
     reg = load_registry()
     if not _find_patient(reg, patient_id):
@@ -1998,6 +2010,8 @@ def set_patient_ball_holders(
     profile["ball_holders"] = normalize_ball_holders(holders)
     if ball_kind is not None:
         profile["ball_kind"] = normalize_ball_kind(ball_kind)
+    if checkin is not None:
+        profile["ball_checkin"] = normalize_ball_checkin(checkin)
     return save_patient_profile(patient_id, profile)
 
 

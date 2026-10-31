@@ -9500,6 +9500,54 @@ body.app-updating-active {
   text-transform: uppercase;
   color: var(--accent-2, var(--accent));
 }
+.ball-checkin { margin-top: 0.55rem; }
+.ball-checkin-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.ball-checkin-card h5 {
+  margin: 0 0 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.ball-checkin-card.is-overdue {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger, #dc2626) 40%, var(--border));
+}
+.ball-checkin-field {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  margin: 0.15rem 0 0;
+  padding: 0.7rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+.ball-checkin-field legend {
+  padding: 0 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+.ball-checkin-when {
+  grid-template-columns: minmax(8rem, 1.2fr) minmax(6.5rem, 0.8fr);
+}
+#ball-checkin,
+.ball-checkin-field {
+  grid-column: 1 / -1;
+}
 .timeline-item.is-dismissed { opacity: 0.55; }
 .tl-closeout-row {
   display: grid;

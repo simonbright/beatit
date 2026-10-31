@@ -1280,6 +1280,7 @@
           <div id="who-has-ball-list" class="who-has-ball-list">
             <p class="who-has-ball-empty">Nobody is in charge — tap Update so everyone knows who to call.</p>
           </div>
+          <div id="ball-checkin" class="ball-checkin"></div>
           <form id="ball-form" class="care-item-form timeline-form hidden" autocomplete="off">
             <div class="ball-kind-field">
               <span class="ball-kind-label">Ball</span>
@@ -1287,6 +1288,19 @@
             </div>
             <div id="ball-quick-add" class="ball-quick-add"></div>
             <div id="ball-form-rows" class="ball-form-rows"></div>
+            <fieldset class="ball-checkin-field">
+              <legend>Next check-in</legend>
+              <label class="ball-field-who">Who
+                <input type="text" id="ball-checkin-who" list="ball-who-list" maxlength="120" placeholder="Who checks in">
+              </label>
+              <label class="ball-field-expect">What
+                <textarea id="ball-checkin-what" maxlength="240" rows="3" placeholder="What they will cover or confirm"></textarea>
+              </label>
+              <div class="ball-form-when ball-checkin-when">
+                <label>Date<input type="date" id="ball-checkin-date"></label>
+                <label>Time<input type="time" id="ball-checkin-time"></label>
+              </div>
+            </fieldset>
             <datalist id="ball-who-list"></datalist>
             <div class="care-item-form-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-ball-add">+ Add person</button>
