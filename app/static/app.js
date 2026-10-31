@@ -5938,6 +5938,16 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+function linkifyHtml(text) {
+  const escaped = escapeHtml(text);
+  return escaped.replace(/\b((?:https?:\/\/|www\.)[^\s<]+)/gi, (raw) => {
+    const trimmed = raw.replace(/[),.;!?]+$/g, "");
+    const trail = raw.slice(trimmed.length);
+    const href = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    return `<a class="ext-link" href="${href}" target="_blank" rel="noopener noreferrer">${trimmed}</a>${trail}`;
+  });
+}
+
 function sourceTagClass(tagText) {
   const lower = String(tagText || "").toLowerCase();
   if (lower.includes("document")) return "source-document";
@@ -9720,6 +9730,12 @@ function renderPatientProfile(profile, patientId, extras = {}) {
   renderMedicationsHome(profile);
   renderCarePlan(profile);
   renderDoctorQuestions(profile);
+  if (typeof renderTimelineActions === "function") {
+    if (timelineState.data) {
+      timelineState.data.action_items = careItemsFromProfile(profile);
+    }
+    renderTimelineActions();
+  }
   renderMedSafetyResult(profile?.medication_safety);
   syncPatientSpecificLogTiles();
   syncMobileLogForLabel();
@@ -10706,7 +10722,7 @@ function renderCarePlanItem(item) {
   const kind = CARE_KIND_LABELS[item.kind] || item.kind || "Other";
   const due = item.due_at ? formatDiagDate(item.due_at) : "No date";
   const contact = item.contact ? escapeHtml(item.contact) : "";
-  const notes = item.notes ? `<p class="care-item-notes-text">${escapeHtml(item.notes)}</p>` : "";
+  const notes = item.notes ? `<p class="care-item-notes-text">${linkifyHtml(item.notes)}</p>` : "";
   const status = item.status || "open";
   return `<article class="care-item-row status-${escapeHtml(status)}${overdue ? " is-overdue" : ""}" data-id="${escapeHtml(item.id || "")}">
     <div class="care-item-main">
@@ -10873,9 +10889,9 @@ function renderDoctorQuestionItem(item) {
     ? `${item.doctor}${item.role ? ` · ${item.role}` : ""}`
     : item.role || "Any doctor";
   const answer = item.answer
-    ? `<p class="question-answer"><strong>Answer:</strong> ${escapeHtml(item.answer)}</p>`
+    ? `<p class="question-answer"><strong>Answer:</strong> ${linkifyHtml(item.answer)}</p>`
     : "";
-  const notes = item.notes ? `<p class="muted small">${escapeHtml(item.notes)}</p>` : "";
+  const notes = item.notes ? `<p class="muted small">${linkifyHtml(item.notes)}</p>` : "";
   const askedBlock =
     status === "asked"
       ? `<label class="question-answer-form">What did they say
@@ -10884,7 +10900,7 @@ function renderDoctorQuestionItem(item) {
       : answer;
   return `<article class="question-item status-${escapeHtml(status)}" data-question-id="${escapeHtml(item.id)}">
     <div class="question-item-main">
-      <p class="question-item-text">${escapeHtml(item.question || "")}</p>
+      <p class="question-item-text">${linkifyHtml(item.question || "")}</p>
       <p class="muted small">${escapeHtml(who)} · ${escapeHtml(QUESTION_STATUS_LABEL[status] || status)}</p>
       ${notes}
       ${askedBlock}
@@ -17804,6 +17820,49 @@ document.getElementById("doctor-questions-list")?.addEventListener("focusout", (
   );
 });
 
+document.getElementById("tl-action-calendar")?.addEventListener("click", (event) => {
+  const cell = event.target.closest("[data-tl-action-day]");
+  if (!cell) return;
+  const day = cell.dataset.tlActionDay;
+  timelineState.actionSelectedDay = timelineState.actionSelectedDay === day ? null : day;
+  renderTimelineActions();
+});
+document.getElementById("btn-tl-action-prev")?.addEventListener("click", () => {
+  const month = ensureActionMonth();
+  timelineState.actionMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+  renderTimelineActions();
+});
+document.getElementById("btn-tl-action-next")?.addEventListener("click", () => {
+  const month = ensureActionMonth();
+  timelineState.actionMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+  renderTimelineActions();
+});
+document.getElementById("btn-tl-action-today")?.addEventListener("click", () => {
+  const now = new Date();
+  timelineState.actionMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  timelineState.actionSelectedDay = careTodayIso();
+  renderTimelineActions();
+});
+document.querySelectorAll(".tl-action-filter").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    timelineState.actionFilter = btn.dataset.actionFilter || "open";
+    renderTimelineActions();
+  });
+});
+document.getElementById("tl-action-list")?.addEventListener("click", async (event) => {
+  const doneBtn = event.target.closest(".tl-action-done");
+  const reopenBtn = event.target.closest(".tl-action-reopen");
+  if (doneBtn) {
+    await patchCareItem(doneBtn.dataset.id, { status: "done" });
+    toast("Marked done");
+    return;
+  }
+  if (reopenBtn) {
+    await patchCareItem(reopenBtn.dataset.id, { status: "open" });
+    toast("Reopened");
+  }
+});
+
 document.getElementById("plan-calendar")?.addEventListener("click", (event) => {
   const cell = event.target.closest("[data-plan-day]");
   if (!cell) return;
@@ -17938,6 +17997,9 @@ var timelineState = {
   gapsExpanded: false,
   updateRange: "today",
   loading: false,
+  actionMonth: null,
+  actionSelectedDay: null,
+  actionFilter: "open",
 };
 
 function tlParseAt(at) {
@@ -18312,7 +18374,7 @@ function renderTimelineEvent(ev) {
   const detail = String(ev.detail || "");
   const long = detail.length > 420;
   const detailHtml = detail
-    ? `<div class="timeline-detail${long ? " is-clamped" : ""}">${escapeHtml(detail)}</div>${
+    ? `<div class="timeline-detail${long ? " is-clamped" : ""}">${linkifyHtml(detail)}</div>${
         long ? `<button type="button" class="btn ghost btn-sm tl-more">Show more</button>` : ""
       }`
     : "";
@@ -18739,7 +18801,151 @@ function runGapAction(idx) {
   if (act?.kind) openTimelineForm(null, { kind: act.kind, day: item.day });
 }
 
+const ACTION_SOURCE_LABEL = {
+  whatsapp: "From chat",
+  visit: "From visit",
+  note: "From note",
+  extracted: "Extracted",
+};
+
+function tlActionItems() {
+  if (Array.isArray(timelineState.data?.action_items)) return timelineState.data.action_items;
+  return careItemsFromProfile(state.patientProfile);
+}
+
+function ensureActionMonth() {
+  if (!(timelineState.actionMonth instanceof Date) || Number.isNaN(timelineState.actionMonth.getTime())) {
+    const now = new Date();
+    timelineState.actionMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  return timelineState.actionMonth;
+}
+
+function renderTimelineActionCalendar(items) {
+  const el = document.getElementById("tl-action-calendar");
+  const label = document.getElementById("tl-action-calendar-label");
+  if (!el) return;
+  const month = ensureActionMonth();
+  const year = month.getFullYear();
+  const monthIdx = month.getMonth();
+  if (label) {
+    label.textContent = month.toLocaleString(undefined, { month: "long", year: "numeric" });
+  }
+  const firstDow = new Date(year, monthIdx, 1).getDay();
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const today = careTodayIso();
+  const byDay = new Map();
+  for (const item of items) {
+    const due = item.due_at;
+    if (!due || !due.startsWith(`${year}-${String(monthIdx + 1).padStart(2, "0")}`)) continue;
+    if (!byDay.has(due)) byDay.set(due, []);
+    byDay.get(due).push(item);
+  }
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    .map((d) => `<div class="plan-cal-dow">${d}</div>`)
+    .join("");
+  let cells = "";
+  for (let i = 0; i < firstDow; i++) cells += `<div class="plan-cal-cell is-empty"></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const dayItems = byDay.get(iso) || [];
+    const overdue = dayItems.some((item) => careItemIsOverdue(item, today));
+    const classes = [
+      "plan-cal-cell",
+      iso === today ? "is-today" : "",
+      iso === timelineState.actionSelectedDay ? "is-selected" : "",
+      dayItems.length ? "has-items" : "",
+      overdue ? "is-overdue" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const dots = dayItems
+      .slice(0, 3)
+      .map(
+        (item) =>
+          `<span class="plan-cal-dot kind-${escapeHtml(item.kind || "other")} status-${escapeHtml(item.status || "open")}"></span>`
+      )
+      .join("");
+    cells += `<button type="button" class="${classes}" data-tl-action-day="${iso}" aria-label="${iso}">
+      <span class="plan-cal-daynum">${day}</span>
+      <span class="plan-cal-dots">${dots}</span>
+    </button>`;
+  }
+  el.innerHTML = `<div class="plan-cal-grid">${weekdays}${cells}</div>`;
+}
+
+function renderTimelineActionRow(item) {
+  const today = careTodayIso();
+  const overdue = careItemIsOverdue(item, today);
+  const kind = CARE_KIND_LABELS[item.kind] || item.kind || "Other";
+  const due = item.due_at ? formatDiagDate(item.due_at) : "No date";
+  const source = ACTION_SOURCE_LABEL[item.source_kind] || (item.source === "extracted" ? "Extracted" : "");
+  const status = item.status || "open";
+  return `<article class="care-item-row timeline-action-row status-${escapeHtml(status)}${overdue ? " is-overdue" : ""}" data-id="${escapeHtml(item.id || "")}">
+    <div class="care-item-main">
+      <div class="care-item-title-row">
+        <strong>${linkifyHtml(item.title || "")}</strong>
+        <span class="care-kind-pill">${escapeHtml(kind)}</span>
+        ${source ? `<span class="care-source-pill">${escapeHtml(source)}</span>` : ""}
+        ${overdue ? `<span class="care-overdue-pill">Overdue</span>` : ""}
+        ${status === "done" ? `<span class="care-done-pill">Done</span>` : ""}
+      </div>
+      <p class="care-item-meta">${escapeHtml(due)}${item.contact ? ` · ${escapeHtml(item.contact)}` : ""}</p>
+      ${item.notes ? `<p class="care-item-notes-text">${linkifyHtml(item.notes)}</p>` : ""}
+    </div>
+    <div class="care-item-actions">
+      ${
+        status === "open"
+          ? `<button type="button" class="btn secondary btn-sm tl-action-done" data-id="${escapeHtml(item.id)}">Done</button>`
+          : `<button type="button" class="btn ghost btn-sm tl-action-reopen" data-id="${escapeHtml(item.id)}">Reopen</button>`
+      }
+    </div>
+  </article>`;
+}
+
+function renderTimelineActions() {
+  const listEl = document.getElementById("tl-action-list");
+  const countEl = document.getElementById("tl-action-count");
+  const selectedEl = document.getElementById("tl-action-selected");
+  if (!listEl) return;
+  document.querySelectorAll(".tl-action-filter").forEach((btn) => {
+    const active = btn.dataset.actionFilter === (timelineState.actionFilter || "open");
+    btn.classList.toggle("active", active);
+    btn.classList.toggle("secondary", active);
+    btn.classList.toggle("ghost", !active);
+  });
+  const items = tlActionItems();
+  renderTimelineActionCalendar(items);
+  const openCount = items.filter((item) => (item.status || "open") === "open").length;
+  const overdueCount = items.filter((item) => careItemIsOverdue(item)).length;
+  if (countEl) {
+    countEl.textContent = openCount
+      ? `· ${openCount} open${overdueCount ? `, ${overdueCount} overdue` : ""}`
+      : "";
+  }
+  if (selectedEl) {
+    selectedEl.textContent = timelineState.actionSelectedDay
+      ? `Showing ${formatDiagDate(timelineState.actionSelectedDay) || timelineState.actionSelectedDay} · tap the day again to clear`
+      : "";
+  }
+  const filtered = filterCareItems(items, timelineState.actionFilter || "open", timelineState.actionSelectedDay);
+  if (!filtered.length) {
+    listEl.innerHTML = `<p class="muted small">${
+      timelineState.actionSelectedDay
+        ? "Nothing on this day."
+        : timelineState.actionFilter === "overdue"
+          ? "No overdue items."
+          : timelineState.actionFilter === "done"
+            ? "No completed items yet."
+            : "No open action items. They appear from chats and doctor notes."
+    }</p>`;
+    return;
+  }
+  listEl.innerHTML = filtered.map((item) => renderTimelineActionRow(item)).join("");
+}
+
 function renderTimeline() {
+  renderTimelineActions();
   renderTimelineGaps();
   renderFamilyTeam();
   renderTimelineTeam();

@@ -1660,6 +1660,10 @@ def _normalize_care_item(raw: dict[str, Any]) -> dict[str, Any] | None:
         "updated_at": str(raw.get("updated_at") or raw.get("created_at") or _now_iso()),
         "completed_at": str(raw.get("completed_at") or "") or None,
         "activity": _normalize_care_item_activity(raw.get("activity")),
+        "source": (str(raw.get("source") or "").strip()[:20] or None),
+        "source_ref": (str(raw.get("source_ref") or "").strip()[:80] or None),
+        "source_event_id": (str(raw.get("source_event_id") or "").strip()[:80] or None),
+        "source_kind": (str(raw.get("source_kind") or "").strip()[:20] or None),
     }
 
 
@@ -2379,6 +2383,12 @@ def add_patient_care_event(
     profile["care_events"] = events
     _ensure_team_member(profile, entry.get("practitioner"), entry.get("role"), entry.get("location"))
     save_patient_profile(patient_id, profile, reload=False)
+    try:
+        from app.services.action_items import harvest_event_actions
+
+        harvest_event_actions(patient_id, entry)
+    except Exception:
+        pass
     return entry
 
 
@@ -2420,6 +2430,8 @@ def update_patient_care_event(
         entry[key] = value
     if not str(entry.get("summary") or "").strip() and not str(entry.get("practitioner") or "").strip():
         raise ValueError("Add who was in or what happened")
+    if "summary" in fields:
+        entry["actions_scanned"] = False
     entry["updated_at"] = _now_iso()
     entry["updated_by"] = updated_by
     normalized = normalize_care_event(entry)
@@ -2431,6 +2443,13 @@ def update_patient_care_event(
         profile, normalized.get("practitioner"), normalized.get("role"), normalized.get("location")
     )
     save_patient_profile(patient_id, profile, reload=False)
+    if "summary" in fields:
+        try:
+            from app.services.action_items import harvest_event_actions
+
+            harvest_event_actions(patient_id, normalized)
+        except Exception:
+            pass
     return normalized
 
 
@@ -2497,6 +2516,13 @@ def import_patient_care_events(
         added += 1
     profile["care_events"] = events
     save_patient_profile(patient_id, profile, reload=False)
+    if added:
+        try:
+            from app.services.action_items import harvest_unscanned_events
+
+            harvest_unscanned_events(patient_id)
+        except Exception:
+            pass
     return {"added": added, "skipped": skipped, "total": len(events)}
 
 

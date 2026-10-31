@@ -402,6 +402,7 @@ def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "source": _clean(raw.get("source"), 20) or "manual",
         "source_ref": _clean(raw.get("source_ref"), 80) or None,
         "minor": bool(raw.get("minor")),
+        "actions_scanned": bool(raw.get("actions_scanned")),
         "created_at": str(raw.get("created_at") or _now_iso()),
         "updated_at": str(raw.get("updated_at") or "") or None,
         "updated_by": _clean(raw.get("updated_by"), 120) or None,

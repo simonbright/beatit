@@ -4724,7 +4724,9 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         linkable_documents,
     )
     from app.services.patient_documents import list_patient_documents
+    from app.services.action_items import harvest_unscanned_events
 
+    await asyncio.to_thread(harvest_unscanned_events, patient_id)
     profile = get_patient_profile(patient_id)
     try:
         active = get_active_context()
@@ -4774,6 +4776,7 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
             | {m["name"] for m in members}
         ),
         "documents": linkable_documents(documents),
+        "action_items": profile.get("care_items") or [],
         "counts": {
             "care_events": len(care_events),
             "whatsapp": sum(1 for e in care_events if e.get("source") == "whatsapp"),
@@ -5309,6 +5312,24 @@ async def api_import_visit_transcript(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        from app.services.action_items import extract_visit_actions_llm, harvest_event_actions
+
+        extra_text = "\n\n".join(body for _name, body in note_chunks if (body or "").strip())
+        llm_items = await extract_visit_actions_llm(
+            extra_text or summary,
+            llm=llm,
+            occurred_at=occurred,
+            who=who,
+            role=body.role or "",
+            source_event_id=(entry or {}).get("id"),
+        )
+        if entry:
+            harvest_event_actions(
+                patient_id, entry, extra_text=extra_text, extra_items=llm_items
+            )
+    except Exception:
+        pass
     await _timeline_audit(
         request,
         TIMELINE_EVENT_ADDED,

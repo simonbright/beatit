@@ -1165,7 +1165,7 @@
         <div class="row-between wrap timeline-head">
           <div>
             <h3>Family timeline</h3>
-            <p class="muted small">What happened, who was in, and where each fact came from. Visit notes can be summarized into bullets; every entry still shows its source.</p>
+            <p class="muted small">What happened, who was in, and where each fact came from. Visit notes can be summarized into bullets; links stay clickable; every entry still shows its source.</p>
           </div>
           <div class="timeline-head-actions">
             <button type="button" class="btn primary btn-sm" id="btn-timeline-log">+ Log what happened</button>
@@ -1174,6 +1174,35 @@
             <button type="button" class="btn ghost btn-sm" id="btn-timeline-import">Import WhatsApp</button>
           </div>
         </div>
+
+        <section id="timeline-actions" class="timeline-actions-board" aria-label="Action items">
+          <div class="timeline-team-head">
+            <h4>Action items <span class="muted small" id="tl-action-count"></span></h4>
+            <div class="timeline-filter-group" role="group" aria-label="Action item filter">
+              <button type="button" class="btn secondary btn-sm tl-action-filter active" data-action-filter="open">Open</button>
+              <button type="button" class="btn ghost btn-sm tl-action-filter" data-action-filter="overdue">Overdue</button>
+              <button type="button" class="btn ghost btn-sm tl-action-filter" data-action-filter="done">Done</button>
+            </div>
+          </div>
+          <p class="muted small">Pulled from chats and doctor notes — tap a day to see what is due.</p>
+          <div class="timeline-actions-layout">
+            <div class="plan-calendar-wrap">
+              <div class="plan-calendar-header">
+                <button type="button" class="btn ghost btn-sm" id="btn-tl-action-prev" aria-label="Previous month">‹</button>
+                <h4 id="tl-action-calendar-label">Month</h4>
+                <button type="button" class="btn ghost btn-sm" id="btn-tl-action-next" aria-label="Next month">›</button>
+                <button type="button" class="btn secondary btn-sm" id="btn-tl-action-today">Today</button>
+              </div>
+              <div id="tl-action-calendar" class="plan-calendar" aria-label="Action calendar"></div>
+            </div>
+            <div class="timeline-actions-list-wrap">
+              <p id="tl-action-selected" class="muted small plan-selected-day"></p>
+              <div id="tl-action-list" class="plan-items-list timeline-action-list">
+                <p class="muted small">Action items from chats and visit notes will show here.</p>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <div id="push-prompt" class="push-prompt hidden" role="status">
           <div>
