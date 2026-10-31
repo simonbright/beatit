@@ -28,6 +28,7 @@ CARE_EVENT_KINDS: dict[str, dict[str, str]] = {
     "status": {"label": "Status observed", "category": "family"},
     "family_update": {"label": "Family update", "category": "family"},
     "transcript": {"label": "Visit transcript", "category": "visit"},
+    "vitals": {"label": "Vitals check", "category": "care"},
     "note": {"label": "Family note", "category": "family"},
 }
 
@@ -546,7 +547,15 @@ def _row(
     return row
 
 
-def care_event_rows(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def care_event_rows(
+    events: list[dict[str, Any]] | None,
+    care_items: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    by_event: dict[str, list[dict[str, Any]]] = {}
+    for item in care_items or []:
+        eid = str(item.get("source_event_id") or "")
+        if eid:
+            by_event.setdefault(eid, []).append(item)
     rows: list[dict[str, Any]] = []
     for ev in events or []:
         meta = CARE_EVENT_KINDS.get(ev.get("kind") or "note", CARE_EVENT_KINDS["note"])
@@ -598,6 +607,16 @@ def care_event_rows(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]
                 source_document_title=ev.get("source_document_title"),
                 source_documents=ev.get("source_documents") or [],
                 summary_source=ev.get("summary_source"),
+                closeout_actions=[
+                    {
+                        "id": a.get("id"),
+                        "title": a.get("title"),
+                        "due_at": a.get("due_at"),
+                        "status": a.get("status") or "open",
+                        "contact": a.get("contact") or "",
+                    }
+                    for a in by_event.get(ev["id"], [])
+                ],
             )
         )
     return rows
@@ -845,7 +864,7 @@ def build_timeline(
                 linked.add(str(doc["id"]))
     documents = [d for d in documents or [] if str(d.get("id")) not in linked]
     rows = [
-        *care_event_rows(profile.get("care_events")),
+        *care_event_rows(profile.get("care_events"), profile.get("care_items")),
         *lab_rows(profile.get("diagnostics")),
         *medication_rows(profile.get("medications")),
         *plan_rows(profile.get("care_items")),

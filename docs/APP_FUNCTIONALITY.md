@@ -20,7 +20,7 @@ Live production: [brighthealth.onrender.com](https://brighthealth.onrender.com) 
 | **Log** | Feelings, symptoms, meds taken, food/drink, exercise — quick tiles + journal |
 | **Timeline** | Facts-only family timeline: who was in, tests, moves, meds, family updates — each with its source; WhatsApp import; copyable family update |
 | **Questions** | What to ask which doctor; copy a list before the visit; mark asked / answered |
-| **AI Chat** | Multi-turn treatment discussion scoped to library + Home assessment |
+| **Ask** | Family agent over the whole stay — who has the ball, open items, discharge, Internal Medicine / attending — plus deeper treatment discussion |
 | **Custom Tasks** | Focused draft analyses you can promote to the record |
 | **Imaging vision** | Optional Ollama vision reads of selected DICOM slices |
 | **PDF export** | Assessments, logs, meds, labs, coverage, and multi-section bundles |
@@ -31,9 +31,9 @@ Live production: [brighthealth.onrender.com](https://brighthealth.onrender.com) 
 
 ## Global shell
 
-- **Views:** **Simple** (default) shows **Log** (heart), Timeline, Labs, and Questions. A header toggle switches to **Advanced** (Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings). The choice is remembered.
-- **Main tabs (Advanced):** Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings
-- **Header:** Simple/Advanced toggle, patient photo/name (switch who/case), Export PDF, AI Chat, update notifications, How are you?, How-to, day/night theme, Sign out
+- **Views:** **Simple** (default) shows **Log** (heart), Timeline, **Ask**, Labs, and Questions. A header toggle switches to **Advanced** (Home · Labs · Plan · Timeline · Ask · Questions · Tasks · Library · Settings). The choice is remembered.
+- **Main tabs (Advanced):** Home · Labs · Plan · Timeline · Ask · Questions · Tasks · Library · Settings
+- **Header:** Simple/Advanced toggle, patient photo/name (switch who/case), Export PDF, Ask, update notifications, How are you?, How-to, day/night theme, Sign out
 - **Status:** LLM connection pill, background job bar, toasts, version footer
 - **Export PDF modal:** Choose Assessment / Logs / Medications / Labs (All or None); empty sections are skipped; log range defaults to last 7 days (Today → All)
 
@@ -230,14 +230,14 @@ Separate from the overall Home assessment:
 
 ---
 
-## 12. AI Chat
+## 12. Ask
 
-Multi-turn **treatment-options** discussion:
+Family agent over the whole stay, plus deeper treatment discussion:
 
-- Scoped to selected library documents + current Home assessment
-- New / list / delete sessions; starter prompts
-- Pin reply excerpts for the next analysis; save to library; copy
-- **Update Home** on a reply (pins + refreshes the main assessment)
+- Default questions: **Who has the ball?**, **Which items are open?**, **What is the plan for discharge?**, **Who is the Internal Medicine care team / attending?**
+- Uses the timeline, who has the ball, care/family team, open actions, doctor questions, stay/discharge notes, labs, library, and the current Home assessment
+- On Simple as its own **Ask** tab; same defaults also sit on Timeline
+- New / list / delete sessions; pin excerpts; **Update Home** on a reply
 - Can ask the model to read a document by name
 
 Chat does **not** auto-replace Home unless you Update Home / promote.
@@ -304,9 +304,11 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 - **Care team** cards: everyone in the directory or recorded on a visit — role, places, when they were last in, number of contacts. Tap one to filter the timeline to that person; dashed cards are people recorded on visits but not yet added to the team.
 - Filters: Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search.
 - Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
-- **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role) while keeping the original text and sender.
+- **Who has the ball** stays at the top of Timeline: one or more people, each with a since date (and optional until). Empty is shown as “nobody assigned.”
+- Every staff visit (practitioner visit, call, family meeting, procedure, recorded notes) must close with at least one next action and a date.
+- **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role, or **vitals check**) while keeping the original text and sender.
 - **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
-- **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added.
+- **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added. The import panel hides when it finishes.
 
 Timeline entries are patient-wide (not case-scoped) and stored in the patient profile (`care_events`). Add, edit, delete and imports are written to the audit trail (Settings → Audit → *timeline*).
 

@@ -17,28 +17,28 @@ from app.services.synthesis import (
 from app.storage.database import Database
 from app.storage.documents import DocumentStore
 
+from app.services.care_workspace import CARE_STARTER_PROMPTS
+
 OPTIONS_CHAT_RULES = """
-OPTIONS CHAT MODE (live guided discussion):
-- Your job is deep analysis of clinical OPTIONS for this case — surgery, systemic therapy, radiation, clinical trials, molecular testing, staging workup, and sequencing — AND lab-informed practical questions (e.g. iron dosing given ferritin/Hb).
-- Follow the user's lead. When they ask to go deeper on one option, regimen, trial class, biomarker, dose, or trade-off, do so thoroughly.
-- Prefer structured comparisons when helpful: eligibility, evidence strength, practical requirements, unknowns, and what would change the recommendation.
+ASK / OPTIONS CHAT (family workspace + clinical discussion):
+- You have the CARE WORKSPACE brief: who has the ball, care team, open items, recent visits, discharge/stay, and latest labs. Use it first for coordination questions.
+- Default family questions:
+  • Who has the ball? — list every current holder with name, role if any, and since/until dates. If nobody is assigned, say so plainly.
+  • Which items are open? — list open action items and open doctor questions with dates.
+  • What is the plan for discharge? — use recorded discharge entries and mentions. If no plan is recorded, say so.
+  • Who is Internal Medicine / the attending? — name people on file. If the role exists without a name, say the attending name is not recorded.
+- For clinical OPTIONS (surgery, systemic therapy, radiation, trials, biomarkers, labs), go deep when the user asks.
 - Separate what is documented in the chart from guideline/general specialty knowledge and from AI inference.
-- Do not invent labs, imaging, staging, or biomarker results that are absent from STORED DOCUMENTS / CURRENT ASSESSMENT / FOCUS DOCUMENTS / PATIENT TRACKED DATA.
-- When the user asks about a dose or supplement (iron, vitamin D, B12, etc.), quote the latest related labs from PATIENT TRACKED DATA with dates. If those labs are missing, name them and explain why they matter before any dosing discussion. Prefer MedlinePlus for general education links. Do not issue a hard prescription.
-- When FOCUS DOCUMENTS are provided, prioritize those; they were explicitly requested by the user.
-- Ask a brief clarifying question when a fork in the analysis would materially change the option set — but still give a useful partial answer.
-- Keep responses conversational enough for live guidance, but clinically precise. Use short headings and bullets when comparing options.
+- Do not invent labs, imaging, staging, names, or dates that are absent from CARE WORKSPACE / STORED DOCUMENTS / CURRENT ASSESSMENT / FOCUS DOCUMENTS / PATIENT TRACKED DATA.
+- When the user asks about a dose or supplement, quote the latest related labs with dates. If missing, name them first. Prefer MedlinePlus for general education links. Do not issue a hard prescription.
+- When FOCUS DOCUMENTS are provided, prioritize those.
+- Ask a brief clarifying question when a fork would change the answer — but still give a useful partial answer.
+- Keep answers short and dated. Use headings and bullets. Name people and dates.
 - Cite claims with [SOURCE: …] tags using the source attribution rules below.
-- This chat does NOT automatically replace the Home assessment. When the user wants the main assessment updated, tell them to use “Update Home assessment” (or pin excerpts and run Update analysis on Home).
+- This chat does NOT automatically replace the Home assessment. When the user wants the main assessment updated, tell them to use “Update Home assessment”.
 """
 
-OPTIONS_STARTER_PROMPTS = [
-    "Compare the realistic treatment options for this case given current staging and workup.",
-    "Go deep on systemic therapy options — regimens, sequencing, and what biomarkers would change the choice.",
-    "What clinical trials or investigational approaches could fit this patient, and what eligibility gaps remain?",
-    "Walk through surgical vs non-surgical pathways and the decision points between them.",
-    "List the molecular / staging tests that would most change the option set, ranked by impact.",
-]
+OPTIONS_STARTER_PROMPTS = list(CARE_STARTER_PROMPTS)
 
 _READ_DOC_HINT = re.compile(
     r"\b(read|open|look at|review|check|summarize|analyse|analyze|extract|ocr)\b",
@@ -253,8 +253,21 @@ class OptionsChatService:
             if focus_block:
                 focus_block = f"\n\n{focus_block}\n"
 
+        workspace_block = ""
+        try:
+            from app.services.case_manager import get_active_context
+            from app.services.care_workspace import build_care_workspace_brief
+
+            ctx = get_active_context()
+            brief = build_care_workspace_brief(ctx.get("patient_id"))
+            if brief:
+                workspace_block = f"\n\n{brief}\n"
+        except Exception:
+            workspace_block = ""
+
         return (
             f"{medical}\n\n{OPTIONS_CHAT_RULES}\n\n{SOURCE_ATTRIBUTION_RULES}\n"
+            f"{workspace_block}"
             f"{assessment_block}\n"
             f"{focus_block}"
             f"=== DOCUMENT INVENTORY ===\n{inventory}\n\n"

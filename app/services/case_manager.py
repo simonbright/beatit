@@ -278,6 +278,7 @@ def _empty_profile() -> dict[str, Any]:
         "family_team": [],
         "family_role_history": [],
         "dismissed_gaps": [],
+        "ball_holders": [],
         "log_custom_tiles": [],
         "log_tile_order": [],
         "log_tile_hidden": [],
@@ -450,6 +451,9 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     profile["family_team"] = _normalize_family(data.get("family_team"))
     profile["family_role_history"] = _normalize_role_history(data.get("family_role_history"))
     profile["dismissed_gaps"] = _normalize_dismissed_gaps(data.get("dismissed_gaps"))
+    from app.services.care_workspace import normalize_ball_holders
+
+    profile["ball_holders"] = normalize_ball_holders(data.get("ball_holders"))
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
@@ -626,6 +630,7 @@ def save_patient_profile(
         "family_team": _normalize_family(profile.get("family_team")),
         "family_role_history": _normalize_role_history(profile.get("family_role_history")),
         "dismissed_gaps": _normalize_dismissed_gaps(profile.get("dismissed_gaps")),
+        "ball_holders": list(profile.get("ball_holders") or []),
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
@@ -1866,6 +1871,9 @@ def add_patient_care_item(
     due_at: str | None = None,
     notes: str | None = None,
     contact: str | None = None,
+    source: str | None = None,
+    source_event_id: str | None = None,
+    source_kind: str | None = None,
 ) -> dict[str, Any] | None:
     from uuid import uuid4
 
@@ -1888,6 +1896,9 @@ def add_patient_care_item(
             "created_at": now,
             "updated_at": now,
             "activity": [],
+            "source": source,
+            "source_event_id": source_event_id,
+            "source_kind": source_kind,
         }
     )
     if not entry:
@@ -1898,6 +1909,75 @@ def add_patient_care_item(
     profile["care_items"] = items
     saved = save_patient_profile(patient_id, profile)
     return next((i for i in saved.get("care_items") or [] if i.get("id") == entry["id"]), entry)
+
+
+def set_patient_ball_holders(patient_id: str, holders: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    from app.services.care_workspace import normalize_ball_holders
+
+    reg = load_registry()
+    if not _find_patient(reg, patient_id):
+        return None
+    profile = get_patient_profile(patient_id)
+    profile["ball_holders"] = normalize_ball_holders(holders)
+    return save_patient_profile(patient_id, profile)
+
+
+def event_closeout_items(profile: dict[str, Any], event_id: str) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in (profile.get("care_items") or [])
+        if item.get("source_event_id") == event_id and item.get("status") == "open"
+    ]
+
+
+def attach_event_actions(
+    patient_id: str,
+    event_id: str,
+    actions: list[dict[str, Any]] | None,
+    *,
+    source_kind: str = "visit",
+) -> list[dict[str, Any]]:
+    from app.services.care_workspace import normalize_visit_actions
+
+    cleaned = normalize_visit_actions(actions)
+    if not cleaned:
+        return []
+    profile = get_patient_profile(patient_id)
+    items = list(profile.get("care_items") or [])
+    existing = {
+        ((item.get("title") or "").lower(), item.get("due_at") or "")
+        for item in items
+        if item.get("source_event_id") == event_id
+    }
+    now = _now_iso()
+    added: list[dict[str, Any]] = []
+    for act in cleaned:
+        key = (act["title"].lower(), act.get("due_at") or "")
+        if key in existing:
+            continue
+        item = _normalize_care_item(
+            {
+                "title": act["title"],
+                "due_at": act.get("due_at"),
+                "notes": act.get("notes") or "",
+                "kind": "follow_up",
+                "status": "open",
+                "source": "visit",
+                "source_event_id": event_id,
+                "source_kind": source_kind,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        if not item:
+            continue
+        items.append(item)
+        added.append(item)
+        existing.add(key)
+    if added:
+        profile["care_items"] = items
+        save_patient_profile(patient_id, profile, reload=False)
+    return added
 
 
 def update_patient_care_item(

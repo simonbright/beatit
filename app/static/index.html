@@ -71,7 +71,7 @@
           </svg>
         </button>
         <div class="status-pill hidden" id="llm-status" aria-live="polite"></div>
-        <button type="button" class="header-icon-btn" id="btn-header-chat" aria-label="AI Chat" title="AI Chat">
+        <button type="button" class="header-icon-btn" id="btn-header-chat" aria-label="Ask" title="Ask about this stay">
           <svg class="header-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
           </svg>
@@ -132,6 +132,10 @@
         <button class="tab tab-icon active" data-tab="timeline" data-simple-tab role="tab" aria-selected="true" title="Family timeline" aria-label="Timeline">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="6" cy="7" r="2.2" fill="currentColor"/><circle cx="6" cy="17" r="2.2" fill="currentColor"/><path d="M11 7h9M11 12h6M11 17h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="tab-icon-label">Timeline</span>
+        </button>
+        <button class="tab tab-icon" data-tab="options-chat" data-simple-tab role="tab" title="Ask about this stay" aria-label="Ask">
+          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="tab-icon-label">Ask</span>
         </button>
         <button class="tab tab-icon" data-tab="questions" data-simple-tab role="tab" title="Questions for the doctor" aria-label="Questions">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.2 9a3 3 0 0 1 5.6 1c0 2-2.8 2.4-2.8 4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor"/></svg>
@@ -1234,6 +1238,39 @@
           </div>
         </div>
 
+        <section id="who-has-ball" class="who-has-ball" aria-label="Who has the ball">
+          <div class="timeline-team-head">
+            <h4>Who has the ball</h4>
+            <button type="button" class="btn ghost btn-sm" id="btn-ball-edit">Update</button>
+          </div>
+          <p class="muted small">The person or people who own the next move — always named, with dates.</p>
+          <div id="who-has-ball-list" class="who-has-ball-list">
+            <p class="who-has-ball-empty">Nobody assigned — tap Update so the family can see.</p>
+          </div>
+          <form id="ball-form" class="care-item-form timeline-form hidden" autocomplete="off">
+            <div id="ball-form-rows" class="ball-form-rows"></div>
+            <div class="care-item-form-actions">
+              <button type="button" class="btn ghost btn-sm" id="btn-ball-add">+ Add person</button>
+              <button type="submit" class="btn primary" id="btn-ball-save">Save</button>
+              <button type="button" class="btn ghost" id="btn-ball-cancel">Cancel</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="timeline-ask" class="timeline-ask" aria-label="Ask about this stay">
+          <div class="timeline-team-head">
+            <h4>Ask</h4>
+            <button type="button" class="btn ghost btn-sm" id="btn-timeline-ask">Open Ask</button>
+          </div>
+          <p class="muted small">The agent can see the timeline, team, open items, labs, and discharge notes.</p>
+          <div class="timeline-ask-chips" id="timeline-ask-chips">
+            <button type="button" class="btn secondary btn-sm" data-care-ask="Who has the ball?">Who has the ball?</button>
+            <button type="button" class="btn secondary btn-sm" data-care-ask="Which items are open?">Which items are open?</button>
+            <button type="button" class="btn secondary btn-sm" data-care-ask="What is the plan for discharge?">Plan for discharge?</button>
+            <button type="button" class="btn secondary btn-sm" data-care-ask="Who is the Internal Medicine care team / attending?">Internal Medicine team?</button>
+          </div>
+        </section>
+
         <section id="timeline-actions" class="timeline-actions-board" aria-label="Action items">
           <div class="timeline-team-head">
             <h4>Action items <span class="muted small" id="tl-action-count"></span></h4>
@@ -1278,6 +1315,10 @@
           <label for="tl-kind">What
             <select id="tl-kind"></select>
           </label>
+          <label id="tl-vitals-check-wrap" class="tl-vitals-check hidden">
+            <input type="checkbox" id="tl-vitals-check">
+            <span>This is a vitals check</span>
+          </label>
           <label for="tl-when">When
             <input type="datetime-local" id="tl-when">
           </label>
@@ -1306,6 +1347,12 @@
           <label for="tl-extra" class="care-item-notes">…or paste longer notes
             <textarea id="tl-extra" rows="4" placeholder="Paste visit notes or a transcript if you have them"></textarea>
           </label>
+          <fieldset id="tl-closeout" class="tl-closeout hidden">
+            <legend>What happens next</legend>
+            <p class="muted small">Every staff visit ends with at least one action and a date.</p>
+            <div id="tl-closeout-rows" class="tl-closeout-rows"></div>
+            <button type="button" class="btn ghost btn-sm" id="btn-tl-add-action">+ Add action</button>
+          </fieldset>
           <div class="care-item-form-actions">
             <button type="submit" class="btn primary" id="btn-tl-save">Add to timeline</button>
             <button type="button" class="btn ghost" id="btn-tl-cancel">Cancel</button>
@@ -1540,7 +1587,7 @@
             <h3>Sessions</h3>
             <button type="button" class="btn primary btn-sm" id="btn-options-chat-new">New chat</button>
           </div>
-          <p class="muted small">Deep, guided discussion of treatment options. Uses your library scope and the current Home assessment. Ask it to read a document by name; use <strong>Update Home</strong> on a reply to refresh the main assessment.</p>
+          <p class="muted small">Ask about this stay — who has the ball, open items, discharge, the care team — or go deeper on treatment options. Uses the timeline, team, labs, library, and current Home assessment.</p>
           <div id="options-chat-session-list" class="options-chat-session-list">
             <p class="muted">No chats yet.</p>
           </div>
@@ -1554,22 +1601,22 @@
         <div class="card options-chat-main">
           <div class="options-chat-main-head row-between wrap">
             <div>
-              <h3 id="options-chat-title">AI Chat</h3>
-              <p class="muted small" id="options-chat-scope-note">Using library selection · includes current assessment</p>
+              <h3 id="options-chat-title">Ask</h3>
+              <p class="muted small" id="options-chat-scope-note">Timeline, team, labs, library, and Home assessment</p>
             </div>
             <button type="button" class="btn ghost btn-sm hidden" id="btn-options-chat-delete">Delete chat</button>
           </div>
 
           <div id="options-chat-messages" class="options-chat-messages" aria-live="polite">
             <div class="options-chat-empty" id="options-chat-empty">
-              <p>Ask anything about options for this case. Start broad, then push deeper on the branch that matters.</p>
+              <p>Ask anything about this stay. Try a default, or type your own.</p>
               <div id="options-chat-starters" class="options-chat-starters"></div>
             </div>
           </div>
 
           <form id="options-chat-form" class="options-chat-composer">
             <label class="sr-only" for="options-chat-input">Message</label>
-            <textarea id="options-chat-input" rows="3" placeholder="Guide the analysis — e.g. dig into systemic options and what biomarkers would change the choice…"></textarea>
+            <textarea id="options-chat-input" rows="3" placeholder="e.g. Who has the ball? Who is the Internal Medicine attending?"></textarea>
             <div class="options-chat-composer-actions row-between wrap">
               <span class="muted small" id="options-chat-status"></span>
               <button type="submit" class="btn primary" id="btn-options-chat-send">Send</button>

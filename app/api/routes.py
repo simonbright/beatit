@@ -215,6 +215,9 @@ from app.services.case_manager import (
     add_patient_care_event,
     update_patient_care_event,
     delete_patient_care_event,
+    set_patient_ball_holders,
+    attach_event_actions,
+    event_closeout_items,
     import_patient_care_events,
     add_patient_team_member,
     update_patient_team_member,
@@ -4652,6 +4655,12 @@ async def api_delete_patient_doctor_question(patient_id: str, question_id: str):
 # ---------------------------------------------------------------------------
 
 
+class VisitActionRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    due_at: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=400)
+
+
 class PatientCareEventCreateRequest(BaseModel):
     kind: str | None = Field(default="visit", max_length=40)
     occurred_at: str | None = Field(default=None, max_length=40)
@@ -4661,6 +4670,7 @@ class PatientCareEventCreateRequest(BaseModel):
     summary: str | None = Field(default=None, max_length=4000)
     source_document_id: str | None = Field(default=None, max_length=80)
     source_document_title: str | None = Field(default=None, max_length=200)
+    actions: list[VisitActionRequest] | None = None
 
 
 class PatientCareEventUpdateRequest(BaseModel):
@@ -4672,6 +4682,11 @@ class PatientCareEventUpdateRequest(BaseModel):
     summary: str | None = Field(default=None, max_length=4000)
     source_document_id: str | None = Field(default=None, max_length=80)
     source_document_title: str | None = Field(default=None, max_length=200)
+    actions: list[VisitActionRequest] | None = None
+
+
+class PatientBallHoldersRequest(BaseModel):
+    holders: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PatientWhatsAppImportRequest(BaseModel):
@@ -4732,6 +4747,7 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         kinds_payload,
         linkable_documents,
     )
+    from app.services.care_workspace import PROFESSIONAL_VISIT_KINDS
     from app.services.patient_documents import list_patient_documents
     from app.services.action_items import harvest_unscanned_events
 
@@ -4787,6 +4803,8 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         ),
         "documents": linkable_documents(documents),
         "action_items": profile.get("care_items") or [],
+        "ball_holders": profile.get("ball_holders") or [],
+        "professional_kinds": sorted(PROFESSIONAL_VISIT_KINDS),
         "counts": {
             "care_events": len(care_events),
             "whatsapp": sum(1 for e in care_events if e.get("source") == "whatsapp"),
@@ -4833,12 +4851,49 @@ async def api_dismiss_patient_gap(patient_id: str, body: PatientGapDismissReques
 
 
 @router.post("/patients/{patient_id}/care-events")
+def _closeout_dicts(actions: list[VisitActionRequest] | None) -> list[dict[str, Any]]:
+    return [a.model_dump() for a in (actions or [])]
+
+
+def _apply_visit_closeout(
+    patient_id: str,
+    entry: dict[str, Any],
+    actions: list[VisitActionRequest] | None,
+    *,
+    existing_ok: bool = False,
+) -> None:
+    from app.services.care_workspace import (
+        is_professional_visit_kind,
+        normalize_visit_actions,
+        require_visit_closeout,
+    )
+
+    kind = (entry or {}).get("kind")
+    cleaned = normalize_visit_actions(_closeout_dicts(actions))
+    if cleaned:
+        attach_event_actions(patient_id, entry["id"], cleaned, source_kind=kind or "visit")
+        return
+    if not is_professional_visit_kind(kind):
+        return
+    if existing_ok and event_closeout_items(get_patient_profile(patient_id), entry["id"]):
+        return
+    require_visit_closeout(kind, cleaned)
+
+
 async def api_add_patient_care_event(
     patient_id: str,
     body: PatientCareEventCreateRequest,
     request: Request,
 ):
     try:
+        from app.services.care_workspace import (
+            is_professional_visit_kind,
+            normalize_visit_actions,
+            require_visit_closeout,
+        )
+
+        if is_professional_visit_kind(body.kind):
+            require_visit_closeout(body.kind, normalize_visit_actions(_closeout_dicts(body.actions)))
         entry = add_patient_care_event(
             patient_id,
             kind=body.kind,
@@ -4851,6 +4906,8 @@ async def api_add_patient_care_event(
             source_document_title=body.source_document_title,
             recorded_by=_timeline_actor(request),
         )
+        if entry:
+            _apply_visit_closeout(patient_id, entry, body.actions)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if entry is None:
@@ -4885,11 +4942,18 @@ async def api_update_patient_care_event(
     body: PatientCareEventUpdateRequest,
     request: Request,
 ):
-    fields = {k: getattr(body, k) for k in body.model_fields_set}
+    fields = {k: getattr(body, k) for k in body.model_fields_set if k != "actions"}
     try:
         entry = update_patient_care_event(
             patient_id, event_id, updated_by=_timeline_actor(request), **fields
         )
+        if entry:
+            _apply_visit_closeout(
+                patient_id,
+                entry,
+                body.actions,
+                existing_ok="actions" not in body.model_fields_set,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if entry is None:
@@ -4927,6 +4991,25 @@ async def api_delete_patient_care_event(patient_id: str, event_id: str, request:
     payload = await _timeline_payload(patient_id)
     payload["ok"] = True
     return payload
+
+
+@router.put("/patients/{patient_id}/ball-holders")
+async def api_set_ball_holders(
+    patient_id: str,
+    body: PatientBallHoldersRequest,
+    request: Request,
+):
+    profile = set_patient_ball_holders(patient_id, body.holders)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        TIMELINE_TEAM_UPDATED,
+        resource_type="ball_holders",
+        resource_id=patient_id,
+        metadata={"patient_id": patient_id, "count": len(profile.get("ball_holders") or [])},
+    )
+    return await _timeline_payload(patient_id)
 
 
 class PatientTeamMemberRequest(BaseModel):
@@ -5214,6 +5297,7 @@ class PatientTranscriptImportRequest(BaseModel):
     role: str | None = Field(default=None, max_length=80)
     location: str | None = Field(default=None, max_length=120)
     summary: str | None = Field(default=None, max_length=4000)
+    actions: list[VisitActionRequest] | None = None
 
 
 def _visit_attachment_title(base: str, filename: str | None, *, many: bool) -> str:
@@ -5244,6 +5328,12 @@ async def api_import_visit_transcript(
             status_code=400,
             detail="Switch to this patient (and a case) first — the files are saved to that case's Library.",
         )
+    try:
+        from app.services.care_workspace import normalize_visit_actions, require_visit_closeout
+
+        require_visit_closeout("transcript", normalize_visit_actions(_closeout_dicts(body.actions)))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     attachments = list(body.files or [])
     if body.file_base64:
         attachments.append(
@@ -5405,6 +5495,8 @@ async def api_import_visit_transcript(
             recorded_by=actor,
             source="transcript",
         )
+        if entry:
+            _apply_visit_closeout(patient_id, entry, body.actions)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:

@@ -3758,11 +3758,19 @@ const MAIN_NAV_TABS = new Set([
   "plan",
   "timeline",
   "questions",
+  "options-chat",
   "custom-tasks",
   "library",
   "settings",
 ]);
-const SIMPLE_TABS = new Set(["analyze", "timeline", "labs", "questions"]);
+const SIMPLE_TABS = new Set(["analyze", "timeline", "labs", "questions", "options-chat"]);
+const PROFESSIONAL_VISIT_KINDS = new Set(["visit", "call", "family_meeting", "transcript", "procedure"]);
+const CARE_ASK_STARTERS = [
+  "Who has the ball?",
+  "Which items are open?",
+  "What is the plan for discharge?",
+  "Who is the Internal Medicine care team / attending?",
+];
 const DEFAULT_SIMPLE_TAB = "timeline";
 const VIEW_MODE_STORAGE_KEY = "bright-health-view-mode";
 
@@ -8883,7 +8891,7 @@ function sendExcerptToIngest(excerpt, titleHint = "") {
 
 function optionsChatScopeNote() {
   const n = state.selectedIds.size;
-  const scope = n === 0 ? "Using all library documents" : `${n} selected documents`;
+  const scope = n === 0 ? "Timeline, team, labs, and library" : `Timeline, team, labs, and ${n} selected documents`;
   return `${scope} · includes current Home assessment`;
 }
 
@@ -8900,7 +8908,7 @@ function renderOptionsChatSessions() {
       const active = session.id === state.optionsChatSessionId ? " active" : "";
       const count = session.message_count || 0;
       return `<button type="button" class="options-chat-session-item${active}" data-session-id="${escapeHtml(session.id)}">
-        <span class="options-chat-session-title">${escapeHtml(truncate(session.title || "AI Chat", 72))}</span>
+        <span class="options-chat-session-title">${escapeHtml(truncate(session.title || "Ask", 72))}</span>
         <span class="options-chat-session-meta">${count} message${count === 1 ? "" : "s"} · ${escapeHtml(formatTimestamp(session.updated_at))}</span>
       </button>`;
     })
@@ -8927,7 +8935,7 @@ function renderOptionsChatMessages() {
   if (!wrap) return;
 
   const session = (state.optionsChatSessions || []).find((s) => s.id === state.optionsChatSessionId);
-  if (titleEl) titleEl.textContent = session?.title || "AI Chat";
+  if (titleEl) titleEl.textContent = session?.title || "Ask";
   if (scopeEl) scopeEl.textContent = optionsChatScopeNote();
   deleteBtn?.classList.toggle("hidden", !state.optionsChatSessionId);
 
@@ -8941,7 +8949,7 @@ function renderOptionsChatMessages() {
       .join("");
     wrap.innerHTML = `
       <div class="options-chat-empty" id="options-chat-empty">
-        <p>Ask anything about options for this case. Start broad, then push deeper on the branch that matters.</p>
+        <p>Ask anything about this stay. Try a default, or type your own.</p>
         <div id="options-chat-starters" class="options-chat-starters">${starters}</div>
       </div>`;
     return;
@@ -8950,7 +8958,7 @@ function renderOptionsChatMessages() {
   wrap.innerHTML = messages
     .map((msg) => {
       const role = msg.role === "user" ? "user" : "assistant";
-      const label = role === "user" ? "You" : "AI Chat";
+      const label = role === "user" ? "You" : "Ask";
       const body =
         role === "assistant"
           ? formatWithSources(msg.content || "", msg.id || null)
@@ -9045,7 +9053,7 @@ async function createOptionsChatSession() {
 async function deleteOptionsChatSession() {
   const id = state.optionsChatSessionId;
   if (!id) return;
-  if (!confirm("Delete this AI Chat?")) return;
+  if (!confirm("Delete this Ask chat?")) return;
   await api(`/api/options-chat/sessions/${id}`, { method: "DELETE" });
   state.optionsChatSessions = state.optionsChatSessions.filter((s) => s.id !== id);
   state.optionsChatSessionId = state.optionsChatSessions[0]?.id || null;
@@ -9062,6 +9070,14 @@ async function ensureOptionsChatSession() {
   if (state.optionsChatSessionId) return state.optionsChatSessionId;
   const session = await createOptionsChatSession();
   return session.id;
+}
+
+async function askCareAgent(text) {
+  const content = (text || "").trim();
+  if (!content) return;
+  switchTab("options-chat");
+  await loadOptionsChatPanel();
+  await sendOptionsChatMessage(content);
 }
 
 async function sendOptionsChatMessage(rawText) {
@@ -18657,7 +18673,7 @@ function renderTrFileList() {
     : "";
 }
 
-async function saveVisitWithFiles({ files, pasted, whenRaw, practitioner, role, location, summary }) {
+async function saveVisitWithFiles({ files, pasted, whenRaw, practitioner, role, location, summary, actions }) {
   const pid = state.activePatientId;
   if (files.length > VISIT_FILE_MAX_COUNT) {
     throw new Error(`Upload up to ${VISIT_FILE_MAX_COUNT} files at a time`);
@@ -18670,6 +18686,7 @@ async function saveVisitWithFiles({ files, pasted, whenRaw, practitioner, role, 
     location,
     occurred_at: whenRaw ? new Date(whenRaw).toISOString() : null,
     summary,
+    actions: actions || [],
     files: [],
   };
   if (pasted.trim()) body.text = pasted;
@@ -18737,9 +18754,28 @@ function renderTimelineEvent(ev) {
       </div>
       ${detailHtml}
       <p class="timeline-prov">${escapeHtml(ev.provenance || "")}${where}${sourceLink}</p>
+      ${renderEventCloseout(ev)}
       ${actions}
     </div>
   </article>`;
+}
+
+function renderEventCloseout(ev) {
+  const rows = ev.closeout_actions || [];
+  if (!rows.length) {
+    if (PROFESSIONAL_VISIT_KINDS.has(ev.kind) && ev.source !== "whatsapp") {
+      return `<p class="timeline-closeout-missing">No next actions recorded for this visit.</p>`;
+    }
+    return "";
+  }
+  const items = rows
+    .map((a) => {
+      const due = a.due_at ? ` by ${escapeHtml(a.due_at)}` : "";
+      const done = a.status === "done" ? " is-done" : "";
+      return `<li class="${done}">${escapeHtml(a.title || "")}${due}</li>`;
+    })
+    .join("");
+  return `<ul class="timeline-closeout">${items}</ul>`;
 }
 
 function renderTimelineList() {
@@ -18820,10 +18856,12 @@ function renderTimelineList() {
 function populateTimelineForm() {
   const data = timelineState.data || {};
   const kindEl = document.getElementById("tl-kind");
-  if (kindEl && kindEl.options.length === 0) {
+  if (kindEl) {
+    const current = kindEl.value;
     kindEl.innerHTML = (data.kinds || [])
       .map((k) => `<option value="${escapeHtml(k.value)}">${escapeHtml(k.label)}</option>`)
       .join("");
+    if ([...kindEl.options].some((o) => o.value === current)) kindEl.value = current;
   }
   const roleList = document.getElementById("tl-role-list");
   if (roleList) roleList.innerHTML = (data.role_presets || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
@@ -19248,6 +19286,7 @@ function renderTimelineActions() {
 }
 
 function renderTimeline() {
+  renderWhoHasBall();
   renderTimelineActions();
   renderTimelineGaps();
   renderFamilyTeam();
@@ -19255,6 +19294,146 @@ function renderTimeline() {
   renderTimelineList();
   populateTimelineForm();
   if (!document.getElementById("timeline-update")?.classList.contains("hidden")) refreshFamilyUpdateText();
+}
+
+function ballDateLabel(iso) {
+  if (!iso) return "";
+  const dt = tlParseAt(`${iso}T12:00:00`);
+  return dt ? dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : iso;
+}
+
+function renderWhoHasBall() {
+  const list = document.getElementById("who-has-ball-list");
+  if (!list) return;
+  const holders = timelineState.data?.ball_holders || [];
+  if (!holders.length) {
+    list.innerHTML = `<p class="who-has-ball-empty">Nobody assigned — tap Update so the family can see.</p>`;
+    return;
+  }
+  list.innerHTML = holders
+    .map((h) => {
+      const dates = [
+        h.since ? `since ${ballDateLabel(h.since)}` : "",
+        h.until ? `until ${ballDateLabel(h.until)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const role = h.role ? ` · ${escapeHtml(h.role)}` : "";
+      const notes = h.notes ? ` — ${escapeHtml(h.notes)}` : "";
+      return `<div class="who-has-ball-item">
+        <strong>${escapeHtml(h.name)}</strong>
+        <span class="who-has-ball-meta">${role}${dates ? ` · ${escapeHtml(dates)}` : ""}${notes}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+function ballFormRowHtml(holder = {}) {
+  return `<div class="ball-form-row">
+    <label>Who<input type="text" class="ball-name" maxlength="120" required value="${escapeHtml(holder.name || "")}" placeholder="Name"></label>
+    <label>Role / why<input type="text" class="ball-role" maxlength="80" value="${escapeHtml(holder.role || "")}" placeholder="e.g. Point person"></label>
+    <label>Since<input type="date" class="ball-since" value="${escapeHtml(holder.since || "")}"></label>
+    <label>Until <span class="muted small">(optional)</span><input type="date" class="ball-until" value="${escapeHtml(holder.until || "")}"></label>
+    <button type="button" class="btn ghost btn-sm ball-remove">Remove</button>
+    <input type="hidden" class="ball-notes" value="${escapeHtml(holder.notes || "")}">
+  </div>`;
+}
+
+function openBallForm() {
+  const form = document.getElementById("ball-form");
+  const rows = document.getElementById("ball-form-rows");
+  if (!form || !rows) return;
+  const holders = timelineState.data?.ball_holders || [];
+  rows.innerHTML = (holders.length ? holders : [{}]).map((h) => ballFormRowHtml(h)).join("");
+  form.classList.remove("hidden");
+}
+
+function closeBallForm() {
+  document.getElementById("ball-form")?.classList.add("hidden");
+}
+
+function collectBallHolders() {
+  return [...document.querySelectorAll("#ball-form-rows .ball-form-row")]
+    .map((row) => ({
+      name: row.querySelector(".ball-name")?.value.trim() || "",
+      role: row.querySelector(".ball-role")?.value.trim() || "",
+      since: row.querySelector(".ball-since")?.value || "",
+      until: row.querySelector(".ball-until")?.value || "",
+      notes: row.querySelector(".ball-notes")?.value.trim() || "",
+    }))
+    .filter((h) => h.name);
+}
+
+async function saveBallHolders(event) {
+  event?.preventDefault?.();
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  const holders = collectBallHolders();
+  try {
+    const res = await fetch(`/api/patients/${pid}/ball-holders`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ holders }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save");
+    }
+    timelineState.data = await res.json();
+    closeBallForm();
+    renderTimeline();
+    toast(holders.length ? "Who has the ball updated" : "Cleared — nobody has the ball");
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  }
+}
+
+function closeoutRowHtml(action = {}) {
+  return `<div class="tl-closeout-row">
+    <label>Action<input type="text" class="tl-action-title" maxlength="160" value="${escapeHtml(action.title || "")}" placeholder="e.g. Send CT to Dr. Gupta"></label>
+    <label>By when<input type="date" class="tl-action-due" value="${escapeHtml(action.due_at || "")}"></label>
+    <button type="button" class="btn ghost btn-sm tl-action-remove">Remove</button>
+  </div>`;
+}
+
+function collectVisitActions() {
+  return [...document.querySelectorAll("#tl-closeout-rows .tl-closeout-row")]
+    .map((row) => ({
+      title: row.querySelector(".tl-action-title")?.value.trim() || "",
+      due_at: row.querySelector(".tl-action-due")?.value || "",
+    }))
+    .filter((a) => a.title);
+}
+
+function professionalKindSelected() {
+  const kinds = timelineState.data?.professional_kinds || [...PROFESSIONAL_VISIT_KINDS];
+  return kinds.includes(document.getElementById("tl-kind")?.value);
+}
+
+function syncTimelineCloseoutAndVitals() {
+  const form = document.getElementById("timeline-form");
+  const kindEl = document.getElementById("tl-kind");
+  const check = document.getElementById("tl-vitals-check");
+  const checkWrap = document.getElementById("tl-vitals-check-wrap");
+  const closeout = document.getElementById("tl-closeout");
+  const isWhatsapp = form?.dataset.source === "whatsapp";
+  if (checkWrap) checkWrap.classList.toggle("hidden", !isWhatsapp);
+  if (check && kindEl && check.checked && kindEl.value !== "vitals") kindEl.value = "vitals";
+  if (check && kindEl) check.checked = kindEl.value === "vitals";
+  const showCloseout = professionalKindSelected() && kindEl?.value !== "vitals";
+  closeout?.classList.toggle("hidden", !showCloseout);
+  const rows = document.getElementById("tl-closeout-rows");
+  if (showCloseout && rows && !rows.children.length) rows.innerHTML = closeoutRowHtml();
+}
+
+function fillCloseoutRows(ev) {
+  const rows = document.getElementById("tl-closeout-rows");
+  if (!rows) return;
+  const existing = ev?.closeout_actions || [];
+  rows.innerHTML = existing.length
+    ? existing.filter((a) => a.status !== "done").map((a) => closeoutRowHtml(a)).join("") || closeoutRowHtml()
+    : closeoutRowHtml();
 }
 
 async function loadTimeline({ quiet = false } = {}) {
@@ -19317,6 +19496,11 @@ function openTimelineForm(ev = null, preset = null) {
   const srcEl = document.getElementById("tl-source");
   if (srcEl) srcEl.value = ev?.source === "whatsapp" ? "" : ev?.source_document_id || "";
   document.getElementById("btn-tl-save").textContent = ev ? "Save changes" : "Add to timeline";
+  form.dataset.source = ev?.source || "";
+  const vitalsCheck = document.getElementById("tl-vitals-check");
+  if (vitalsCheck) vitalsCheck.checked = ev?.kind === "vitals";
+  fillCloseoutRows(ev);
+  syncTimelineCloseoutAndVitals();
   (ev ? document.getElementById("tl-kind") : document.getElementById("tl-practitioner"))?.focus();
   form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -19325,8 +19509,13 @@ function closeTimelineForm() {
   const form = document.getElementById("timeline-form");
   form?.reset();
   form?.classList.add("hidden");
+  if (form) form.dataset.source = "";
   const idEl = document.getElementById("tl-edit-id");
   if (idEl) idEl.value = "";
+  const rows = document.getElementById("tl-closeout-rows");
+  if (rows) rows.innerHTML = "";
+  const vitalsCheck = document.getElementById("tl-vitals-check");
+  if (vitalsCheck) vitalsCheck.checked = false;
 }
 
 async function saveTimelineForm(event) {
@@ -19345,7 +19534,18 @@ async function saveTimelineForm(event) {
     role: document.getElementById("tl-role").value.trim(),
     location: document.getElementById("tl-location").value.trim(),
     summary: document.getElementById("tl-summary").value.trim(),
+    actions: collectVisitActions(),
   };
+  if (professionalKindSelected() && body.kind !== "vitals") {
+    const complete = body.actions.filter((a) => a.title && a.due_at);
+    const existingCloseout = editId
+      ? (timelineState.data?.events || []).find((e) => e.care_event_id === editId)?.closeout_actions || []
+      : [];
+    if (!complete.length && !existingCloseout.some((a) => a.status !== "done" && a.due_at)) {
+      syncTimelineCloseoutAndVitals();
+      return toast("Add what happens next — an action and a date", "error");
+    }
+  }
   const existing = editId ? (timelineState.data?.events || []).find((e) => e.care_event_id === editId) : null;
   if (!existing || existing.source !== "whatsapp" || srcId) {
     body.source_document_id = srcId || null;
@@ -19370,6 +19570,7 @@ async function saveTimelineForm(event) {
         role: body.role,
         location: body.location,
         summary: body.summary,
+        actions: body.actions,
       });
       timelineState.data = data;
       closeTimelineForm();
@@ -19465,6 +19666,7 @@ async function runWhatsAppImport() {
     toast(msg);
     if (fileEl) fileEl.value = "";
     if (nameEl) nameEl.textContent = "No file chosen yet.";
+    document.getElementById("timeline-import")?.classList.add("hidden");
     await loadTimeline({ quiet: true });
   } catch (err) {
     if (status) status.textContent = err.message || "Import failed";
@@ -19675,6 +19877,43 @@ function toggleTimelinePanel(id) {
 document.getElementById("btn-timeline-log")?.addEventListener("click", () => openTimelineForm());
 document.getElementById("btn-tl-cancel")?.addEventListener("click", closeTimelineForm);
 document.getElementById("timeline-form")?.addEventListener("submit", saveTimelineForm);
+document.getElementById("tl-kind")?.addEventListener("change", syncTimelineCloseoutAndVitals);
+document.getElementById("tl-vitals-check")?.addEventListener("change", () => {
+  const kindEl = document.getElementById("tl-kind");
+  if (kindEl && document.getElementById("tl-vitals-check")?.checked) kindEl.value = "vitals";
+  syncTimelineCloseoutAndVitals();
+});
+document.getElementById("btn-tl-add-action")?.addEventListener("click", () => {
+  document.getElementById("tl-closeout-rows")?.insertAdjacentHTML("beforeend", closeoutRowHtml());
+});
+document.getElementById("tl-closeout-rows")?.addEventListener("click", (e) => {
+  const btn = e.target.closest(".tl-action-remove");
+  if (!btn) return;
+  btn.closest(".tl-closeout-row")?.remove();
+  if (!document.querySelector("#tl-closeout-rows .tl-closeout-row")) {
+    document.getElementById("tl-closeout-rows").innerHTML = closeoutRowHtml();
+  }
+});
+document.getElementById("btn-ball-edit")?.addEventListener("click", openBallForm);
+document.getElementById("btn-ball-cancel")?.addEventListener("click", closeBallForm);
+document.getElementById("btn-ball-add")?.addEventListener("click", () => {
+  document.getElementById("ball-form-rows")?.insertAdjacentHTML("beforeend", ballFormRowHtml());
+});
+document.getElementById("ball-form")?.addEventListener("submit", saveBallHolders);
+document.getElementById("ball-form-rows")?.addEventListener("click", (e) => {
+  const btn = e.target.closest(".ball-remove");
+  if (!btn) return;
+  btn.closest(".ball-form-row")?.remove();
+  if (!document.querySelector("#ball-form-rows .ball-form-row")) {
+    document.getElementById("ball-form-rows").innerHTML = ballFormRowHtml();
+  }
+});
+document.getElementById("btn-timeline-ask")?.addEventListener("click", () => switchTab("options-chat"));
+document.getElementById("timeline-ask-chips")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-care-ask]");
+  if (!btn) return;
+  askCareAgent(btn.dataset.careAsk).catch((err) => toast(err.message || "Could not ask", "error"));
+});
 document.getElementById("btn-timeline-import")?.addEventListener("click", () => toggleTimelinePanel("timeline-import"));
 document.getElementById("btn-timeline-update")?.addEventListener("click", () => toggleTimelinePanel("timeline-update"));
 document.getElementById("btn-tl-import-run")?.addEventListener("click", runWhatsAppImport);
