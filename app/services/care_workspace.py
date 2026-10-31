@@ -8,6 +8,43 @@ from uuid import uuid4
 
 from app.services.care_timeline import hospital_stay, normalize_care_event_kind
 
+BALL_KINDS = (
+    ("basketball", "🏀", "Basketball"),
+    ("soccer", "⚽", "Soccer"),
+    ("football", "🏈", "Football"),
+    ("baseball", "⚾", "Baseball"),
+    ("tennis", "🎾", "Tennis"),
+    ("volleyball", "🏐", "Volleyball"),
+    ("rugby", "🏉", "Rugby"),
+    ("softball", "🥎", "Softball"),
+)
+DEFAULT_BALL_KIND = "basketball"
+_BALL_KIND_KEYS = {key for key, _emoji, _label in BALL_KINDS}
+_BALL_KIND_ALIASES = {
+    "hoops": "basketball",
+    "nba": "basketball",
+    "futbol": "soccer",
+    "football_soccer": "soccer",
+    "american_football": "football",
+    "nfl": "football",
+}
+
+
+def normalize_ball_kind(raw: Any) -> str:
+    key = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    key = _BALL_KIND_ALIASES.get(key, key)
+    return key if key in _BALL_KIND_KEYS else DEFAULT_BALL_KIND
+
+
+def ball_kind_emoji(kind: Any) -> str:
+    wanted = normalize_ball_kind(kind)
+    return next((emoji for key, emoji, _label in BALL_KINDS if key == wanted), "🏀")
+
+
+def ball_kinds_payload() -> list[dict[str, str]]:
+    return [{"value": key, "emoji": emoji, "label": label} for key, emoji, label in BALL_KINDS]
+
+
 PROFESSIONAL_VISIT_KINDS = frozenset(
     {"visit", "call", "family_meeting", "transcript", "procedure"}
 )
@@ -77,6 +114,15 @@ def _due(value: Any) -> str:
     return day
 
 
+def _holder_stamp(value: Any, *, end_of_day: bool = False) -> str:
+    text = _due(value)
+    if not text:
+        return ""
+    if "T" in text:
+        return text
+    return f"{text}T23:59" if end_of_day else f"{text}T00:00"
+
+
 def normalize_ball_holder(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -84,12 +130,15 @@ def normalize_ball_holder(raw: Any) -> dict[str, Any] | None:
     if not name:
         return None
     holder_id = str(raw.get("id") or "").strip() or str(uuid4())
-    since = _day(raw.get("since") or raw.get("from") or raw.get("as_of"))
-    until = _day(raw.get("until") or raw.get("through"))
+    since = _due(raw.get("since") or raw.get("from") or raw.get("as_of"))
+    until = _due(raw.get("until") or raw.get("through"))
     return {
         "id": holder_id,
         "name": name,
-        "role": _clean(raw.get("role") or raw.get("why"), 80),
+        "title": _clean(raw.get("title"), 80),
+        "department": _clean(raw.get("department") or raw.get("dept"), 80),
+        "role": _clean(raw.get("role") or raw.get("why") or raw.get("expect") or raw.get("what"), 240),
+        "success": _clean(raw.get("success") or raw.get("done_when") or raw.get("outcome"), 240),
         "since": since or None,
         "until": until or None,
         "notes": _clean(raw.get("notes"), 240),
@@ -123,9 +172,20 @@ def current_ball_holders(
     *,
     today: str | None = None,
 ) -> list[dict[str, Any]]:
-    """People in charge right now — until-date has not passed."""
-    day = _day(today) or datetime.now().date().isoformat()
-    return [h for h in normalize_ball_holders(raw) if not h.get("until") or str(h["until"]) >= day]
+    """People in charge right now — until date/time has not passed."""
+    if today:
+        now = _due(today) or datetime.now().strftime("%Y-%m-%dT%H:%M")
+        if "T" not in now:
+            now = f"{now}T23:59"
+    else:
+        now = datetime.now().strftime("%Y-%m-%dT%H:%M")
+    out: list[dict[str, Any]] = []
+    for holder in normalize_ball_holders(raw):
+        until = holder.get("until")
+        if until and _holder_stamp(until, end_of_day=True) < now:
+            continue
+        out.append(holder)
+    return out
 
 
 def normalize_visit_actions(raw: Any) -> list[dict[str, str]]:
@@ -201,14 +261,22 @@ def find_internal_medicine_team(
 
 def _format_holder(holder: dict[str, Any]) -> str:
     bits = [holder["name"]]
+    title = holder.get("title") or ""
+    department = holder.get("department") or ""
+    if title and department:
+        bits.append(f"({title}, {department})")
+    elif title or department:
+        bits.append(f"({title or department})")
     if holder.get("role"):
-        bits.append(f"({holder['role']})")
+        bits.append(f"— do: {holder['role']}")
+    if holder.get("success"):
+        bits.append(f"— success: {holder['success']}")
     if holder.get("lead"):
         bits.append("— call first")
     if holder.get("since"):
-        bits.append(f"since {holder['since']}")
+        bits.append(f"from {holder['since']}")
     if holder.get("until"):
-        bits.append(f"until {holder['until']}")
+        bits.append(f"to {holder['until']}")
     if holder.get("notes"):
         bits.append(f"— {holder['notes']}")
     return " ".join(bits)

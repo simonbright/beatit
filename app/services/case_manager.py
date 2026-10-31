@@ -279,7 +279,9 @@ def _empty_profile() -> dict[str, Any]:
         "family_team": [],
         "family_role_history": [],
         "dismissed_gaps": [],
+        "dismissed_timeline": [],
         "ball_holders": [],
+        "ball_kind": "basketball",
         "last_whatsapp_chat": "",
         "log_custom_tiles": [],
         "log_tile_order": [],
@@ -453,9 +455,11 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     profile["family_team"] = _normalize_family(data.get("family_team"))
     profile["family_role_history"] = _normalize_role_history(data.get("family_role_history"))
     profile["dismissed_gaps"] = _normalize_dismissed_gaps(data.get("dismissed_gaps"))
-    from app.services.care_workspace import normalize_ball_holders
+    profile["dismissed_timeline"] = _normalize_dismissed_timeline(data.get("dismissed_timeline"))
+    from app.services.care_workspace import normalize_ball_holders, normalize_ball_kind
 
     profile["ball_holders"] = normalize_ball_holders(data.get("ball_holders"))
+    profile["ball_kind"] = normalize_ball_kind(data.get("ball_kind"))
     profile["last_whatsapp_chat"] = " ".join(str(data.get("last_whatsapp_chat") or "").split())[:120]
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
@@ -633,7 +637,9 @@ def save_patient_profile(
         "family_team": _normalize_family(profile.get("family_team")),
         "family_role_history": _normalize_role_history(profile.get("family_role_history")),
         "dismissed_gaps": _normalize_dismissed_gaps(profile.get("dismissed_gaps")),
+        "dismissed_timeline": _normalize_dismissed_timeline(profile.get("dismissed_timeline")),
         "ball_holders": list(profile.get("ball_holders") or []),
+        "ball_kind": profile.get("ball_kind") or "basketball",
         "last_whatsapp_chat": " ".join(str(profile.get("last_whatsapp_chat") or "").split())[:120],
         "medication_safety": profile.get("medication_safety") or None,
     }
@@ -1860,6 +1866,52 @@ def dismiss_patient_gap(
     return get_patient_profile(patient_id)
 
 
+def _normalize_dismissed_timeline(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in raw:
+        key = ""
+        if isinstance(row, str):
+            key = row.strip()
+        elif isinstance(row, dict):
+            key = str(row.get("id") or "").strip()
+        if not key or key in seen or len(key) > 160:
+            continue
+        seen.add(key)
+        out.append({"id": key})
+    return out[-500:]
+
+
+def dismiss_timeline_row(patient_id: str, row_id: str) -> dict[str, Any] | None:
+    profile = get_patient_profile(patient_id)
+    if not profile:
+        return None
+    key = " ".join(str(row_id or "").split())[:160]
+    if not key:
+        return profile
+    rows = _normalize_dismissed_timeline(profile.get("dismissed_timeline"))
+    if not any(row.get("id") == key for row in rows):
+        rows.append({"id": key})
+        profile["dismissed_timeline"] = rows
+        save_patient_profile(patient_id, profile)
+    return get_patient_profile(patient_id)
+
+
+def restore_timeline_row(patient_id: str, row_id: str) -> dict[str, Any] | None:
+    profile = get_patient_profile(patient_id)
+    if not profile:
+        return None
+    key = " ".join(str(row_id or "").split())[:160]
+    before = _normalize_dismissed_timeline(profile.get("dismissed_timeline"))
+    rows = [row for row in before if row.get("id") != key]
+    if len(rows) != len(before):
+        profile["dismissed_timeline"] = rows
+        save_patient_profile(patient_id, profile)
+    return get_patient_profile(patient_id)
+
+
 def _normalize_care_items(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
@@ -1928,14 +1980,21 @@ def add_patient_care_item(
     return next((i for i in saved.get("care_items") or [] if i.get("id") == entry["id"]), entry)
 
 
-def set_patient_ball_holders(patient_id: str, holders: list[dict[str, Any]] | None) -> dict[str, Any] | None:
-    from app.services.care_workspace import normalize_ball_holders
+def set_patient_ball_holders(
+    patient_id: str,
+    holders: list[dict[str, Any]] | None,
+    *,
+    ball_kind: str | None = None,
+) -> dict[str, Any] | None:
+    from app.services.care_workspace import normalize_ball_holders, normalize_ball_kind
 
     reg = load_registry()
     if not _find_patient(reg, patient_id):
         return None
     profile = get_patient_profile(patient_id)
     profile["ball_holders"] = normalize_ball_holders(holders)
+    if ball_kind is not None:
+        profile["ball_kind"] = normalize_ball_kind(ball_kind)
     return save_patient_profile(patient_id, profile)
 
 

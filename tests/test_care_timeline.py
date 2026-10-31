@@ -589,3 +589,23 @@ def test_dismissed_day_gaps_stay_hidden(patient):
     hidden = build_gaps(saved, now=NOW)
     assert no_visit["id"] not in {i.get("id") for i in hidden["items"]}
     assert "no_visit" not in _kinds(hidden, "2026-10-28")
+
+
+def test_dismiss_and_restore_any_timeline_row(patient):
+    event = case_manager.add_patient_care_event(
+        patient, kind="visit", occurred_at="2026-10-31T09:00:00-04:00", summary="Rounds"
+    )
+    case_manager.add_patient_diagnostic(
+        patient, name="Hemoglobin", value=98, unit="g/L", recorded_at="2026-10-31"
+    )
+    rows = build_timeline(case_manager.get_patient_profile(patient))
+    visit = next(r for r in rows if r.get("care_event_id") == event["id"])
+    labs = next(r for r in rows if r["kind"] == "lab_results")
+    case_manager.dismiss_timeline_row(patient, visit["id"])
+    case_manager.dismiss_timeline_row(patient, labs["id"])
+    hidden = build_timeline(case_manager.get_patient_profile(patient))
+    assert next(r for r in hidden if r["id"] == visit["id"])["dismissed"]
+    assert next(r for r in hidden if r["id"] == labs["id"])["dismissed"]
+    case_manager.restore_timeline_row(patient, visit["id"])
+    shown = build_timeline(case_manager.get_patient_profile(patient))
+    assert next(r for r in shown if r["id"] == visit["id"])["dismissed"] is False

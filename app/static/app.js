@@ -2003,6 +2003,9 @@ function switchTab(name, options = {}) {
   }
   if (name === "timeline") {
     loadTimeline({ quiet: Boolean(timelineState.data && timelineState.patientId === state.activePatientId) });
+    startMacWhatsAppWatch().catch(() => {});
+  } else {
+    stopMacWhatsAppWatch();
   }
   if (name === "questions") {
     refreshActivePatientProfile().catch(() => {});
@@ -18504,6 +18507,7 @@ var timelineState = {
   cat: "all",
   search: "",
   showChatter: false,
+  showDismissed: false,
   practitioner: "",
   env: "",
   gapsExpanded: false,
@@ -18577,6 +18581,7 @@ function tlFilteredEvents() {
     if (start && dt < start && !ev.upcoming) return false;
     if (cats && !cats.includes(ev.category)) return false;
     if (!timelineState.showChatter && tlIsChatter(ev)) return false;
+    if (!timelineState.showDismissed && ev.dismissed) return false;
     if (who && String(ev.practitioner || "").toLowerCase() !== who && !(`${ev.role || ""}`.toLowerCase() === who && !ev.practitioner)) return false;
     if (q) {
       const hay = `${ev.title} ${ev.detail} ${ev.provenance} ${ev.practitioner || ""} ${ev.role || ""} ${ev.location || ""}`.toLowerCase();
@@ -19254,13 +19259,23 @@ function renderTimelineEvent(ev) {
       ? ` · ${escapeHtml(ev.source_document_title)}`
       : "";
   const where = ev.location ? ` · ${escapeHtml(ev.location)}` : "";
-  const actions = ev.editable
+  const hideBtn = ev.dismissed
+    ? `<button type="button" class="btn ghost btn-sm tl-restore" data-row-id="${escapeHtml(ev.id || "")}">Restore</button>`
+    : ev.id
+      ? `<button type="button" class="btn ghost btn-sm tl-dismiss" data-row-id="${escapeHtml(ev.id)}">Dismiss</button>`
+      : "";
+  const actions = ev.editable || hideBtn
     ? `<div class="timeline-actions">
-        <button type="button" class="btn ghost btn-sm tl-edit" data-id="${escapeHtml(ev.care_event_id)}">${ev.source === "whatsapp" ? "Classify" : "Edit"}</button>
-        <button type="button" class="btn ghost btn-sm tl-delete" data-id="${escapeHtml(ev.care_event_id)}">Delete</button>
+        ${
+          ev.editable
+            ? `<button type="button" class="btn ghost btn-sm tl-edit" data-id="${escapeHtml(ev.care_event_id)}">${ev.source === "whatsapp" ? "Classify" : "Edit"}</button>
+        <button type="button" class="btn ghost btn-sm tl-delete" data-id="${escapeHtml(ev.care_event_id)}">Delete</button>`
+            : ""
+        }
+        ${hideBtn}
       </div>`
     : "";
-  return `<article class="timeline-item cat-${escapeHtml(ev.category)}${ev.upcoming ? " is-upcoming" : ""}${tlIsChatter(ev) ? " is-chatter" : ""}">
+  return `<article class="timeline-item cat-${escapeHtml(ev.category)}${ev.upcoming ? " is-upcoming" : ""}${tlIsChatter(ev) ? " is-chatter" : ""}${ev.dismissed ? " is-dismissed" : ""}">
     <div class="timeline-time">${escapeHtml(timeLabel)}</div>
     <div class="timeline-dot" aria-hidden="true"></div>
     <div class="timeline-body">
@@ -19820,21 +19835,32 @@ function renderTimelineActions() {
   listEl.innerHTML = filtered.map((item) => renderTimelineActionRow(item)).join("");
 }
 
+function renderTimelineLogCount() {
+  const el = document.getElementById("timeline-log-count");
+  if (!el) return;
+  const n = (timelineState.data?.events || []).length;
+  el.textContent = n ? `· ${n}` : "";
+}
+
 function renderTimeline() {
   renderWhoHasBall();
   renderTimelineActions();
   renderTimelineGaps();
   renderFamilyTeam();
   renderTimelineTeam();
+  renderTimelineLogCount();
   renderTimelineList();
   populateTimelineForm();
+  syncMacWhatsAppUi();
   if (!document.getElementById("timeline-update")?.classList.contains("hidden")) refreshFamilyUpdateText();
 }
 
 function ballDateLabel(iso) {
   if (!iso) return "";
-  const dt = tlParseAt(`${iso}T12:00:00`);
-  return dt ? dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : iso;
+  const raw = String(iso);
+  if (raw.includes("T")) return formatCareDue(raw);
+  const dt = tlParseAt(`${raw}T12:00:00`);
+  return dt ? dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : raw;
 }
 
 function ballToday() {
@@ -19843,9 +19869,110 @@ function ballToday() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+function ballNowStamp() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${ballToday()}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+function ballUntilStamp(until) {
+  const raw = String(until || "");
+  if (!raw) return "";
+  if (raw.includes("T")) return raw.slice(0, 16);
+  return `${careDueDay(raw)}T23:59`;
+}
+
+const DEFAULT_BALL_KINDS = [
+  { value: "basketball", emoji: "🏀", label: "Basketball" },
+  { value: "soccer", emoji: "⚽", label: "Soccer" },
+  { value: "football", emoji: "🏈", label: "Football" },
+  { value: "baseball", emoji: "⚾", label: "Baseball" },
+  { value: "tennis", emoji: "🎾", label: "Tennis" },
+  { value: "volleyball", emoji: "🏐", label: "Volleyball" },
+  { value: "rugby", emoji: "🏉", label: "Rugby" },
+  { value: "softball", emoji: "🥎", label: "Softball" },
+];
+
+function ballKinds() {
+  return timelineState.data?.ball_kinds?.length ? timelineState.data.ball_kinds : DEFAULT_BALL_KINDS;
+}
+
+function currentBallKind() {
+  const wanted = String(timelineState.data?.ball_kind || "basketball").toLowerCase();
+  return ballKinds().some((kind) => kind.value === wanted) ? wanted : "basketball";
+}
+
+function ballKindEmoji(kind = currentBallKind()) {
+  return ballKinds().find((item) => item.value === kind)?.emoji || "🏀";
+}
+
+function selectedBallKind() {
+  return document.querySelector("#ball-kind-picker .ball-kind-choice.is-selected")?.dataset.kind || currentBallKind();
+}
+
+function renderBallKindVisual(kind = currentBallKind()) {
+  const icon = document.getElementById("who-has-ball-icon");
+  if (icon) icon.textContent = ballKindEmoji(kind);
+}
+
+function renderBallKindPicker() {
+  const el = document.getElementById("ball-kind-picker");
+  if (!el) return;
+  const selected = currentBallKind();
+  el.innerHTML = ballKinds()
+    .map(
+      (kind) => `<button type="button" class="ball-kind-choice${kind.value === selected ? " is-selected" : ""}" data-kind="${escapeHtml(kind.value)}" title="${escapeHtml(kind.label)}" aria-pressed="${kind.value === selected ? "true" : "false"}">
+      <span class="ball-kind-emoji" aria-hidden="true">${kind.emoji}</span>
+      <span class="ball-kind-name">${escapeHtml(kind.label)}</span>
+    </button>`
+    )
+    .join("");
+}
+
+function selectBallKind(kind) {
+  const el = document.getElementById("ball-kind-picker");
+  if (!el) return;
+  el.querySelectorAll(".ball-kind-choice").forEach((btn) => {
+    const on = btn.dataset.kind === kind;
+    btn.classList.toggle("is-selected", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  renderBallKindVisual(kind);
+}
+
 function currentBallHolders(holders = timelineState.data?.ball_holders) {
-  const today = ballToday();
-  return (holders || []).filter((h) => !h.until || String(h.until) >= today);
+  const now = ballNowStamp();
+  const today = now.slice(0, 10);
+  return (holders || []).filter((h) => {
+    if (!h.until) return true;
+    const until = String(h.until);
+    return until.includes("T") ? ballUntilStamp(until) >= now : until.slice(0, 10) >= today;
+  });
+}
+
+function ballFamilyRoleLabel(person) {
+  const labels = Object.fromEntries((timelineState.data?.family_roles || []).map((r) => [r.key, r.label]));
+  return (person?.roles || []).map((key) => labels[key] || key).find(Boolean) || "";
+}
+
+function ballFieldsFromPerson(name) {
+  const person = tlPersonForAction(name);
+  if (!person) return { name: name || "" };
+  return {
+    name: person.name || name || "",
+    title: person.role || person.relationship || ballFamilyRoleLabel(person) || "",
+    department: (person.environments || [])[0] || "",
+  };
+}
+
+function fillBallRowFromWho(row) {
+  if (!row) return;
+  const name = row.querySelector(".ball-name")?.value.trim();
+  const fields = ballFieldsFromPerson(name);
+  const titleEl = row.querySelector(".ball-title");
+  const deptEl = row.querySelector(".ball-department");
+  if (titleEl && !titleEl.value.trim() && fields.title) titleEl.value = fields.title;
+  if (deptEl && !deptEl.value.trim() && fields.department) deptEl.value = fields.department;
 }
 
 function tlClarityText(person) {
@@ -19877,28 +20004,34 @@ function ballContactButtons(holder) {
 function renderWhoHasBall() {
   const list = document.getElementById("who-has-ball-list");
   if (!list) return;
+  renderBallKindVisual();
   const holders = currentBallHolders();
+  const glyph = `<span class="who-has-ball-glyph" aria-hidden="true">${ballKindEmoji()}</span>`;
   if (!holders.length) {
-    list.innerHTML = `<p class="who-has-ball-empty">Nobody is in charge — tap Update so everyone knows who to call.</p>`;
+    list.innerHTML = `<p class="who-has-ball-empty">${glyph} Nobody is in charge — tap Update so everyone knows who to call.</p>`;
     return;
   }
   const many = holders.length > 1;
   list.innerHTML = holders
     .map((h) => {
       const dates = [
-        h.since ? `since ${ballDateLabel(h.since)}` : "",
-        h.until ? `until ${ballDateLabel(h.until)}` : "",
+        h.since ? `from ${ballDateLabel(h.since)}` : "",
+        h.until ? `to ${ballDateLabel(h.until)}` : "",
       ]
         .filter(Boolean)
         .join(" · ");
-      const role = h.role ? escapeHtml(h.role) : "In charge now";
+      const identity = [h.title, h.department].filter(Boolean).join(" · ");
+      const expect = h.role || "What they should do is not set";
+      const success = h.success ? escapeHtml(h.success) : "";
       const notes = h.notes ? ` — ${escapeHtml(h.notes)}` : "";
       const lead = many && h.lead ? `<span class="who-has-ball-lead">Call first</span>` : "";
       return `<div class="who-has-ball-item${h.lead && many ? " is-lead" : ""}">
         <div class="who-has-ball-who">
-          ${lead}
-          <strong>${escapeHtml(h.name)}</strong>
-          <span class="who-has-ball-meta">${role}${dates ? ` · ${escapeHtml(dates)}` : ""}${notes}</span>
+          <div class="who-has-ball-name-row">${glyph}${lead}<strong>${escapeHtml(h.name)}</strong></div>
+          ${identity ? `<span class="ball-title-line">${escapeHtml(identity)}</span>` : ""}
+          <span class="who-has-ball-meta ball-expect-line"><span class="ball-field-kicker">Do</span> ${escapeHtml(expect)}${notes}</span>
+          <span class="who-has-ball-meta ball-success-line"><span class="ball-field-kicker">Success</span> ${success || "Not set — what does done look like?"}</span>
+          ${dates ? `<span class="who-has-ball-meta">${escapeHtml(dates)}</span>` : ""}
         </div>
         ${ballContactButtons(h)}
       </div>`;
@@ -19946,12 +20079,33 @@ function renderBallQuickAdd(holders) {
 
 function ballFormRowHtml(holder = {}) {
   return `<div class="ball-form-row">
-    <label>Who<input type="text" class="ball-name" list="ball-who-list" maxlength="120" required value="${escapeHtml(holder.name || "")}" placeholder="Name"></label>
-    <label>Why we call them<input type="text" class="ball-role" maxlength="80" value="${escapeHtml(holder.role || "")}" placeholder="e.g. Point person — daily plan"></label>
-    <label>Since<input type="date" class="ball-since" value="${escapeHtml(holder.since || "")}"></label>
-    <label>Until <span class="muted small">(optional)</span><input type="date" class="ball-until" value="${escapeHtml(holder.until || "")}"></label>
-    <label class="ball-lead-label"><input type="checkbox" class="ball-lead"${holder.lead ? " checked" : ""}> Call first</label>
-    <button type="button" class="btn ghost btn-sm ball-remove">Remove</button>
+    <label class="ball-field-who">Who
+      <input type="text" class="ball-name" list="ball-who-list" maxlength="120" required value="${escapeHtml(holder.name || "")}" placeholder="Name">
+    </label>
+    <div class="ball-form-identity">
+      <label>Title
+        <input type="text" class="ball-title" maxlength="80" value="${escapeHtml(holder.title || "")}" placeholder="e.g. Attending">
+      </label>
+      <label>Department
+        <input type="text" class="ball-department" maxlength="80" value="${escapeHtml(holder.department || "")}" placeholder="e.g. Internal Medicine">
+      </label>
+    </div>
+    <label class="ball-field-expect">What we expect them to do
+      <textarea class="ball-role" maxlength="240" rows="3" placeholder="e.g. Own tonight's plan and answer who we call">${escapeHtml(holder.role || "")}</textarea>
+    </label>
+    <label class="ball-field-expect">What success looks like
+      <textarea class="ball-success" maxlength="240" rows="3" placeholder="e.g. Family has the plan, the next time, and who holds the ball after">${escapeHtml(holder.success || "")}</textarea>
+    </label>
+    <div class="ball-form-when">
+      <label>From date<input type="date" class="ball-since" value="${escapeHtml(careDueDay(holder.since))}"></label>
+      <label>From time<input type="time" class="ball-since-time" value="${escapeHtml(careDueTime(holder.since))}"></label>
+      <label>To date<input type="date" class="ball-until" value="${escapeHtml(careDueDay(holder.until))}"></label>
+      <label>To time<input type="time" class="ball-until-time" value="${escapeHtml(careDueTime(holder.until))}"></label>
+    </div>
+    <div class="ball-form-tools">
+      <label class="ball-lead-label"><input type="checkbox" class="ball-lead"${holder.lead ? " checked" : ""}> Call first</label>
+      <button type="button" class="btn ghost btn-sm ball-remove">Remove</button>
+    </div>
     <input type="hidden" class="ball-notes" value="${escapeHtml(holder.notes || "")}">
   </div>`;
 }
@@ -19962,6 +20116,7 @@ function openBallForm() {
   if (!form || !rows) return;
   const holders = timelineState.data?.ball_holders || [];
   fillBallWhoList();
+  renderBallKindPicker();
   rows.innerHTML = (holders.length ? holders : [{}]).map((h) => ballFormRowHtml(h)).join("");
   renderBallQuickAdd(holders);
   form.classList.remove("hidden");
@@ -19969,15 +20124,19 @@ function openBallForm() {
 
 function closeBallForm() {
   document.getElementById("ball-form")?.classList.add("hidden");
+  renderBallKindVisual();
 }
 
 function collectBallHolders() {
   return [...document.querySelectorAll("#ball-form-rows .ball-form-row")]
     .map((row) => ({
       name: row.querySelector(".ball-name")?.value.trim() || "",
+      title: row.querySelector(".ball-title")?.value.trim() || "",
+      department: row.querySelector(".ball-department")?.value.trim() || "",
       role: row.querySelector(".ball-role")?.value.trim() || "",
-      since: row.querySelector(".ball-since")?.value || "",
-      until: row.querySelector(".ball-until")?.value || "",
+      success: row.querySelector(".ball-success")?.value.trim() || "",
+      since: careDueValue(row.querySelector(".ball-since")?.value, row.querySelector(".ball-since-time")?.value) || "",
+      until: careDueValue(row.querySelector(".ball-until")?.value, row.querySelector(".ball-until-time")?.value) || "",
       notes: row.querySelector(".ball-notes")?.value.trim() || "",
       lead: Boolean(row.querySelector(".ball-lead")?.checked),
     }))
@@ -19994,7 +20153,7 @@ async function saveBallHolders(event) {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ holders }),
+      body: JSON.stringify({ holders, ball_kind: selectedBallKind() }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -20070,6 +20229,9 @@ async function loadTimeline({ quiet = false } = {}) {
     if (state.activePatientId !== pid) return;
     timelineState.data = data;
     renderTimeline();
+    if (document.getElementById("panel-timeline")?.classList.contains("active")) {
+      startMacWhatsAppWatch().catch(() => {});
+    }
   } catch (err) {
     toast(err.message || "Could not load timeline", "error");
   }
@@ -20183,6 +20345,7 @@ async function saveTimelineForm(event) {
       });
       timelineState.data = data;
       closeTimelineForm();
+      setTeamFold("timeline-log-body", true);
       renderTimeline();
       const count = (data.documents || []).length || (data.document ? 1 : 0);
       toast(count ? `${count} file${count === 1 ? "" : "s"} saved on the timeline` : "Added to timeline");
@@ -20200,6 +20363,7 @@ async function saveTimelineForm(event) {
     }
     timelineState.data = await res.json();
     closeTimelineForm();
+    setTeamFold("timeline-log-body", true);
     renderTimeline();
     toast(editId ? "Timeline entry updated" : "Added to timeline");
   } catch (err) {
@@ -20207,6 +20371,24 @@ async function saveTimelineForm(event) {
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+async function dismissTimelineRow(rowId) {
+  const pid = state.activePatientId;
+  if (!pid || !rowId) return;
+  const data = await tlSendTimeline(`/api/patients/${pid}/timeline/dismiss`, "POST", { row_id: rowId });
+  timelineState.data = data;
+  renderTimeline();
+  toast("Hidden from the timeline");
+}
+
+async function restoreTimelineRow(rowId) {
+  const pid = state.activePatientId;
+  if (!pid || !rowId) return;
+  const data = await tlSendTimeline(`/api/patients/${pid}/timeline/restore`, "POST", { row_id: rowId });
+  timelineState.data = data;
+  renderTimeline();
+  toast("Restored to the timeline");
 }
 
 async function deleteTimelineEvent(id) {
@@ -20282,6 +20464,131 @@ function fillWhatsAppChatName() {
   if (input && !input.value.trim() && names[0]) input.value = names[0];
 }
 
+let macWaTimer = null;
+let macWaBaseline = new Set();
+let macWaBusy = false;
+let macWaLastKey = "";
+
+function macWhatsAppAvailable() {
+  return Boolean(timelineState.data?.local_whatsapp_mac);
+}
+
+function syncMacWhatsAppUi(inbox) {
+  const available = macWhatsAppAvailable();
+  const box = document.getElementById("tl-mac-wa");
+  if (!box) return;
+  box.classList.toggle("hidden", !available);
+  if (!available) return;
+  const last = inbox?.last_import;
+  if (last?.added) {
+    box.textContent = `Background import: ${last.added} new message${last.added === 1 ? "" : "s"} from ${last.name || "Downloads"}.`;
+  } else if (inbox?.watching) {
+    box.textContent =
+      "WhatsApp cannot be read live. While Bright Health is running on this Mac, a new export saved to Downloads is imported in the background.";
+  }
+}
+
+async function fetchMacWhatsAppInbox() {
+  if (!macWhatsAppAvailable()) return { available: false, exports: [] };
+  const chat = lastWhatsAppChatName();
+  const res = await fetch(`/api/local/whatsapp-inbox${chat ? `?chat_name=${encodeURIComponent(chat)}` : ""}`, {
+    credentials: "include",
+  });
+  if (!res.ok) return { available: false, exports: [] };
+  return res.json();
+}
+
+async function importMacWhatsAppExport({ filename = "", quiet = false } = {}) {
+  const pid = state.activePatientId;
+  if (!pid) {
+    if (!quiet) toast("Select a patient first", "error");
+    return null;
+  }
+  if (macWaBusy) return null;
+  macWaBusy = true;
+  const status = document.getElementById("tl-import-status");
+  const chatName = lastWhatsAppChatName();
+  if (status) status.textContent = "Importing from this Mac…";
+  try {
+    const res = await fetch(`/api/patients/${pid}/care-events/import/whatsapp-mac`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        chat_name: chatName,
+        filename: filename || "",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto",
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not import from this Mac");
+    }
+    const data = await res.json();
+    const r = data.import || {};
+    const msg = `${r.added || 0} new message${r.added === 1 ? "" : "s"} added · ${r.skipped || 0} already on the timeline`;
+    if (status) status.textContent = msg;
+    if (chatName) rememberWhatsAppChatName(chatName);
+    if (r.added) {
+      setTeamFold("timeline-log-body", true);
+      toast(msg);
+      await loadTimeline({ quiet: true });
+    } else if (!quiet) {
+      toast(msg);
+    }
+    return data;
+  } catch (err) {
+    if (status) status.textContent = err.message || "Import failed";
+    if (!quiet) toast(err.message || "Import failed", "error");
+    return null;
+  } finally {
+    macWaBusy = false;
+  }
+}
+
+function stopMacWhatsAppWatch() {
+  if (macWaTimer) clearInterval(macWaTimer);
+  macWaTimer = null;
+}
+
+async function pollMacWhatsAppInbox() {
+  if (!macWhatsAppAvailable() || document.visibilityState !== "visible") return;
+  if (!document.getElementById("panel-timeline")?.classList.contains("active")) return;
+  try {
+    const inbox = await fetchMacWhatsAppInbox();
+    syncMacWhatsAppUi(inbox);
+    const last = inbox.last_import;
+    if (last?.at && last.at !== macWaLastKey) {
+      macWaLastKey = last.at;
+      if (last.added) {
+        setTeamFold("timeline-log-body", true);
+        toast(`${last.added} new WhatsApp message${last.added === 1 ? "" : "s"} imported in the background`);
+        await loadTimeline({ quiet: true });
+      }
+    }
+  } catch {
+    /* keep watching */
+  }
+}
+
+async function startMacWhatsAppWatch() {
+  stopMacWhatsAppWatch();
+  if (!macWhatsAppAvailable()) {
+    syncMacWhatsAppUi();
+    return;
+  }
+  try {
+    const inbox = await fetchMacWhatsAppInbox();
+    macWaBaseline = new Set((inbox.exports || []).map((row) => row.key));
+    syncMacWhatsAppUi(inbox);
+  } catch {
+    macWaBaseline = new Set();
+  }
+  macWaTimer = setInterval(() => {
+    pollMacWhatsAppInbox().catch(() => {});
+  }, 8000);
+}
+
 async function runWhatsAppImport() {
   const pid = state.activePatientId;
   if (!pid) return toast("Select a patient first", "error");
@@ -20323,6 +20630,7 @@ async function runWhatsAppImport() {
     if (fileEl) fileEl.value = "";
     if (nameEl) nameEl.textContent = "No file chosen yet.";
     document.getElementById("timeline-import")?.classList.add("hidden");
+    setTeamFold("timeline-log-body", true);
     await loadTimeline({ quiet: true });
   } catch (err) {
     if (status) status.textContent = err.message || "Import failed";
@@ -20542,6 +20850,11 @@ document.getElementById("tl-vitals-check")?.addEventListener("change", () => {
   if (kindEl && document.getElementById("tl-vitals-check")?.checked) kindEl.value = "vitals";
   syncTimelineCloseoutAndVitals();
 });
+document.getElementById("ball-kind-picker")?.addEventListener("click", (e) => {
+  const btn = e.target.closest(".ball-kind-choice");
+  if (!btn) return;
+  selectBallKind(btn.dataset.kind);
+});
 document.getElementById("btn-ball-edit")?.addEventListener("click", openBallForm);
 document.getElementById("btn-ball-cancel")?.addEventListener("click", closeBallForm);
 document.getElementById("btn-ball-add")?.addEventListener("click", () => {
@@ -20560,21 +20873,25 @@ document.getElementById("ball-form-rows")?.addEventListener("click", (e) => {
 });
 document.getElementById("ball-form-rows")?.addEventListener("change", (e) => {
   const box = e.target.closest(".ball-lead");
-  if (!box?.checked) return;
-  document.querySelectorAll("#ball-form-rows .ball-lead").forEach((el) => {
-    if (el !== box) el.checked = false;
-  });
+  if (box?.checked) {
+    document.querySelectorAll("#ball-form-rows .ball-lead").forEach((el) => {
+      if (el !== box) el.checked = false;
+    });
+  }
+  if (e.target.closest(".ball-name")) fillBallRowFromWho(e.target.closest(".ball-form-row"));
+});
+document.getElementById("ball-form-rows")?.addEventListener("input", (e) => {
+  if (e.target.closest(".ball-name")) fillBallRowFromWho(e.target.closest(".ball-form-row"));
 });
 document.getElementById("ball-quick-add")?.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-ball-quick]");
   if (!btn) return;
   const name = btn.dataset.ballQuick;
-  const person = tlPersonForAction(name);
+  const fields = ballFieldsFromPerson(name);
   document.getElementById("ball-form-rows")?.insertAdjacentHTML(
     "beforeend",
     ballFormRowHtml({
-      name,
-      role: person?.relationship || person?.role || "",
+      ...fields,
       since: ballToday(),
     })
   );
@@ -20650,6 +20967,10 @@ document.getElementById("tl-search")?.addEventListener("input", (e) => {
 });
 document.getElementById("tl-show-chatter")?.addEventListener("change", (e) => {
   timelineState.showChatter = Boolean(e.target.checked);
+  renderTimelineList();
+});
+document.getElementById("tl-show-dismissed")?.addEventListener("change", (e) => {
+  timelineState.showDismissed = Boolean(e.target.checked);
   renderTimelineList();
 });
 document.getElementById("timeline-gaps-list")?.addEventListener("click", (e) => {
@@ -20728,6 +21049,19 @@ document.getElementById("btn-team-fold")?.addEventListener("click", () => {
   const body = document.getElementById("care-team-body");
   setTeamFold("care-team-body", body?.classList.contains("hidden"));
   renderTimelineTeam();
+});
+document.getElementById("btn-tl-log-fold")?.addEventListener("click", () => {
+  const body = document.getElementById("timeline-log-body");
+  setTeamFold("timeline-log-body", body?.classList.contains("hidden"));
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopMacWhatsAppWatch();
+    return;
+  }
+  if (document.getElementById("panel-timeline")?.classList.contains("active")) {
+    startMacWhatsAppWatch().catch(() => {});
+  }
 });
 document.getElementById("btn-family-add")?.addEventListener("click", () => openFamilyForm());
 document.getElementById("btn-family-share-staff")?.addEventListener("click", () => showContactSheet("staff"));
@@ -20835,6 +21169,16 @@ document.getElementById("panel-timeline")?.addEventListener("click", (e) => {
   const del = e.target.closest(".tl-delete");
   if (del) {
     deleteTimelineEvent(del.dataset.id).catch((err) => toast(err.message, "error"));
+    return;
+  }
+  const hide = e.target.closest(".tl-dismiss");
+  if (hide) {
+    dismissTimelineRow(hide.dataset.rowId).catch((err) => toast(err.message, "error"));
+    return;
+  }
+  const restore = e.target.closest(".tl-restore");
+  if (restore) {
+    restoreTimelineRow(restore.dataset.rowId).catch((err) => toast(err.message, "error"));
     return;
   }
   const doc = e.target.closest(".tl-open-doc");

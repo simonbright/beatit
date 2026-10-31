@@ -190,6 +190,8 @@ from app.services.case_manager import (
     delete_patient_measurement,
     add_patient_diagnostic,
     dismiss_patient_gap,
+    dismiss_timeline_row,
+    restore_timeline_row,
     delete_patient_diagnostic,
     clear_patient_diagnostics,
     group_diagnostics_for_charts,
@@ -4686,6 +4688,7 @@ class PatientCareEventUpdateRequest(BaseModel):
 
 class PatientBallHoldersRequest(BaseModel):
     holders: list[dict[str, Any]] = Field(default_factory=list)
+    ball_kind: str | None = Field(default=None, max_length=40)
 
 
 class PatientWhatsAppImportRequest(BaseModel):
@@ -4711,6 +4714,21 @@ def _timeline_actor(request: Request | None) -> str:
     if not actor or actor == "local":
         return "local user"
     return actor
+
+
+def _is_loopback(request: Request | None) -> bool:
+    host = (request.client.host if request and request.client else "") or ""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def _local_whatsapp_mac_enabled(request: Request | None = None) -> bool:
+    from app.services.whatsapp_mac import inbox_enabled
+
+    if not inbox_enabled():
+        return False
+    if request is None:
+        return True
+    return _is_loopback(request)
 
 
 def _queue_family_push(request: Request | None, patient_id: str, *, body: str, url_path: str = "/#timeline") -> None:
@@ -4746,7 +4764,7 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         kinds_payload,
         linkable_documents,
     )
-    from app.services.care_workspace import PROFESSIONAL_VISIT_KINDS
+    from app.services.care_workspace import PROFESSIONAL_VISIT_KINDS, ball_kinds_payload
     from app.services.patient_documents import list_patient_documents
     from app.services.action_items import harvest_unscanned_events
 
@@ -4803,7 +4821,10 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         "documents": linkable_documents(documents),
         "action_items": profile.get("care_items") or [],
         "ball_holders": profile.get("ball_holders") or [],
+        "ball_kind": profile.get("ball_kind") or "basketball",
+        "ball_kinds": ball_kinds_payload(),
         "last_whatsapp_chat": profile.get("last_whatsapp_chat") or "",
+        "local_whatsapp_mac": _local_whatsapp_mac_enabled(),
         "professional_kinds": sorted(PROFESSIONAL_VISIT_KINDS),
         "counts": {
             "care_events": len(care_events),
@@ -4847,6 +4868,44 @@ async def api_dismiss_patient_gap(patient_id: str, body: PatientGapDismissReques
     profile = dismiss_patient_gap(patient_id, kind=body.kind.strip(), day=day, ref=(body.ref or "").strip() or None)
     if profile is None:
         raise HTTPException(status_code=404, detail="Patient not found")
+    return await _timeline_payload(patient_id)
+
+
+class PatientTimelineDismissRequest(BaseModel):
+    row_id: str = Field(min_length=1, max_length=160)
+
+
+@router.post("/patients/{patient_id}/timeline/dismiss")
+async def api_dismiss_timeline_row(patient_id: str, body: PatientTimelineDismissRequest, request: Request):
+    if not any(p["id"] == patient_id for p in list_patients()):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = dismiss_timeline_row(patient_id, body.row_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        "timeline.dismissed",
+        resource_type="timeline_row",
+        resource_id=body.row_id,
+        metadata={"patient_id": patient_id, "row_id": body.row_id},
+    )
+    return await _timeline_payload(patient_id)
+
+
+@router.post("/patients/{patient_id}/timeline/restore")
+async def api_restore_timeline_row(patient_id: str, body: PatientTimelineDismissRequest, request: Request):
+    if not any(p["id"] == patient_id for p in list_patients()):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    profile = restore_timeline_row(patient_id, body.row_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _timeline_audit(
+        request,
+        "timeline.restored",
+        resource_type="timeline_row",
+        resource_id=body.row_id,
+        metadata={"patient_id": patient_id, "row_id": body.row_id},
+    )
     return await _timeline_payload(patient_id)
 
 
@@ -4984,7 +5043,7 @@ async def api_set_ball_holders(
     body: PatientBallHoldersRequest,
     request: Request,
 ):
-    profile = set_patient_ball_holders(patient_id, body.holders)
+    profile = set_patient_ball_holders(patient_id, body.holders, ball_kind=body.ball_kind)
     if profile is None:
         raise HTTPException(status_code=404, detail="Patient not found")
     await _timeline_audit(
@@ -5526,44 +5585,16 @@ async def api_import_visit_transcript(
     return payload
 
 
-@router.post("/patients/{patient_id}/care-events/import/whatsapp")
-async def api_import_whatsapp_care_events(patient_id: str, request: Request):
-    from app.services.whatsapp_import import (
-        messages_to_care_events,
-        parse_whatsapp_export,
-        text_from_export_bytes,
-        text_from_export_zip,
-    )
+async def _import_whatsapp_text(
+    patient_id: str,
+    request: Request,
+    *,
+    text: str,
+    chat_name: str,
+    tz_name: str,
+) -> dict[str, Any]:
+    from app.services.whatsapp_import import messages_to_care_events, parse_whatsapp_export
 
-    ctype = (request.headers.get("content-type") or "").lower()
-    text = ""
-    chat_name = ""
-    tz_name = "America/Toronto"
-    if ctype.startswith("multipart/"):
-        form = await request.form()
-        upload = form.get("file")
-        chat_name = str(form.get("chat_name") or "").strip()
-        tz_name = str(form.get("timezone") or tz_name).strip() or tz_name
-        if upload is None or not hasattr(upload, "read"):
-            raise HTTPException(status_code=400, detail="Choose the exported chat file")
-        raw = await upload.read()
-        try:
-            text = text_from_export_bytes(raw)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    else:
-        try:
-            body = PatientWhatsAppImportRequest.model_validate(await request.json())
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)") from exc
-        text = body.text or ""
-        chat_name = (body.chat_name or "").strip()
-        tz_name = body.timezone or tz_name
-        if not text and body.zip_base64:
-            try:
-                text = text_from_export_zip(body.zip_base64)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not text.strip():
         raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)")
     try:
@@ -5599,12 +5630,104 @@ async def api_import_whatsapp_care_events(patient_id: str, request: Request):
     if added:
         noun = "message" if added == 1 else "messages"
         _queue_family_push(request, patient_id, body=f"{added} new WhatsApp {noun}")
-    # Do not rebuild the full library-backed timeline here — that SELECT and
-    # lab enrichment on the same request is what 502s the only Render worker.
     return {
         "import": {**result, "messages": len(messages)},
         "patient_id": patient_id,
     }
+
+
+@router.post("/patients/{patient_id}/care-events/import/whatsapp")
+async def api_import_whatsapp_care_events(patient_id: str, request: Request):
+    from app.services.whatsapp_import import text_from_export_bytes, text_from_export_zip
+
+    ctype = (request.headers.get("content-type") or "").lower()
+    text = ""
+    chat_name = ""
+    tz_name = "America/Toronto"
+    if ctype.startswith("multipart/"):
+        form = await request.form()
+        upload = form.get("file")
+        chat_name = str(form.get("chat_name") or "").strip()
+        tz_name = str(form.get("timezone") or tz_name).strip() or tz_name
+        if upload is None or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="Choose the exported chat file")
+        raw = await upload.read()
+        try:
+            text = text_from_export_bytes(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        try:
+            body = PatientWhatsAppImportRequest.model_validate(await request.json())
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)") from exc
+        text = body.text or ""
+        chat_name = (body.chat_name or "").strip()
+        tz_name = body.timezone or tz_name
+        if not text and body.zip_base64:
+            try:
+                text = text_from_export_zip(body.zip_base64)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await _import_whatsapp_text(
+        patient_id, request, text=text, chat_name=chat_name, tz_name=tz_name
+    )
+
+
+class PatientWhatsAppMacImportRequest(BaseModel):
+    chat_name: str | None = Field(default=None, max_length=120)
+    filename: str | None = Field(default=None, max_length=200)
+    timezone: str | None = Field(default="America/Toronto", max_length=60)
+
+
+@router.get("/local/whatsapp-inbox")
+async def api_local_whatsapp_inbox(request: Request, chat_name: str | None = Query(default=None, max_length=120)):
+    from app.services.whatsapp_mac import inbox_status
+
+    if not _local_whatsapp_mac_enabled(request):
+        return {"available": False, "folders": [], "exports": []}
+    return inbox_status(chat_name or "")
+
+
+@router.post("/local/whatsapp-open")
+async def api_local_whatsapp_open(request: Request):
+    from app.services.whatsapp_mac import open_whatsapp_app
+
+    if not _local_whatsapp_mac_enabled(request):
+        raise HTTPException(status_code=404, detail="WhatsApp Desktop import is only on this Mac")
+    if not open_whatsapp_app():
+        raise HTTPException(status_code=400, detail="Could not open WhatsApp. Is it installed?")
+    return {"ok": True}
+
+
+@router.post("/patients/{patient_id}/care-events/import/whatsapp-mac")
+async def api_import_whatsapp_from_mac(
+    patient_id: str, request: Request, body: PatientWhatsAppMacImportRequest | None = None
+):
+    from app.services.whatsapp_import import text_from_export_bytes
+    from app.services.whatsapp_mac import resolve_export
+
+    if not _local_whatsapp_mac_enabled(request):
+        raise HTTPException(status_code=404, detail="WhatsApp Desktop import is only on this Mac")
+    payload = body or PatientWhatsAppMacImportRequest()
+    path = resolve_export(chat_hint=payload.chat_name or "", filename=payload.filename or "")
+    if path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No WhatsApp export in Downloads or Desktop. Export the chat without media, then try again.",
+        )
+    try:
+        text = text_from_export_bytes(path.read_bytes())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    chat_name = (payload.chat_name or "").strip()
+    return await _import_whatsapp_text(
+        patient_id,
+        request,
+        text=text,
+        chat_name=chat_name,
+        tz_name=payload.timezone or "America/Toronto",
+    )
 
 
 class PatientLogTileCreateRequest(BaseModel):

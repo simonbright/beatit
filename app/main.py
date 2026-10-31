@@ -24,7 +24,11 @@ async def lifespan(app: FastAPI):
     db = Database()
     await db.init()
     await resume_pending_jobs()
+    from app.services.whatsapp_mac import start_inbox_watcher, stop_inbox_watcher
+
+    start_inbox_watcher()
     yield
+    stop_inbox_watcher()
 
 
 app = FastAPI(

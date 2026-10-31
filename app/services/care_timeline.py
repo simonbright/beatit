@@ -884,6 +884,13 @@ def build_timeline(
         *document_rows(documents),
     ]
     rows = [r for r in rows if r.get("at")]
+    hidden = {
+        str(row.get("id") or "").strip()
+        for row in (profile.get("dismissed_timeline") or [])
+        if isinstance(row, dict) and row.get("id")
+    }
+    for row in rows:
+        row["dismissed"] = row.get("id") in hidden
     rows.sort(key=lambda r: _sort_key(r.get("at")), reverse=True)
     return rows
 

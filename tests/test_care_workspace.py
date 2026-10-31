@@ -9,12 +9,14 @@ import pytest
 from app.services import case_manager
 from app.services.care_timeline import CARE_EVENT_KINDS, kinds_payload, normalize_care_event_kind
 from app.services.care_workspace import (
+    DEFAULT_BALL_KIND,
     build_care_workspace_brief,
     complete_visit_actions,
     current_ball_holders,
     find_internal_medicine_team,
     is_professional_visit_kind,
     normalize_ball_holders,
+    normalize_ball_kind,
     normalize_visit_actions,
 )
 
@@ -91,16 +93,42 @@ def test_vitals_is_a_timeline_kind():
 def test_normalize_ball_holders_keeps_people_and_dates():
     holders = normalize_ball_holders(
         [
-            {"name": "Hadas", "role": "Point person", "since": "2026-10-28T09:00:00"},
-            {"name": "Dr. Gupta", "since": "2026-10-30", "until": "2026-11-02", "notes": "awaiting CT"},
+            {
+                "name": "Hadas",
+                "role": "Point person — daily plan",
+                "since": "2026-10-28T09:00:00",
+                "title": "Daughter",
+                "success": "Family has tonight's plan",
+            },
+            {
+                "name": "Dr. Gupta",
+                "since": "2026-10-30",
+                "until": "2026-11-02",
+                "notes": "awaiting CT",
+                "title": "Attending",
+                "department": "Infectious disease",
+            },
             {"name": ""},
         ]
     )
     assert [h["name"] for h in holders] == ["Hadas", "Dr. Gupta"]
-    assert holders[0]["since"] == "2026-10-28"
+    assert holders[0]["since"] == "2026-10-28T09:00"
+    assert holders[0]["title"] == "Daughter"
+    assert holders[0]["success"] == "Family has tonight's plan"
     assert holders[1]["until"] == "2026-11-02"
+    assert holders[1]["department"] == "Infectious disease"
     now = current_ball_holders(holders + [{"name": "Old", "until": "2026-10-01"}], today="2026-10-31")
     assert [h["name"] for h in now] == ["Hadas", "Dr. Gupta"]
+    still = current_ball_holders(
+        [{"name": "Chen", "until": "2026-10-31T14:00"}],
+        today="2026-10-31T13:00",
+    )
+    assert [h["name"] for h in still] == ["Chen"]
+    gone = current_ball_holders(
+        [{"name": "Chen", "until": "2026-10-31T14:00"}],
+        today="2026-10-31T15:00",
+    )
+    assert gone == []
     led = normalize_ball_holders(
         [
             {"name": "Aron", "role": "Bedside"},
@@ -153,10 +181,38 @@ def test_internal_medicine_without_attending_name():
 def test_ball_holders_persist(patient):
     saved = case_manager.set_patient_ball_holders(
         patient,
-        [{"name": "Aron", "role": "Bedside", "since": "2026-10-31"}],
+        [
+            {
+                "name": "Aron",
+                "role": "Bedside coverage tonight",
+                "success": "Someone is in the room until 8am",
+                "title": "Son-in-law",
+                "department": "Family",
+                "since": "2026-10-31T18:00",
+                "until": "2026-11-01T08:00",
+            }
+        ],
     )
-    assert saved["ball_holders"][0]["name"] == "Aron"
-    assert case_manager.get_patient_profile(patient)["ball_holders"][0]["since"] == "2026-10-31"
+    holder = saved["ball_holders"][0]
+    assert holder["name"] == "Aron"
+    assert holder["title"] == "Son-in-law"
+    assert holder["success"] == "Someone is in the room until 8am"
+    assert holder["department"] == "Family"
+    stored = case_manager.get_patient_profile(patient)
+    assert stored["ball_holders"][0]["since"] == "2026-10-31T18:00"
+    assert stored["ball_holders"][0]["until"] == "2026-11-01T08:00"
+    assert stored["ball_kind"] == "basketball"
+    soccer = case_manager.set_patient_ball_holders(patient, saved["ball_holders"], ball_kind="soccer")
+    assert soccer["ball_kind"] == "soccer"
+    assert case_manager.get_patient_profile(patient)["ball_kind"] == "soccer"
+
+
+def test_ball_kind_defaults_to_basketball():
+    assert DEFAULT_BALL_KIND == "basketball"
+    assert normalize_ball_kind("") == "basketball"
+    assert normalize_ball_kind("hoops") == "basketball"
+    assert normalize_ball_kind("futbol") == "soccer"
+    assert normalize_ball_kind("not-a-ball") == "basketball"
 
 
 def test_attach_visit_actions(patient):
@@ -174,7 +230,7 @@ def test_attach_visit_actions(patient):
 def test_workspace_brief_answers_defaults(patient):
     brief = build_care_workspace_brief(patient)
     assert "Hadas" in brief
-    assert "since 2026-10-28" in brief
+    assert "from 2026-10-28" in brief
     assert "Send CT to Dr. Gupta" in brief
     assert "Internal Medicine" in brief
     assert "no attending name" in brief.lower() or "not saved" in brief.lower()
