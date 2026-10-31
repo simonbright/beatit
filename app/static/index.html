@@ -669,6 +669,7 @@
                 <div id="source-attribution-notice" class="source-attribution-notice hidden" role="status"></div>
                 <div id="executive-summary-notice" class="executive-summary-notice hidden" role="status"></div>
                 <div id="executive-summary-text" class="executive-summary-text"></div>
+                <div id="assessment-add-contacts" class="add-contact-chips hidden"></div>
               </div>
 
               <div class="card full-assessment-card answer-article hidden" id="full-assessment-card">
@@ -1247,12 +1248,14 @@
             <h4>Who has the ball</h4>
             <button type="button" class="btn ghost btn-sm" id="btn-ball-edit">Update</button>
           </div>
-          <p class="muted small">The person or people who own the next move — always named, with dates.</p>
+          <p class="muted small">Who is in charge right now — the person or people to call if you need clarity.</p>
           <div id="who-has-ball-list" class="who-has-ball-list">
-            <p class="who-has-ball-empty">Nobody assigned — tap Update so the family can see.</p>
+            <p class="who-has-ball-empty">Nobody is in charge — tap Update so everyone knows who to call.</p>
           </div>
           <form id="ball-form" class="care-item-form timeline-form hidden" autocomplete="off">
+            <div id="ball-quick-add" class="ball-quick-add"></div>
             <div id="ball-form-rows" class="ball-form-rows"></div>
+            <datalist id="ball-who-list"></datalist>
             <div class="care-item-form-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-ball-add">+ Add person</button>
               <button type="submit" class="btn primary" id="btn-ball-save">Save</button>
@@ -1423,23 +1426,27 @@
           </div>
         </div>
 
-        <section id="timeline-gaps" class="timeline-gaps" aria-label="What's missing">
+        <p id="timeline-stay" class="timeline-stay hidden"></p>
+        <section id="timeline-gaps" class="timeline-gaps hidden" aria-label="What's missing">
           <div class="timeline-team-head">
             <h4>What's missing <span class="muted small" id="timeline-gaps-count"></span></h4>
           </div>
-          <p id="timeline-stay" class="timeline-stay"></p>
           <div id="timeline-gaps-list" class="timeline-gaps-list"></div>
-          <p class="muted small timeline-gaps-note">Based only on what's been recorded here — a gap may mean it happened but nobody logged it.</p>
+          <p class="muted small timeline-gaps-note">Days or results that were not logged here — they may still have happened.</p>
         </section>
 
         <div class="family-team-wrap">
           <div class="timeline-team-head">
-            <h4>Family <span class="muted small">· add people</span></h4>
+            <button type="button" class="tl-fold-btn" id="btn-family-fold" aria-expanded="false" aria-controls="family-team-body">
+              <span class="tl-fold-caret" aria-hidden="true"></span>
+              <h4>Family <span class="muted small" id="family-team-count">· add people</span></h4>
+            </button>
             <div class="timeline-team-head-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-family-share-staff">Share with staff</button>
               <button type="button" class="btn ghost btn-sm" id="btn-family-add">+ Add family member</button>
             </div>
           </div>
+          <div id="family-team-body" class="tl-fold-body hidden">
           <div id="family-suggest" class="family-suggest hidden"></div>
           <form id="family-form" class="care-item-form timeline-form hidden" autocomplete="off">
             <label for="fam-name">Name
@@ -1507,16 +1514,21 @@
             </div>
           </div>
           <div id="family-people" class="timeline-team family-people"></div>
+          </div>
         </div>
 
         <div class="timeline-team-wrap">
           <div class="timeline-team-head">
-            <h4>Professional care team <span class="muted small" id="timeline-team-hint"></span></h4>
+            <button type="button" class="tl-fold-btn" id="btn-team-fold" aria-expanded="false" aria-controls="care-team-body">
+              <span class="tl-fold-caret" aria-hidden="true"></span>
+              <h4>Professional care team <span class="muted small" id="timeline-team-hint"></span></h4>
+            </button>
             <div class="timeline-team-head-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-team-share-family">Share with family</button>
               <button type="button" class="btn ghost btn-sm" id="btn-team-add">+ Add person</button>
             </div>
           </div>
+          <div id="care-team-body" class="tl-fold-body hidden">
           <div id="timeline-env-filter" class="timeline-filter-group hidden" role="group" aria-label="Where"></div>
           <form id="team-form" class="care-item-form timeline-form hidden" autocomplete="off">
             <label for="team-name">Name
@@ -1571,6 +1583,7 @@
           </form>
           <datalist id="tl-env-list"></datalist>
           <div id="timeline-team" class="timeline-team"><p class="muted small">No practitioners recorded yet.</p></div>
+          </div>
         </div>
 
         <div id="timeline-contacts" class="timeline-panel hidden">

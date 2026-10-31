@@ -1174,13 +1174,6 @@ def build_gaps(
             if not counts["family"]:
                 add("info", "no_family_update", f"No family update {label}", day=key, action="family_note")
             day += _timedelta(days=1)
-    else:
-        add(
-            "info",
-            "no_stay",
-            "Not marked as in hospital. Log an admission so each day of the stay can be checked for visits and tests.",
-            action="log_admission",
-        )
 
     # 2) Tests with no result recorded after them
     results_after = sorted(
@@ -1229,24 +1222,6 @@ def build_gaps(
             if gap >= 2:
                 who = ev["practitioner"] + (f" ({ev['role']})" if ev.get("role") else "")
                 add("warn", "not_seen", f"{who} — not seen since {_fmt_day(dt.date())} ({gap} days)", action="log_visit")
-
-    # 4) Plan items past due
-    for item in profile.get("care_items") or []:
-        due = str(item.get("due_at") or "")
-        if (item.get("status") or "open") != "open" or not due:
-            continue
-        due_day = due[:10]
-        past = due_day < today.isoformat()
-        if not past and due_day == today.isoformat() and "T" in due:
-            past = due[:16] < datetime.now().strftime("%Y-%m-%dT%H:%M")
-        if past:
-            try:
-                due_label = _fmt_day(datetime.fromisoformat(due_day).date())
-            except ValueError:
-                due_label = due_day
-            if "T" in due and len(due) >= 16:
-                due_label = f"{due_label} {due[11:16]}"
-            add("warn", "overdue", f"Overdue from the plan: {item.get('title')} (due {due_label})", action="open_plan")
 
     # Warnings first; within each, standing issues before per-day ones, newest day first.
     order = {"warn": 0, "info": 1}

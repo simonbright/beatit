@@ -11,6 +11,7 @@ from app.services.care_timeline import CARE_EVENT_KINDS, kinds_payload, normaliz
 from app.services.care_workspace import (
     build_care_workspace_brief,
     complete_visit_actions,
+    current_ball_holders,
     find_internal_medicine_team,
     is_professional_visit_kind,
     normalize_ball_holders,
@@ -98,6 +99,16 @@ def test_normalize_ball_holders_keeps_people_and_dates():
     assert [h["name"] for h in holders] == ["Hadas", "Dr. Gupta"]
     assert holders[0]["since"] == "2026-10-28"
     assert holders[1]["until"] == "2026-11-02"
+    now = current_ball_holders(holders + [{"name": "Old", "until": "2026-10-01"}], today="2026-10-31")
+    assert [h["name"] for h in now] == ["Hadas", "Dr. Gupta"]
+    led = normalize_ball_holders(
+        [
+            {"name": "Aron", "role": "Bedside"},
+            {"name": "Hadas", "role": "Point person", "lead": True},
+        ]
+    )
+    assert led[0]["name"] == "Hadas" and led[0]["lead"]
+    assert led[1]["name"] == "Aron" and not led[1]["lead"]
 
 
 def test_visit_actions_are_optional():

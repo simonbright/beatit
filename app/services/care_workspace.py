@@ -93,6 +93,7 @@ def normalize_ball_holder(raw: Any) -> dict[str, Any] | None:
         "since": since or None,
         "until": until or None,
         "notes": _clean(raw.get("notes"), 240),
+        "lead": bool(raw.get("lead") or raw.get("call_first") or raw.get("primary")),
     }
 
 
@@ -107,8 +108,24 @@ def normalize_ball_holders(raw: Any) -> list[dict[str, Any]]:
             continue
         seen.add(holder["id"])
         out.append(holder)
-    out.sort(key=lambda h: (h.get("since") or "9999", h["name"].lower()))
+    lead_used = False
+    for holder in out:
+        if holder["lead"] and not lead_used:
+            lead_used = True
+        else:
+            holder["lead"] = False
+    out.sort(key=lambda h: (0 if h.get("lead") else 1, h.get("since") or "9999", h["name"].lower()))
     return out[:12]
+
+
+def current_ball_holders(
+    raw: Any,
+    *,
+    today: str | None = None,
+) -> list[dict[str, Any]]:
+    """People in charge right now — until-date has not passed."""
+    day = _day(today) or datetime.now().date().isoformat()
+    return [h for h in normalize_ball_holders(raw) if not h.get("until") or str(h["until"]) >= day]
 
 
 def normalize_visit_actions(raw: Any) -> list[dict[str, str]]:
@@ -186,6 +203,8 @@ def _format_holder(holder: dict[str, Any]) -> str:
     bits = [holder["name"]]
     if holder.get("role"):
         bits.append(f"({holder['role']})")
+    if holder.get("lead"):
+        bits.append("— call first")
     if holder.get("since"):
         bits.append(f"since {holder['since']}")
     if holder.get("until"):
@@ -272,7 +291,7 @@ def build_care_workspace_brief(patient_id: str | None) -> str:
         key=lambda ev: str(ev.get("occurred_at") or ev.get("created_at") or ""),
         reverse=True,
     )
-    holders = normalize_ball_holders(profile.get("ball_holders"))
+    holders = current_ball_holders(profile.get("ball_holders"))
     team = profile.get("care_team") or []
     family = profile.get("family_team") or []
     items = profile.get("care_items") or []
@@ -296,13 +315,20 @@ def build_care_workspace_brief(patient_id: str | None) -> str:
     lines = [
         "=== CARE WORKSPACE (family facts — use these first for who / what / when questions) ===",
         "",
-        "WHO HAS THE BALL (can be several people; this is the standing assignment):",
+        "WHO TO CALL NOW FOR CLARITY (who has the ball — the people in charge right now):",
     ]
     if holders:
-        lines.extend(f"- {_format_holder(h)}" for h in holders)
+        lead = next((h for h in holders if h.get("lead")), None)
+        if lead and len(holders) > 1:
+            lines.append(f"- Call first: {_format_holder(lead)}")
+            others = [h for h in holders if h["id"] != lead["id"]]
+            lines.extend(f"- Also in charge: {_format_holder(h)}" for h in others)
+        else:
+            lines.extend(f"- Call now: {_format_holder(h)}" for h in holders)
+        lines.append("- If the family asks who has the ball, name these people and how to reach them. Do not list expired assignments.")
     else:
         lines.append(
-            "- Nobody is assigned. Say that clearly. Tell the family to set it on Timeline → Who has the ball."
+            "- Nobody is in charge right now. Say that clearly. Tell the family to set Who has the ball on Timeline so everyone knows who to call."
         )
 
     lines += ["", "PROFESSIONAL CARE TEAM:"]

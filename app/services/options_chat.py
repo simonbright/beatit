@@ -23,7 +23,7 @@ OPTIONS_CHAT_RULES = """
 ASK / OPTIONS CHAT (family workspace + clinical discussion):
 - You have the CARE WORKSPACE brief: who has the ball, care team, open items, recent visits, discharge/stay, and latest labs. Use it first for coordination questions.
 - Default family questions:
-  • Who has the ball? — list every current holder with name, role if any, and since/until dates. If nobody is assigned, say so plainly.
+  • Who has the ball? — who is in charge right now, and who the family should call first for clarity. Name every current person. If several, say who to call first. If nobody is assigned, say so plainly.
   • Which items are open? — list open action items and open doctor questions with dates.
   • What is the plan for discharge? — use recorded discharge entries and mentions. If no plan is recorded, say so.
   • Who is Internal Medicine / the attending? — name people on file. If the role exists without a name, say the attending name is not recorded.
@@ -34,6 +34,7 @@ ASK / OPTIONS CHAT (family workspace + clinical discussion):
 - When FOCUS DOCUMENTS are provided, prioritize those.
 - Ask a brief clarifying question when a fork would change the answer — but still give a useful partial answer.
 - Keep answers short and dated. Use headings and bullets. Name people and dates.
+- When you name a clinician or family member who is not already on PROFESSIONAL CARE TEAM or FAMILY, use their full name and role (e.g. Dr. Chen, Internal Medicine attending) so the family can save a contact.
 - Cite claims with [SOURCE: …] tags using the source attribution rules below.
 - This chat does NOT automatically replace the Home assessment. When the user wants the main assessment updated, tell them to use “Update Home assessment”.
 """

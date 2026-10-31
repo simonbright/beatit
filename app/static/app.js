@@ -7143,6 +7143,16 @@ function renderLatestAssessment(analysis) {
   } else {
     execTextEl.innerHTML = '<p class="muted">No assessment text was returned.</p>';
   }
+  const fillAssessmentContacts = () => {
+    const mentionSource = [summaryDisplay, responseDisplay].filter(Boolean).join("\n");
+    const mentionChips = addContactChipsHtml(extractNamedPeople(mentionSource), "Home assessment");
+    const mentionEl = document.getElementById("assessment-add-contacts");
+    if (!mentionEl) return;
+    mentionEl.innerHTML = mentionChips;
+    mentionEl.classList.toggle("hidden", !mentionChips);
+  };
+  fillAssessmentContacts();
+  ensureTimelineData().then(fillAssessmentContacts);
 
   if (fullCard && fullBody) {
     const fullText =
@@ -8927,6 +8937,166 @@ function renderOptionsChatStarters() {
     .join("");
 }
 
+function contactNameKey(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/\./g, " ")
+    .replace(/\b(dr|doctor|prof|professor|nurse|np|pa)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function listedContacts() {
+  return [
+    ...(timelineState.data?.care_team || []),
+    ...(timelineState.data?.team_members || []),
+    ...(timelineState.data?.family_team || []),
+    ...(state.patientProfile?.care_team || []),
+    ...(state.patientProfile?.family_team || []),
+  ];
+}
+
+function isSavedContact(name) {
+  const bare = contactNameKey(name);
+  if (!bare) return false;
+  return listedContacts().some((member) => {
+    const other = contactNameKey(member?.name);
+    return other === bare || (other && bare && (other.endsWith(` ${bare}`) || bare.endsWith(` ${other}`)));
+  });
+}
+
+function isPatientPersonName(name) {
+  const bare = contactNameKey(name);
+  const patient = contactNameKey(state.activePatientLabel || document.getElementById("header-patient-name")?.textContent || "");
+  if (!bare || !patient) return false;
+  return bare === patient || patient.startsWith(`${bare} `) || patient.endsWith(` ${bare}`);
+}
+
+function inferMentionRole(windowText, explicit = "") {
+  if (explicit) {
+    const low = explicit.toLowerCase();
+    if (low.includes("internal")) return "Internal medicine";
+    return explicit.replace(/\s+/g, " ").trim();
+  }
+  const low = String(windowText || "").toLowerCase();
+  if (low.includes("internal medicine") || low.includes("internist")) return "Internal medicine";
+  if (low.includes("hospitalist")) return "Hospitalist";
+  if (low.includes("oncolog")) return "Oncology";
+  if (low.includes("attending")) return "Attending";
+  if (low.includes("resident")) return "Resident";
+  if (low.includes("nurse practitioner")) return "Nurse practitioner";
+  return "";
+}
+
+function extractNamedPeople(text) {
+  const raw = String(text || "");
+  const found = [];
+  const skipFirst = new Set(["the", "a", "an", "this", "that", "our", "her", "his", "their", "she", "he"]);
+  const add = (name, extra = {}) => {
+    const title = extra.title || "";
+    let display = String(name || "").replace(/\s+/g, " ").trim();
+    if (/^dr\.?$/i.test(title) && !/^dr\b/i.test(display)) display = `Dr. ${display}`;
+    const key = contactNameKey(display);
+    if (!key || key.length < 3 || skipFirst.has(key.split(" ")[0]) || isPatientPersonName(display)) return;
+    if (/\b(internal|medicine|hospital|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(key)) return;
+    const start = Math.max(0, raw.toLowerCase().indexOf(String(name || "").toLowerCase()));
+    const windowText = raw.slice(Math.max(0, start - 80), start + 80);
+    const item = {
+      name: display,
+      role: inferMentionRole(windowText, extra.role || ""),
+      kind: extra.kind || (/\b(daughter|son|husband|wife|brother|sister|mother|father|mom|dad|family)\b/i.test(windowText) ? "family" : "care"),
+    };
+    const existing = found.find((p) => {
+      const other = contactNameKey(p.name);
+      return other === key || other.includes(key) || key.includes(other);
+    });
+    if (existing) {
+      if (display.length > existing.name.length) existing.name = display;
+      if (item.role && !existing.role) existing.role = item.role;
+      return;
+    }
+    found.push(item);
+  };
+  const titleRe = /\b(Dr\.?|Doctor|Prof\.?|Professor|Nurse|NP|PA)\s+([A-Z][A-Za-z'’\-]{1,24}(?:\s+[A-Z][A-Za-z'’\-]{1,24}){0,2})\b/g;
+  const credRe = /\b([A-Z][A-Za-z'’\-]{1,24}(?:\s+[A-Z][A-Za-z'’\-]{1,24}){1,2}),?\s+(M\.?D\.?|D\.?O\.?)\b/g;
+  const attendingRe = /\b(?:attending|internist|hospitalist)\s+(?:is|was)\s+(?:Dr\.?\s+)?([A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){0,2})\b/gi;
+  const roleAfterRe = /\b([A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+)+)\s*,?\s+(?:the\s+)?(Internal Medicine(?:\s+attending)?|Hospitalist|Oncology|Oncologist|Attending)\b/gi;
+  const familyRe = /\b(daughter|son|husband|wife|brother|sister|mother|father|mom|dad)\s+([A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){0,2})\b/g;
+  for (const match of raw.matchAll(titleRe)) add(match[2], { title: match[1] });
+  for (const match of raw.matchAll(credRe)) add(match[1], { title: "Dr" });
+  for (const match of raw.matchAll(attendingRe)) add(match[1], { title: "Dr", role: "Attending", kind: "care" });
+  for (const match of raw.matchAll(roleAfterRe)) add(match[1], { role: match[2], kind: "care" });
+  for (const match of raw.matchAll(familyRe)) add(match[2], { kind: "family" });
+  return found.filter((p) => !isSavedContact(p.name));
+}
+
+function addContactChipsHtml(people, source) {
+  if (!people.length) return "";
+  return `<div class="add-contact-chips" data-add-contact-source="${escapeHtml(source || "")}">${people
+    .map((p) => {
+      const dest = p.kind === "family" ? "family" : "care team";
+      return `<button type="button" class="btn secondary btn-sm btn-add-mentioned-contact" data-add-contact-name="${escapeHtml(p.name)}" data-add-contact-role="${escapeHtml(p.role || "")}" data-add-contact-kind="${p.kind === "family" ? "family" : "care"}">+ Add ${escapeHtml(p.name)} to ${dest}</button>`;
+    })
+    .join("")}</div>`;
+}
+
+async function ensureTimelineData() {
+  if (!state.activePatientId) return;
+  if (timelineState.data && timelineState.patientId === state.activePatientId) return;
+  await loadTimeline({ quiet: true });
+}
+
+async function addMentionedContact(name, role, kind, source) {
+  const pid = state.activePatientId;
+  if (!pid) return toast("Select a patient first", "error");
+  if (isSavedContact(name)) return toast(`${name} is already a contact`);
+  const dest = kind === "family" ? "family" : "care team";
+  const path = kind === "family" ? "family-team" : "care-team";
+  const note = source ? `Named in ${source}` : "";
+  const body = kind === "family" ? { name, relationship: role || "", notes: note } : { name, role: role || "", notes: note };
+  const res = await fetch(`/api/patients/${pid}/${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not add contact");
+  }
+  const data = await res.json();
+  timelineState.data = data;
+  if (state.patientProfile) {
+    if (kind === "family") state.patientProfile.family_team = data.family_team || state.patientProfile.family_team;
+    else state.patientProfile.care_team = data.care_team || state.patientProfile.care_team;
+  }
+  renderTimeline();
+  renderOptionsChatMessages();
+  if (state.latestAnalysis) renderLatestAssessment(state.latestAnalysis);
+  renderDoctorQuestions(state.patientProfile);
+  toast(`${name} added to the ${dest}`);
+}
+
+function onAddContactClick(event) {
+  const btn = event.target.closest("[data-add-contact-name]");
+  if (!btn) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (btn.disabled) return true;
+  btn.disabled = true;
+  addMentionedContact(
+    btn.dataset.addContactName,
+    btn.dataset.addContactRole || "",
+    btn.dataset.addContactKind || "care",
+    btn.closest("[data-add-contact-source]")?.dataset.addContactSource || ""
+  )
+    .catch((err) => toast(err.message || "Could not add contact", "error"))
+    .finally(() => {
+      btn.disabled = false;
+    });
+  return true;
+}
+
 function renderOptionsChatMessages() {
   const wrap = $("#options-chat-messages");
   const titleEl = $("#options-chat-title");
@@ -8975,6 +9145,7 @@ function renderOptionsChatMessages() {
           <span class="options-chat-bubble-actions">${pinBtn}</span>
         </div>
         <div class="options-chat-body">${body}</div>
+        ${role === "assistant" && !msg.streaming ? addContactChipsHtml(extractNamedPeople(msg.content || ""), "Ask") : ""}
       </article>`;
     })
     .join("");
@@ -9004,6 +9175,7 @@ async function loadOptionsChatPanel() {
     state.optionsChatSessions = sessionsData.sessions || [];
     state.optionsChatStarters = startersData.starters || [];
     await loadChatObservations();
+    await ensureTimelineData();
     renderOptionsChatSessions();
     renderOptionsChatStarters();
 
@@ -9197,7 +9369,9 @@ $("#options-chat-session-list")?.addEventListener("click", (event) => {
   selectOptionsChatSession(btn.dataset.sessionId).catch((e) => toast(e.message, "error"));
 });
 
+document.getElementById("executive-summary-card")?.addEventListener("click", onAddContactClick);
 $("#options-chat-messages")?.addEventListener("click", (event) => {
+  if (onAddContactClick(event)) return;
   const applyBtn = event.target.closest(".options-chat-apply-home");
   if (applyBtn?.dataset.messageId) {
     applyChatReplyToHome(applyBtn.dataset.messageId).catch((e) => toast(e.message, "error"));
@@ -11070,9 +11244,14 @@ function renderDoctorQuestions(profile = state.patientProfile) {
         openCount > 0
           ? `<button type="button" class="btn ghost btn-sm" data-copy-doctor="${escapeHtml(doctor)}">Copy for visit</button>`
           : "";
+      const addContactBtn =
+        doctor !== "Any doctor" && !isSavedContact(doctor)
+          ? `<button type="button" class="btn secondary btn-sm" data-add-contact-name="${escapeHtml(doctor)}" data-add-contact-role="${escapeHtml(role || "")}" data-add-contact-kind="care" data-add-contact-source="Questions">+ Add to contacts</button>`
+          : "";
       return `<section class="question-group">
         <div class="question-group-head">
           <h4>${escapeHtml(heading)}</h4>
+          ${addContactBtn}
           ${copyBtn}
         </div>
         ${group.map((item) => renderDoctorQuestionItem(item)).join("")}
@@ -18038,6 +18217,7 @@ document.getElementById("btn-copy-open-questions")?.addEventListener("click", ()
 });
 
 document.getElementById("doctor-questions-list")?.addEventListener("click", (event) => {
+  if (onAddContactClick(event)) return;
   const card = event.target.closest("[data-question-id]");
   if (!card) {
     const copyBtn = event.target.closest("[data-copy-doctor]");
@@ -18841,7 +19021,14 @@ function renderTimelineTeam() {
       ),
     ].join("");
   }
-  if (hint) hint.textContent = team.length ? "· tap a card to see their entries" : "";
+  if (hint) {
+    const open = document.getElementById("care-team-body") && !document.getElementById("care-team-body").classList.contains("hidden");
+    hint.textContent = team.length
+      ? open
+        ? `· ${team.length} · tap a card to see their entries`
+        : `· ${team.length}`
+      : "";
+  }
   const shown = timelineState.env ? team.filter((t) => (t.environments || []).includes(timelineState.env)) : team;
   if (!team.length) {
     el.innerHTML = `<p class="muted small">No one yet. Use <strong>+ Add person</strong>, or log a visit — new names are added automatically.</p>`;
@@ -18889,9 +19076,17 @@ function tlFillFromMember(nameInputId, roleInputId, whereInputId) {
   if (where && !where.value.trim() && member.environments?.length) where.value = member.environments[0];
 }
 
+function setTeamFold(bodyId, open) {
+  const body = document.getElementById(bodyId);
+  const btn = document.querySelector(`[aria-controls="${bodyId}"]`);
+  if (body) body.classList.toggle("hidden", !open);
+  btn?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
 function openTeamForm(member = null, presetName = "") {
   const form = document.getElementById("team-form");
   if (!form) return;
+  setTeamFold("care-team-body", true);
   populateTimelineForm();
   form.classList.remove("hidden");
   document.getElementById("team-edit-id").value = member?.id || "";
@@ -19072,6 +19267,11 @@ function renderTimelineEvent(ev) {
       <div class="timeline-title-row">
         <span class="timeline-pill cat-${escapeHtml(ev.category)}">${escapeHtml(ev.kind_label || cat)}</span>
         ${ev.title ? `<strong class="timeline-title">${escapeHtml(ev.title)}</strong>` : ""}
+        ${
+          ev.practitioner && !isSavedContact(ev.practitioner)
+            ? `<button type="button" class="btn ghost btn-sm" data-add-contact-name="${escapeHtml(ev.practitioner)}" data-add-contact-role="${escapeHtml(ev.role || "")}" data-add-contact-kind="care" data-add-contact-source="Timeline">+ Add to contacts</button>`
+            : ""
+        }
       </div>
       ${detailHtml}
       <p class="timeline-prov">${escapeHtml(ev.provenance || "")}${where}${sourceLink}</p>
@@ -19219,6 +19419,8 @@ function renderFamilyTeam() {
   if (!board || !people) return;
   const data = timelineState.data || {};
   const family = data.family_team || [];
+  const countEl = document.getElementById("family-team-count");
+  if (countEl) countEl.textContent = family.length ? `· ${family.length}` : "· add people";
   const roles = data.family_roles || [];
   const sinceLabel = (iso) => {
     const dt = tlParseAt(iso);
@@ -19282,6 +19484,7 @@ function renderFamilyRoleChecks(containerId, selected = []) {
 function openFamilyForm(member = null, presetName = "") {
   const form = document.getElementById("family-form");
   if (!form) return;
+  setTeamFold("family-team-body", true);
   populateTimelineForm();
   form.classList.remove("hidden");
   document.getElementById("fam-edit-id").value = member?.id || "";
@@ -19447,33 +19650,33 @@ function renderTimelineGaps() {
   const list = document.getElementById("timeline-gaps-list");
   const stayEl = document.getElementById("timeline-stay");
   const countEl = document.getElementById("timeline-gaps-count");
-  if (!wrap || !list) return;
+  if (!list) return;
   const gaps = timelineState.data?.gaps;
-  if (!gaps) {
-    wrap.classList.add("hidden");
-    return;
-  }
-  wrap.classList.remove("hidden");
-  const stay = gaps.stay;
+  const stay = gaps?.stay;
   if (stayEl) {
     if (stay) {
       const adm = tlParseAt(stay.admitted_at);
       const admLabel = adm ? adm.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "";
+      stayEl.classList.remove("hidden");
       stayEl.innerHTML = stay.active
         ? `<span class="stay-dot is-active"></span>In hospital since <strong>${escapeHtml(admLabel)}</strong> · day ${stay.days}${stay.location ? ` · ${escapeHtml(stay.location)}` : ""}`
         : `<span class="stay-dot"></span>Last stay: ${escapeHtml(admLabel)} – ${escapeHtml(tlShortWhen(stay.discharged_at, false))} (${stay.days} days)`;
     } else {
-      stayEl.innerHTML = `<span class="stay-dot"></span>Not marked as in hospital`;
+      stayEl.classList.add("hidden");
+      stayEl.innerHTML = "";
     }
   }
-  const items = (gaps.items || []).filter((i) => i.kind !== "no_stay" || !stay);
-  if (countEl) {
-    const w = gaps.counts?.warn || 0;
-    countEl.textContent = w ? `· ${w} need${w === 1 ? "s" : ""} attention` : items.length ? "· nothing urgent" : "";
-  }
-  if (!items.length) {
-    list.innerHTML = `<p class="muted small">Nothing missing from what's been recorded.</p>`;
+  const skip = new Set(["no_stay", "overdue"]);
+  const items = (gaps?.items || []).filter((i) => !skip.has(i.kind));
+  if (!wrap) return;
+  if (!gaps || !items.length) {
+    wrap.classList.add("hidden");
     return;
+  }
+  wrap.classList.remove("hidden");
+  if (countEl) {
+    const w = items.filter((i) => i.severity === "warn").length;
+    countEl.textContent = w ? `· ${w} need${w === 1 ? "s" : ""} a log` : items.length ? "· check these days" : "";
   }
   const expanded = timelineState.gapsExpanded;
   const limit = 6;
@@ -19498,7 +19701,7 @@ function renderTimelineGaps() {
 }
 
 function runGapAction(idx) {
-  const items = (timelineState.data?.gaps?.items || []).filter((i) => i.kind !== "no_stay" || !timelineState.data?.gaps?.stay);
+  const items = (timelineState.data?.gaps?.items || []).filter((i) => i.kind !== "no_stay" && i.kind !== "overdue");
   const item = items[idx];
   if (!item) return;
   const act = GAP_ACTIONS[item.action];
@@ -19634,14 +19837,52 @@ function ballDateLabel(iso) {
   return dt ? dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : iso;
 }
 
+function ballToday() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+function currentBallHolders(holders = timelineState.data?.ball_holders) {
+  const today = ballToday();
+  return (holders || []).filter((h) => !h.until || String(h.until) >= today);
+}
+
+function tlClarityText(person) {
+  const who = tlFirstName(person?.name || "there");
+  const patient = tlFirstName(state.activePatientLabel || "the patient");
+  return `Hi ${who} — can you give us clarity on ${patient}'s care right now? You have the ball.`;
+}
+
+function ballContactButtons(holder) {
+  const person = tlPersonForAction(holder.name);
+  const phone = person?.phone || "";
+  const tel = tlContactHref("phone", phone);
+  const channel = tlMessageChannel(person);
+  const msg = channel ? tlMessageHref(channel, tlClarityText(person || { name: holder.name })) : "";
+  const bits = [];
+  if (tel) bits.push(`<a class="btn secondary btn-sm" href="${escapeHtml(tel)}" data-stop>Call</a>`);
+  if (msg) {
+    const extra = channel.kind === "whatsapp" ? ' target="_blank" rel="noopener"' : "";
+    bits.push(
+      `<a class="btn ghost btn-sm" href="${escapeHtml(msg)}" data-stop${extra}>${escapeHtml(channel.label)}</a>`
+    );
+  }
+  if (!bits.length) {
+    return `<span class="muted small">Add a phone, WhatsApp, or email on their Family or care-team card</span>`;
+  }
+  return `<span class="who-has-ball-actions">${bits.join("")}</span>`;
+}
+
 function renderWhoHasBall() {
   const list = document.getElementById("who-has-ball-list");
   if (!list) return;
-  const holders = timelineState.data?.ball_holders || [];
+  const holders = currentBallHolders();
   if (!holders.length) {
-    list.innerHTML = `<p class="who-has-ball-empty">Nobody assigned — tap Update so the family can see.</p>`;
+    list.innerHTML = `<p class="who-has-ball-empty">Nobody is in charge — tap Update so everyone knows who to call.</p>`;
     return;
   }
+  const many = holders.length > 1;
   list.innerHTML = holders
     .map((h) => {
       const dates = [
@@ -19650,22 +19891,66 @@ function renderWhoHasBall() {
       ]
         .filter(Boolean)
         .join(" · ");
-      const role = h.role ? ` · ${escapeHtml(h.role)}` : "";
+      const role = h.role ? escapeHtml(h.role) : "In charge now";
       const notes = h.notes ? ` — ${escapeHtml(h.notes)}` : "";
-      return `<div class="who-has-ball-item">
-        <strong>${escapeHtml(h.name)}</strong>
-        <span class="who-has-ball-meta">${role}${dates ? ` · ${escapeHtml(dates)}` : ""}${notes}</span>
+      const lead = many && h.lead ? `<span class="who-has-ball-lead">Call first</span>` : "";
+      return `<div class="who-has-ball-item${h.lead && many ? " is-lead" : ""}">
+        <div class="who-has-ball-who">
+          ${lead}
+          <strong>${escapeHtml(h.name)}</strong>
+          <span class="who-has-ball-meta">${role}${dates ? ` · ${escapeHtml(dates)}` : ""}${notes}</span>
+        </div>
+        ${ballContactButtons(h)}
       </div>`;
     })
     .join("");
 }
 
+function fillBallWhoList() {
+  const el = document.getElementById("ball-who-list");
+  if (!el) return;
+  const names = [];
+  for (const person of tlDirectoryPeople()) {
+    if (person.name && !names.includes(person.name)) names.push(person.name);
+  }
+  el.innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+}
+
+function ballNameKey(name) {
+  return tlNameKey(name).replace(/^(dr|doctor)\s+/, "");
+}
+
+function ballAlreadyListed(name, holders) {
+  const key = ballNameKey(name);
+  if (!key) return false;
+  return (holders || []).some((h) => {
+    const other = ballNameKey(h.name);
+    return other === key || other.startsWith(`${key} `) || key.startsWith(`${other} `);
+  });
+}
+
+function renderBallQuickAdd(holders) {
+  const el = document.getElementById("ball-quick-add");
+  if (!el) return;
+  const people = tlDirectoryPeople().filter((p) => p.name && !ballAlreadyListed(p.name, holders));
+  el.innerHTML = people.length
+    ? `<p class="muted small">Tap to add:</p>${people
+        .slice(0, 8)
+        .map(
+          (p) =>
+            `<button type="button" class="btn ghost btn-sm" data-ball-quick="${escapeHtml(p.name)}">+ ${escapeHtml(p.name)}</button>`
+        )
+        .join("")}`
+    : "";
+}
+
 function ballFormRowHtml(holder = {}) {
   return `<div class="ball-form-row">
-    <label>Who<input type="text" class="ball-name" maxlength="120" required value="${escapeHtml(holder.name || "")}" placeholder="Name"></label>
-    <label>Role / why<input type="text" class="ball-role" maxlength="80" value="${escapeHtml(holder.role || "")}" placeholder="e.g. Point person"></label>
+    <label>Who<input type="text" class="ball-name" list="ball-who-list" maxlength="120" required value="${escapeHtml(holder.name || "")}" placeholder="Name"></label>
+    <label>Why we call them<input type="text" class="ball-role" maxlength="80" value="${escapeHtml(holder.role || "")}" placeholder="e.g. Point person — daily plan"></label>
     <label>Since<input type="date" class="ball-since" value="${escapeHtml(holder.since || "")}"></label>
     <label>Until <span class="muted small">(optional)</span><input type="date" class="ball-until" value="${escapeHtml(holder.until || "")}"></label>
+    <label class="ball-lead-label"><input type="checkbox" class="ball-lead"${holder.lead ? " checked" : ""}> Call first</label>
     <button type="button" class="btn ghost btn-sm ball-remove">Remove</button>
     <input type="hidden" class="ball-notes" value="${escapeHtml(holder.notes || "")}">
   </div>`;
@@ -19676,7 +19961,9 @@ function openBallForm() {
   const rows = document.getElementById("ball-form-rows");
   if (!form || !rows) return;
   const holders = timelineState.data?.ball_holders || [];
+  fillBallWhoList();
   rows.innerHTML = (holders.length ? holders : [{}]).map((h) => ballFormRowHtml(h)).join("");
+  renderBallQuickAdd(holders);
   form.classList.remove("hidden");
 }
 
@@ -19692,6 +19979,7 @@ function collectBallHolders() {
       since: row.querySelector(".ball-since")?.value || "",
       until: row.querySelector(".ball-until")?.value || "",
       notes: row.querySelector(".ball-notes")?.value.trim() || "",
+      lead: Boolean(row.querySelector(".ball-lead")?.checked),
     }))
     .filter((h) => h.name);
 }
@@ -19715,7 +20003,7 @@ async function saveBallHolders(event) {
     timelineState.data = await res.json();
     closeBallForm();
     renderTimeline();
-    toast(holders.length ? "Who has the ball updated" : "Cleared — nobody has the ball");
+    toast(holders.length ? "Who to call now updated" : "Cleared — nobody is in charge");
   } catch (err) {
     toast(err.message || "Could not save", "error");
   }
@@ -20063,7 +20351,7 @@ function buildFamilyUpdateText(range) {
     }
   }
   const gapItems = (data.gaps?.items || []).filter((i) => {
-    if (i.kind === "no_stay" || i.kind === "role_unassigned") return false;
+    if (i.kind === "no_stay" || i.kind === "overdue" || i.kind === "role_unassigned") return false;
     if (!i.day) return i.severity === "warn";
     const [y, m, d] = i.day.split("-").map(Number);
     const dt = new Date(y, m - 1, d, 12);
@@ -20209,6 +20497,7 @@ document.getElementById("btn-ball-edit")?.addEventListener("click", openBallForm
 document.getElementById("btn-ball-cancel")?.addEventListener("click", closeBallForm);
 document.getElementById("btn-ball-add")?.addEventListener("click", () => {
   document.getElementById("ball-form-rows")?.insertAdjacentHTML("beforeend", ballFormRowHtml());
+  renderBallQuickAdd(collectBallHolders());
 });
 document.getElementById("ball-form")?.addEventListener("submit", saveBallHolders);
 document.getElementById("ball-form-rows")?.addEventListener("click", (e) => {
@@ -20218,6 +20507,33 @@ document.getElementById("ball-form-rows")?.addEventListener("click", (e) => {
   if (!document.querySelector("#ball-form-rows .ball-form-row")) {
     document.getElementById("ball-form-rows").innerHTML = ballFormRowHtml();
   }
+  renderBallQuickAdd(collectBallHolders());
+});
+document.getElementById("ball-form-rows")?.addEventListener("change", (e) => {
+  const box = e.target.closest(".ball-lead");
+  if (!box?.checked) return;
+  document.querySelectorAll("#ball-form-rows .ball-lead").forEach((el) => {
+    if (el !== box) el.checked = false;
+  });
+});
+document.getElementById("ball-quick-add")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-ball-quick]");
+  if (!btn) return;
+  const name = btn.dataset.ballQuick;
+  const person = tlPersonForAction(name);
+  document.getElementById("ball-form-rows")?.insertAdjacentHTML(
+    "beforeend",
+    ballFormRowHtml({
+      name,
+      role: person?.relationship || person?.role || "",
+      since: ballToday(),
+    })
+  );
+  const empty = [...document.querySelectorAll("#ball-form-rows .ball-form-row")].find(
+    (row) => !row.querySelector(".ball-name")?.value.trim()
+  );
+  empty?.remove();
+  renderBallQuickAdd(collectBallHolders());
 });
 document.getElementById("btn-timeline-ask")?.addEventListener("click", () => switchTab("options-chat"));
 document.getElementById("timeline-ask-chips")?.addEventListener("click", (e) => {
@@ -20354,6 +20670,16 @@ function bindAvatarForm(prefix) {
 }
 bindAvatarForm("fam");
 bindAvatarForm("team");
+document.getElementById("btn-family-fold")?.addEventListener("click", () => {
+  const body = document.getElementById("family-team-body");
+  setTeamFold("family-team-body", body?.classList.contains("hidden"));
+  renderFamilyTeam();
+});
+document.getElementById("btn-team-fold")?.addEventListener("click", () => {
+  const body = document.getElementById("care-team-body");
+  setTeamFold("care-team-body", body?.classList.contains("hidden"));
+  renderTimelineTeam();
+});
 document.getElementById("btn-family-add")?.addEventListener("click", () => openFamilyForm());
 document.getElementById("btn-family-share-staff")?.addEventListener("click", () => showContactSheet("staff"));
 document.getElementById("btn-team-share-family")?.addEventListener("click", () => showContactSheet("family"));
@@ -20437,6 +20763,7 @@ document.getElementById("btn-team-remove")?.addEventListener("click", () => remo
 document.getElementById("team-form")?.addEventListener("submit", saveTeamForm);
 document.getElementById("tl-practitioner")?.addEventListener("change", () => tlFillFromMember("tl-practitioner", "tl-role", "tl-location"));
 document.getElementById("panel-timeline")?.addEventListener("click", (e) => {
+  if (onAddContactClick(e)) return;
   if (e.target.closest("#tl-clear-who")) {
     timelineState.practitioner = "";
     renderTimelineTeam();

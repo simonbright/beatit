@@ -516,10 +516,13 @@ def _kinds(gaps, day=None):
     return sorted(i["kind"] for i in gaps["items"] if (day is None or i.get("day") == day))
 
 
-def test_gaps_without_stay_prompts_admission(patient):
+def test_gaps_without_stay_are_empty(patient):
     gaps = build_gaps(case_manager.get_patient_profile(patient), now=NOW)
     assert gaps["stay"] is None
-    assert "no_stay" in _kinds(gaps)
+    assert "no_stay" not in _kinds(gaps)
+    case_manager.add_patient_care_item(patient, title="Call internist", due_at="2026-10-01T09:00")
+    later = build_gaps(case_manager.get_patient_profile(patient), now=NOW)
+    assert "overdue" not in _kinds(later)
 
 
 def test_gaps_flag_days_with_no_visit_or_tests(patient):

@@ -239,6 +239,7 @@ Family agent over the whole stay, plus deeper treatment discussion:
 - On Simple as its own **Ask** tab; same defaults also sit on Timeline
 - New / list / delete sessions; pin excerpts; **Update Home** on a reply
 - Can ask the model to read a document by name
+- When Ask, Home, Timeline, or Questions names someone who is not a saved contact, a **+ Add to contacts** chip saves them to the care team or Family
 
 Chat does **not** auto-replace Home unless you Update Home / promote.
 
@@ -262,16 +263,16 @@ A chronological, **facts-only** view of the patient's care for the whole family.
 
 **What's missing** (top of the tab)
 
-Deterministic checks over what has been recorded — no AI. Every flag says *not recorded*, because a gap can mean something happened but nobody logged it.
+Only days or results that were **not logged** — not hospital status, and not overdue tasks (those stay on Action items). A gap may still have happened.
 
-- **Hospital stay** comes from *Admitted* / *Discharged* entries ("In hospital since Fri Oct 23 · day 7"). With no admission logged, the panel offers **Log admission**.
-- For each day of the stay (last 14 days): **no care-team visit**, **no tests or results** (timeline tests/results or Labs readings for that date), **no family update**. Past days are warnings; today is shown softly as "today so far".
+- **Hospital stay** is a quiet status line above the panel ("In hospital since Mon Oct 26 · day 6"), not a missing item.
+- For each day of the stay (last 14 days): **no care-team visit**, **no tests or results**, **no family update**. Past days are warnings; today is shown softly as "today so far".
 - When that day's WhatsApp messages mention the care team or tests, the flag says so ("9 family messages mention the care team; use Classify to record it").
 - **Results not shared**: a test ordered/done more than 24 hours ago with no result or lab reading after it.
 - **Not seen recently**: a practitioner seen during the current stay but not in the last 2+ days.
-- **Overdue** plan items, and **no point person / no bedside rotation** on the family team.
-- Each flag has a one-tap action (Log a visit for that day, Log a test, Add the result, Open plan, Assign). Day headers in the timeline carry the same flags, and days with nothing at all show "Nothing recorded this day."
+- Each flag has a one-tap action (Log a visit, Log a test, Add the result). Day headers in the timeline carry the same flags.
 - The **Family update** lists what wasn't recorded for the period.
+- **Family** and **Professional care team** start collapsed; tap the heading to open. Add / Share stay visible.
 
 **Family care team**
 
@@ -304,7 +305,7 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 - **Care team** cards: everyone in the directory or recorded on a visit — role, places, when they were last in, number of contacts. Tap one to filter the timeline to that person; dashed cards are people recorded on visits but not yet added to the team.
 - Filters: Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search.
 - Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
-- **Who has the ball** stays at the top of Timeline: one or more people, each with a since date (and optional until). Empty is shown as “nobody assigned.”
+- **Who has the ball** stays at the top of Timeline: who is in charge **right now**, and who to call for clarity. One person or a few. Optional **Call first** when several people share it. Expired until-dates drop off the list. Call / WhatsApp / text / email uses their Family or care-team card. Empty is “nobody is in charge.”
 - Staff visits can add an optional next action with a date and time. The timeline opens on **Today**.
 - Action items take a date and an optional time (Timeline row, visit close-out, and Advanced Plan).
 - **Alert** messages someone about their open tasks using their preferred contact (WhatsApp, text, or email) from the Family or care team card.
