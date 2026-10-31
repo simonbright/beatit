@@ -5514,13 +5514,16 @@ async def api_import_visit_transcript(
     if not created:
         raise HTTPException(status_code=400, detail="Choose one or more files, or paste the text")
     file_label = f"{len(created)} file{'s' if len(created) != 1 else ''}"
+    from app.services.visit_summary import is_short_visit_summary, summarize_visit_notes
+
     user_summary = (body.summary or "").strip()
+    if user_summary and not is_short_visit_summary(user_summary):
+        note_chunks.append(("What happened", user_summary))
+        user_summary = ""
     if user_summary:
         summary = user_summary
         summary_source = "user"
     else:
-        from app.services.visit_summary import summarize_visit_notes
-
         summary, summary_source = await summarize_visit_notes(
             note_chunks, llm=llm, who=who, role=body.role or ""
         )

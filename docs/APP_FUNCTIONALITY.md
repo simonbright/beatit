@@ -272,7 +272,7 @@ Only days or results that were **not logged** — not hospital status, and not o
 - **Not seen recently**: a practitioner seen during the current stay but not in the last 2+ days.
 - Each flag has a one-tap action (Log a visit, Log a test, Add the result). Day headers in the timeline carry the same flags.
 - The **Family update** lists what wasn't recorded for the period.
-- **Family** and **Professional care team** start collapsed; tap the heading to open. Add / Share stay visible.
+- **Family** and **Professional care team** start collapsed; tap the heading to open. On a phone they sit side by side and only one opens at a time; Add / Share appear after you expand.
 
 **Family care team**
 
@@ -297,22 +297,22 @@ Only days or results that were **not logged** — not hospital status, and not o
 
 - **+ Add**: one form for a visit, test, or note. Files and a next action are optional.
 - Each file is saved **word for word** to the active case's Library (timing cues removed, speaker labels kept) and linked to one *Visit transcript* entry on the timeline. PDFs keep the original file; a scan with no extractable text is still stored so it can be opened from the Library.
-- Notes are summarized into a few factual bullets on the timeline. *Key points for the timeline* is optional — leave it blank to auto-summarize, or write your own.
+- Notes and transcripts are summarized into a few factual bullets on the timeline. The full file stays in the Library. A short *What happened* recap is optional; a long paste is treated as source notes and summarized. Visit files yield **3–5 follow-ups**, not a to-do for every sentence.
 - Requires the patient (and a case) to be active, because the files are stored in that case's Library.
 
 **Using it**
 
 - **Care team** cards: everyone in the directory or recorded on a visit — role, places, when they were last in, number of contacts. Tap one to filter the timeline to that person; dashed cards are people recorded on visits but not yet added to the team.
-- Filters: **Last 5** (default) / Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search. Last 5 still respects those type filters — switch the range to see more.
+- Filters: **Last 5** (default) / Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search. Last 5 still respects those type filters — switch the range to see more. On a phone the filters start collapsed (summary shows the current range and type).
 - Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
 - **Who has the ball** stays at the top of Timeline: who is in charge **right now**, and who to call for clarity. One person or a few. Optional **Call first** when several people share it. Record **what we expect them to do** and **what success looks like**. From / to take a date and a time. Title and department fill from the selected Family or care-team card. Expired to-times drop off the list. Empty is “nobody is in charge.” A **Next check-in** block records who checks in, what they will cover, and the date/time. The section uses a sports-ball visual — **basketball by default** — and Update lets you switch to soccer, football, baseball, tennis, volleyball, rugby, or softball.
 - Staff visits can add an optional next action with a date and time. The timeline opens on the **last 5** items.
 - **Readings** (temperature, heart rate, blood pressure, oxygen, blood sugar) appear on Log and as a **Vitals check** on Timeline, not mixed into lab results.
-- Action items take a date and an optional time (Timeline row, visit close-out, and Advanced Plan).
+- **Action Items/Milestones** on Timeline: add an action or a milestone from the same form. Action is a larger text field. Who includes **Add new person** (Family or Care team); saving that person fills Who so you can finish the item. Actions take a date and an optional time (Timeline row, visit close-out, and Advanced Plan).
 - **Alert** messages someone about their open tasks using their preferred contact (WhatsApp, text, or email) from the Family or care team card.
 - **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role, or **vitals check**) while keeping the original text and sender.
 - **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
-- **Timeline** (the day-by-day list) is its own section under the care team. It opens on the last 5 items; use the range and type filters to see more.
+- **Timeline** (the day-by-day list) is its own section under the care team. It opens on the last 5 items; use the range and type filters to see more. On a phone those filters start folded.
 - **Import WhatsApp**: tap the button to jump to the import panel. Chat name defaults to the last named chat and can be changed. On a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added. The import panel hides when it finishes.
 - **Dismiss** hides any timeline row (visits, WhatsApp, labs, meds, plan, documents) without deleting the record. **Show dismissed** brings them back so you can restore one.
 - WhatsApp cannot be read live. On this Mac, while Bright Health is running, a new *Export Chat* file saved to Downloads is imported in the background. Manual Import is unchanged.

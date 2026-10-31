@@ -333,6 +333,10 @@ def test_visit_notes_fallback_to_bullets():
     assert "white count" in out.lower()
     assert parse_visit_bullets("1. First fact\n- Second fact") == ["First fact", "Second fact"]
     assert format_visit_bullets(["Keep antibiotics", "Keep antibiotics"]) == "- Keep antibiotics."
+    from app.services.visit_summary import is_short_visit_summary
+
+    assert is_short_visit_summary("- Switching to oral antibiotics tomorrow.")
+    assert not is_short_visit_summary("\n".join(f"Speaker {i}: yeah so we need to start that." for i in range(20)))
 
 
 def test_plain_text_untouched():

@@ -8828,6 +8828,7 @@ body.app-updating-active {
 }
 .timeline-team-wrap { margin: 1rem 0 0; padding-bottom: 0.15rem; }
 .timeline-team-wrap h4 { margin: 0 0 0.45rem; }
+.tl-team-narrow { display: none; }
 .timeline-log-wrap {
   margin: 1.25rem 0 0;
   padding-top: 1.05rem;
@@ -9148,6 +9149,59 @@ body.app-updating-active {
 
 /* Family care team */
 .family-team-wrap { margin: 1rem 0 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+@media (max-width: 720px) {
+  .tl-action-help { display: none; }
+  .tl-filters-fold { display: inline-flex; width: 100%; margin: 0 0 0.45rem; }
+  .tl-team-wide { display: none; }
+  .tl-team-narrow { display: inline; }
+  .timeline-teams-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.45rem 0.55rem;
+    align-items: start;
+    margin: 0.85rem 0 0.35rem;
+  }
+  .timeline-teams-row > .family-team-wrap,
+  .timeline-teams-row > .timeline-team-wrap {
+    display: contents;
+  }
+  .timeline-teams-row > .family-team-wrap > .timeline-team-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .timeline-teams-row > .timeline-team-wrap > .timeline-team-head {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .timeline-teams-row > .family-team-wrap > .tl-fold-body,
+  .timeline-teams-row > .timeline-team-wrap > .tl-fold-body {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .timeline-teams-row .timeline-team-head {
+    min-width: 0;
+    margin: 0;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    align-items: flex-start;
+  }
+  .timeline-teams-row .timeline-team-head .tl-fold-btn { min-width: 0; }
+  .timeline-teams-row .timeline-team-head h4 { font-size: 0.95rem; }
+  .timeline-teams-row .timeline-team-head-actions { display: none; width: 100%; justify-content: flex-start; }
+  .timeline-teams-row .timeline-team-head:has(.tl-fold-btn[aria-expanded="true"]) .timeline-team-head-actions {
+    display: flex;
+  }
+  .timeline-teams-row #btn-family-share-staff,
+  .timeline-teams-row #btn-team-share-family { display: none !important; }
+  .family-team-wrap,
+  .timeline-team-wrap {
+    margin: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+}
 .family-suggest { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin-bottom: 0.55rem; }
 .family-role-board {
   display: grid;
@@ -9230,7 +9284,9 @@ body.app-updating-active {
   cursor: pointer;
   text-align: left;
 }
-.tl-fold-btn h4 { margin: 0; }
+.tl-fold-btn h4,
+.tl-fold-btn h5 { margin: 0; }
+.tl-filters-fold h5 { font-size: 0.95rem; }
 .tl-fold-caret {
   width: 0.42rem;
   height: 0.42rem;
@@ -9610,11 +9666,34 @@ body.app-updating-active {
 }
 .tl-action-add {
   display: grid;
-  grid-template-columns: minmax(10rem, 1.6fr) minmax(6rem, 0.8fr) minmax(7.5rem, 0.7fr) minmax(6rem, 0.55fr) auto;
+  grid-template-columns: minmax(8rem, 1.4fr) minmax(7.5rem, 0.7fr) minmax(6rem, 0.55fr) auto;
   gap: 0.45rem 0.6rem;
   align-items: end;
   margin: 0.55rem 0 0.85rem;
 }
+.tl-action-kind,
+.tl-action-add-title { grid-column: 1 / -1; }
+.tl-action-add-title textarea {
+  width: 100%;
+  min-height: 4.6rem;
+  resize: vertical;
+  box-sizing: border-box;
+  font: inherit;
+  line-height: 1.4;
+}
+.tl-action-add-person {
+  align-self: flex-start;
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+}
+.tl-action-add-person-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+.tl-action-add.is-milestone .tl-action-add-who,
+.tl-action-add.is-milestone .tl-action-add-time { display: none; }
 .tl-action-add label {
   display: flex;
   flex-direction: column;
@@ -9624,7 +9703,14 @@ body.app-updating-active {
 }
 @media (max-width: 720px) {
   .tl-action-add { grid-template-columns: 1fr 1fr; }
-  .tl-action-add button { grid-column: 1 / -1; }
+  .tl-action-add-who,
+  .tl-action-add #btn-tl-action-add { grid-column: 1 / -1; }
+}
+@media (min-width: 721px) {
+  .tl-filters-fold { display: none !important; }
+  #timeline-filters.timeline-filters.hidden {
+    display: flex !important;
+  }
 }
 .timeline-actions-layout {
   display: grid;

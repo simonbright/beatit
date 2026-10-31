@@ -14,6 +14,8 @@ from app.services.care_timeline import parse_event_datetime
 MAX_TITLE = 120
 MAX_SCAN_EVENTS = 80
 MAX_LLM_CHARS = 12_000
+MAX_VISIT_ACTIONS = 5
+MAX_RULE_SCAN_CHARS = 2_000
 DEFAULT_TZ = ZoneInfo("America/Toronto")
 
 CLINICAL_KINDS = frozenset(
@@ -147,10 +149,12 @@ KIND_HINTS = (
     (re.compile(r"\b(follow[- ]?up)\b", re.I), "follow_up"),
 )
 
-VISIT_ACTIONS_SYSTEM = """Extract concrete family to-dos from these visit notes.
+VISIT_ACTIONS_SYSTEM = """Extract the real next actions from these visit notes.
 Reply with a JSON array only. Each object:
 {"title":"short action","due":"YYYY-MM-DD or null","kind":"exam|diagnostic|appointment|call|send|follow_up|other","who":""}
-Only things someone must do (book, call, bring, start/stop a medicine, send results, follow up).
+Return at most 5 items, preferably 3. Only things someone still must do
+(book, call, fast, start/stop a medicine, send results, follow up).
+Skip conversation, history, reassurance, and things already done.
 Use only facts in the notes. Empty array if none."""
 
 
@@ -242,6 +246,94 @@ def _word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9']+", text or ""))
 
 
+WEAK_VISIT_TITLE = re.compile(
+    r"^(yeah|yes|yep|so|and|but|well|okay|ok|oh|um|uh|i guess|"
+    r"that's|that is|they(?:'d| would)|whatever|sort of|i mean|"
+    r"is this|this stuff)\b",
+    re.I,
+)
+STRONG_VISIT_ACTION = re.compile(
+    r"\b("
+    r"book|schedule|arrange|follow[- ]?up|fast|npo|biopsy|"
+    r"cancer board|hematology|oncology|antibiotic|"
+    r"transition|order|refer|send|submit|repeat"
+    r")\b",
+    re.I,
+)
+
+
+def is_weak_visit_title(title: str) -> bool:
+    text = str(title or "").strip()
+    if not text or text.endswith("?"):
+        return True
+    if WEAK_VISIT_TITLE.search(text):
+        return True
+    if _word_count(text) > 22:
+        return True
+    return False
+
+
+def rank_visit_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def score(item: dict[str, Any]) -> tuple[int, int]:
+        title = str(item.get("title") or "")
+        points = 0
+        if item.get("due_at"):
+            points += 6
+        if STRONG_VISIT_ACTION.search(title):
+            points += 5
+        kind = str(item.get("kind") or infer_kind(title))
+        if kind in {"exam", "diagnostic", "appointment", "follow_up"}:
+            points += 3
+        if is_weak_visit_title(title):
+            points -= 12
+        if len(title) > 140:
+            points -= 2
+        return (points, -len(title))
+
+    return sorted(items, key=score, reverse=True)
+
+
+def cap_visit_actions(items: list[dict[str, Any]], limit: int = MAX_VISIT_ACTIONS) -> list[dict[str, Any]]:
+    chosen: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in rank_visit_actions(items):
+        title = str(item.get("title") or "").strip()
+        if not title or is_weak_visit_title(title):
+            continue
+        key = re.sub(r"[^a-z0-9]+", " ", title.casefold()).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        chosen.append(item)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def prune_visit_action_flood(profile: dict[str, Any], *, limit: int = MAX_VISIT_ACTIONS) -> int:
+    """Keep only a few extracted visit to-dos per visit. Done items stay."""
+    items = list(profile.get("care_items") or [])
+    groups: dict[str, list[dict[str, Any]]] = {}
+    kept: list[dict[str, Any]] = []
+    for row in items:
+        event_id = str(row.get("source_event_id") or "")
+        if row.get("source") == "extracted" and row.get("source_kind") == "visit" and event_id:
+            groups.setdefault(event_id, []).append(row)
+        else:
+            kept.append(row)
+    removed = 0
+    for rows in groups.values():
+        done = [row for row in rows if (row.get("status") or "open") == "done"]
+        open_rows = [row for row in rows if (row.get("status") or "open") != "done"]
+        selected = cap_visit_actions(open_rows, limit) if len(open_rows) > limit else open_rows
+        removed += len(open_rows) - len(selected)
+        kept.extend(done)
+        kept.extend(selected)
+    if removed:
+        profile["care_items"] = kept
+    return removed
+
+
 def is_noisy_extracted_title(title: str, *, source_kind: str = "") -> bool:
     text = str(title or "").strip()
     if not text:
@@ -313,6 +405,8 @@ def extract_action_items(
             continue
         title = _clean_title(line)
         if len(title) < 8 or is_noisy_extracted_title(title, source_kind=source_kind):
+            continue
+        if source_kind == "visit" and is_weak_visit_title(title):
             continue
         due = resolve_due(line, occurred_at=occurred_at)
         ref = action_item_fingerprint(title, due_at=due, source_event_id=source_event_id)
@@ -428,10 +522,13 @@ def harvest_event_actions(
 
     profile = get_patient_profile(patient_id)
     incoming = items_from_event(event)
-    if extra_text:
+    extra = (extra_text or "").strip()
+    visit_like = str(event.get("kind") or "") in CLINICAL_KINDS or str(event.get("source") or "") == "transcript"
+    # Long transcripts are summarized separately — do not turn every sentence into a to-do.
+    if extra and (not visit_like or len(extra) <= MAX_RULE_SCAN_CHARS):
         incoming.extend(
             extract_action_items(
-                extra_text,
+                extra,
                 occurred_at=str(event.get("occurred_at") or ""),
                 source_event_id=str(event.get("id") or "") or None,
                 source_kind="visit",
@@ -440,6 +537,8 @@ def harvest_event_actions(
             )
         )
     incoming.extend(extra_items or [])
+    if visit_like:
+        incoming = cap_visit_actions(incoming)
     added = _store_items(profile, incoming)
     from app.services.reading_extract import readings_from_event, store_extracted_readings
 
@@ -460,6 +559,7 @@ def harvest_unscanned_events(patient_id: str, *, limit: int = MAX_SCAN_EVENTS) -
 
     profile = get_patient_profile(patient_id)
     pruned = prune_noisy_extracted_items(profile)
+    pruned += prune_visit_action_flood(profile)
     events = list(profile.get("care_events") or [])
     added = 0
     scanned = 0
@@ -525,6 +625,8 @@ async def extract_visit_actions_llm(
         if kind not in {"exam", "diagnostic", "appointment", "call", "send", "follow_up", "other"}:
             kind = infer_kind(title)
         contact = " ".join(str(row.get("who") or who or "").split())[:120] or None
+        if is_weak_visit_title(title):
+            continue
         out.append(
             {
                 "title": title,
@@ -540,4 +642,4 @@ async def extract_visit_actions_llm(
                 "source_kind": "visit",
             }
         )
-    return out
+    return cap_visit_actions(out)

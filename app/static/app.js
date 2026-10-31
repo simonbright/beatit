@@ -18429,39 +18429,107 @@ function syncTlActionAddDue() {
   if (due) due.value = timelineState.actionSelectedDay || careTodayIso();
 }
 
+function actionAddKind() {
+  return document.querySelector(".tl-action-kind-btn.active")?.dataset.actionKind || "action";
+}
+
+function syncActionAddKind() {
+  const kind = actionAddKind();
+  const form = document.getElementById("tl-action-add");
+  form?.classList.toggle("is-milestone", kind === "milestone");
+  const label = document.getElementById("tl-action-add-title-label");
+  if (label) label.textContent = kind === "milestone" ? "Milestone" : "Action";
+  const title = document.getElementById("tl-action-add-title");
+  if (title) {
+    title.placeholder =
+      kind === "milestone"
+        ? "e.g. Started walking daily"
+        : "e.g. Simon to FU with Internal Med re biopsy";
+  }
+}
+
+function setActionAddKind(kind) {
+  document.querySelectorAll(".tl-action-kind-btn").forEach((btn) => {
+    const on = btn.dataset.actionKind === kind;
+    btn.classList.toggle("active", on);
+    btn.classList.toggle("secondary", on);
+    btn.classList.toggle("ghost", !on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  syncActionAddKind();
+}
+
+let pendingActionWho = false;
+
+function finishAddActionPerson(name) {
+  if (!pendingActionWho || !name) return;
+  pendingActionWho = false;
+  const who = document.getElementById("tl-action-add-who");
+  if (who) who.value = name;
+  document.getElementById("tl-action-add-person-pick")?.classList.add("hidden");
+  fillActionWhoList();
+  document.getElementById("tl-action-add")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById("tl-action-add-title")?.focus();
+}
+
+function startAddActionPerson(kind) {
+  pendingActionWho = true;
+  const typed = document.getElementById("tl-action-add-who")?.value.trim() || "";
+  document.getElementById("tl-action-add-person-pick")?.classList.add("hidden");
+  if (kind === "family") openFamilyForm(null, typed);
+  else openTeamForm(null, typed);
+}
+
 async function saveTimelineAction(event) {
   event?.preventDefault?.();
   if (!state.activePatientId) return toast("Select a patient first", "error");
   const title = document.getElementById("tl-action-add-title")?.value.trim() || "";
-  if (!title) return toast("Enter the action", "error");
+  if (!title) return toast(actionAddKind() === "milestone" ? "Enter the milestone" : "Enter the action", "error");
   const btn = document.getElementById("btn-tl-action-add");
   if (btn) btn.disabled = true;
   try {
-    const res = await fetch(`/api/patients/${state.activePatientId}/care-items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        title,
-        kind: "follow_up",
-        due_at: careDueValue(
-          document.getElementById("tl-action-add-due")?.value || careTodayIso(),
-          document.getElementById("tl-action-add-time")?.value
-        ),
-        contact: document.getElementById("tl-action-add-who")?.value.trim() || "",
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Could not save");
+    if (actionAddKind() === "milestone") {
+      const date = document.getElementById("tl-action-add-due")?.value || careTodayIso();
+      const res = await fetch(`/api/patients/${state.activePatientId}/milestones`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ label: title, date, kind: "other" }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Could not save");
+      }
+      applyProfileResponse(await res.json());
+      loadTimeline({ quiet: true }).catch(() => {});
+      toast("Milestone added");
+    } else {
+      const res = await fetch(`/api/patients/${state.activePatientId}/care-items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title,
+          kind: "follow_up",
+          due_at: careDueValue(
+            document.getElementById("tl-action-add-due")?.value || careTodayIso(),
+            document.getElementById("tl-action-add-time")?.value
+          ),
+          contact: document.getElementById("tl-action-add-who")?.value.trim() || "",
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Could not save");
+      }
+      applyProfileResponse(await res.json());
+      toast("Action added");
     }
-    applyProfileResponse(await res.json());
     const titleEl = document.getElementById("tl-action-add-title");
     const whoEl = document.getElementById("tl-action-add-who");
     if (titleEl) titleEl.value = "";
     if (whoEl) whoEl.value = "";
     syncTlActionAddDue();
-    toast("Action added");
   } catch (err) {
     toast(err.message || "Could not save", "error");
   } finally {
@@ -18786,6 +18854,24 @@ function tlNameKey(name) {
 
 function tlDirectoryPeople() {
   return [...(timelineState.data?.family_team || []), ...(timelineState.data?.team_members || [])];
+}
+
+function renderTlFiltersSummary() {
+  const el = document.getElementById("tl-filters-summary");
+  if (!el) return;
+  const rangeLabels = {
+    last5: "Last 5",
+    today: "Today",
+    "3d": "3 days",
+    "7d": "7 days",
+    "30d": "30 days",
+    all: "All",
+  };
+  const cat = document.querySelector(".tl-cat.active")?.textContent?.trim() || "All";
+  const extras = [];
+  if (document.getElementById("tl-search")?.value.trim()) extras.push("search");
+  if (document.getElementById("tl-show-dismissed")?.checked) extras.push("dismissed");
+  el.textContent = `· ${rangeLabels[timelineState.range] || "Last 5"} · ${cat}${extras.length ? ` · ${extras.join(" · ")}` : ""}`;
 }
 
 function fillActionWhoList() {
@@ -19236,11 +19322,35 @@ function tlFillFromMember(nameInputId, roleInputId, whereInputId) {
   if (where && !where.value.trim() && member.environments?.length) where.value = member.environments[0];
 }
 
-function setTeamFold(bodyId, open) {
+function isNarrowTimeline() {
+  return window.matchMedia("(max-width: 720px)").matches;
+}
+
+function applyTeamFold(bodyId, open) {
   const body = document.getElementById(bodyId);
   const btn = document.querySelector(`[aria-controls="${bodyId}"]`);
   if (body) body.classList.toggle("hidden", !open);
   btn?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function syncTeamRowOpen() {
+  document.querySelector(".family-team-wrap")?.classList.toggle(
+    "is-open",
+    !document.getElementById("family-team-body")?.classList.contains("hidden")
+  );
+  document.querySelector(".timeline-team-wrap")?.classList.toggle(
+    "is-open",
+    !document.getElementById("care-team-body")?.classList.contains("hidden")
+  );
+}
+
+function setTeamFold(bodyId, open) {
+  applyTeamFold(bodyId, open);
+  if (isNarrowTimeline() && open) {
+    if (bodyId === "family-team-body") applyTeamFold("care-team-body", false);
+    if (bodyId === "care-team-body") applyTeamFold("family-team-body", false);
+  }
+  syncTeamRowOpen();
 }
 
 function openTeamForm(member = null, presetName = "") {
@@ -19314,9 +19424,11 @@ async function saveTeamForm(event) {
     timelineState.data = data;
     const memberId = id || data.member?.id;
     const photoChanged = await saveMemberAvatarIfNeeded("team", "care-team", memberId);
+    const continueAction = pendingActionWho;
     closeTeamForm();
     if (photoChanged) await loadTimeline({ quiet: true });
     else renderTimeline();
+    if (continueAction) finishAddActionPerson(body.name);
     toast(id ? "Care team updated" : `${body.name} added to the care team`);
   } catch (err) {
     toast(err.message || "Could not save", "error");
@@ -19475,6 +19587,7 @@ function renderTimelineList() {
   if (!listEl) return;
   tlSetToggleGroup(".tl-range", "range", timelineState.range);
   tlSetToggleGroup(".tl-cat", "cat", timelineState.cat);
+  renderTlFiltersSummary();
   if (!state.activePatientId) {
     listEl.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see the timeline."))}</p>`;
     return;
@@ -19738,8 +19851,10 @@ async function saveFamilyForm(event) {
     );
     const memberId = id || data.family_member?.id;
     const photoChanged = await saveMemberAvatarIfNeeded("fam", "family-team", memberId);
+    const continueAction = pendingActionWho;
     closeFamilyForm();
     if (photoChanged) await loadTimeline({ quiet: true });
+    if (continueAction) finishAddActionPerson(body.name);
     toast(id ? "Family team updated" : `${body.name} added to the family team`);
   } catch (err) {
     toast(err.message, "error");
@@ -20539,6 +20654,7 @@ async function saveTimelineForm(event) {
   }
   const files = [...(document.getElementById("tl-file")?.files || [])];
   const pasted = document.getElementById("tl-extra")?.value || "";
+  const longSummary = (body.summary || "").length > 400 || (body.summary || "").split(/\n/).filter(Boolean).length > 8;
   if (!body.summary && !body.practitioner && !files.length && !pasted.trim()) {
     return toast("Add who was in, what happened, or a file", "error");
   }
@@ -20546,16 +20662,16 @@ async function saveTimelineForm(event) {
   const status = document.getElementById("tl-status");
   if (btn) btn.disabled = true;
   try {
-    if (!editId && (files.length || pasted.trim().length > 80)) {
-      if (status) status.textContent = files.length ? "Saving and summarizing…" : "Saving…";
+    if (!editId && (files.length || pasted.trim().length > 80 || longSummary)) {
+      if (status) status.textContent = files.length || pasted.trim() || longSummary ? "Saving and summarizing…" : "Saving…";
       const data = await saveVisitWithFiles({
         files,
-        pasted,
+        pasted: pasted.trim() || (longSummary ? body.summary : ""),
         whenRaw,
         practitioner: body.practitioner,
         role: body.role,
         location: body.location,
-        summary: body.summary,
+        summary: longSummary ? "" : body.summary,
         actions: body.actions,
       });
       timelineState.data = data;
@@ -21269,6 +21385,40 @@ document.getElementById("btn-tl-log-fold")?.addEventListener("click", () => {
   const body = document.getElementById("timeline-log-body");
   setTeamFold("timeline-log-body", body?.classList.contains("hidden"));
 });
+document.getElementById("btn-tl-filters-fold")?.addEventListener("click", () => {
+  const el = document.getElementById("timeline-filters");
+  const open = el?.classList.contains("hidden");
+  el?.classList.toggle("hidden", !open);
+  document.getElementById("btn-tl-filters-fold")?.setAttribute("aria-expanded", open ? "true" : "false");
+});
+document.querySelectorAll(".tl-action-kind-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setActionAddKind(btn.dataset.actionKind));
+});
+document.getElementById("btn-tl-action-add-person")?.addEventListener("click", () => {
+  document.getElementById("tl-action-add-person-pick")?.classList.toggle("hidden");
+});
+document.getElementById("tl-action-add-person-pick")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-add-person]");
+  if (btn) startAddActionPerson(btn.dataset.addPerson);
+});
+document.getElementById("btn-family-cancel")?.addEventListener("click", () => {
+  pendingActionWho = false;
+});
+document.getElementById("btn-team-cancel")?.addEventListener("click", () => {
+  pendingActionWho = false;
+});
+window.matchMedia("(max-width: 720px)").addEventListener("change", (event) => {
+  if (!event.matches) {
+    syncTeamRowOpen();
+    return;
+  }
+  const famOpen = !document.getElementById("family-team-body")?.classList.contains("hidden");
+  const teamOpen = !document.getElementById("care-team-body")?.classList.contains("hidden");
+  if (famOpen && teamOpen) setTeamFold("care-team-body", false);
+  else syncTeamRowOpen();
+});
+syncActionAddKind();
+syncTeamRowOpen();
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     stopMacWhatsAppWatch();

@@ -9,6 +9,25 @@ MAX_BULLETS = 6
 MIN_BULLETS = 3
 MAX_BULLET_CHARS = 160
 MAX_SOURCE_CHARS = 16_000
+MAX_USER_SUMMARY_CHARS = 900
+MAX_USER_SUMMARY_LINES = 8
+PLANISH = re.compile(
+    r"\b(plan|follow[- ]?up|biopsy|fast|npo|midnight|cancer board|hematology|"
+    r"antibiotic|book|schedule|will (?:start|stop|transition|order|keep)|"
+    r"next (?:step|ct|scan|visit)|continue)\b",
+    re.I,
+)
+
+
+def is_short_visit_summary(text: str) -> bool:
+    """True when the family typed a short recap, not a dumped transcript."""
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if len(raw) > MAX_USER_SUMMARY_CHARS:
+        return False
+    lines = [line for line in raw.splitlines() if line.strip()]
+    return len(lines) <= MAX_USER_SUMMARY_LINES
 
 VISIT_SUMMARY_SYSTEM = """You write a short family-timeline summary of a recorded clinical visit.
 Use only facts that appear in the notes: what was said or done, who said it, numbers, plans, and next steps.
@@ -58,16 +77,17 @@ def fallback_visit_bullets(chunks: list[tuple[str, str]]) -> str:
             line = " ".join(raw.split()).strip(" -•")
             if len(line) < 24:
                 continue
-            if re.match(r"^(thanks|thank you|ok|okay|yes|no)\b", line, re.I):
+            if re.match(r"^(thanks|thank you|ok|okay|yes|no|yeah|so|and)\b", line, re.I):
                 continue
             candidates.append(line)
-            if len(candidates) >= MAX_BULLETS:
-                break
-        if len(candidates) >= MAX_BULLETS:
-            break
     if not candidates:
         return ""
-    return format_visit_bullets(candidates[:MAX_BULLETS])
+    ranked = sorted(
+        candidates,
+        key=lambda line: (1 if PLANISH.search(line) else 0, -len(line)),
+        reverse=True,
+    )
+    return format_visit_bullets(ranked[:MAX_BULLETS])
 
 
 def _source_prompt(chunks: list[tuple[str, str]], *, who: str, role: str) -> str:

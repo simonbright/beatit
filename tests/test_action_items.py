@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from app.services.action_items import (
     action_item_fingerprint,
+    cap_visit_actions,
     extract_action_items,
     items_from_event,
     prune_noisy_extracted_items,
+    prune_visit_action_flood,
     resolve_due,
 )
 
@@ -164,6 +166,88 @@ def test_prune_drops_openevidence_extracts():
     }
     assert prune_noisy_extracted_items(profile) == 1
     assert [row["title"] for row in profile["care_items"]] == ["Book MRI Monday"]
+
+
+def test_long_transcript_does_not_flood_followups():
+    lines = [
+        "Yeah, twice today.",
+        "Is this stuff can only, I guess today's Saturday.",
+        "So if it's, whatever process starts, starts Monday morning.",
+        "Yeah, so they'd see you on Monday and talk to you about it.",
+        "That's something that they would start processing on Monday if we put that in.",
+        "I need to think about that later.",
+        "We can call if anything changes.",
+        "She will start feeling better.",
+        "They need to see how she does.",
+        "Come back if you have questions.",
+    ]
+    notes = "\n".join(lines * 20)
+    items = extract_action_items(
+        notes,
+        occurred_at="2026-10-31T10:00:00-04:00",
+        source_event_id="ev-long",
+        source_kind="visit",
+        aggressive=True,
+    )
+    assert len(items) <= 5
+    titles = " ".join(i["title"].lower() for i in items)
+    assert "yeah" not in titles
+    assert "twice today" not in titles
+
+
+def test_prunes_visit_followup_flood():
+    items = [
+        {
+            "title": f"Yeah, so they'd see you on Monday {i}.",
+            "source": "extracted",
+            "source_kind": "visit",
+            "source_event_id": "ev1",
+            "status": "open",
+        }
+        for i in range(40)
+    ]
+    items.append(
+        {
+            "title": "Repeat liver biopsy Monday",
+            "kind": "exam",
+            "due_at": "2026-11-02",
+            "source": "extracted",
+            "source_kind": "visit",
+            "source_event_id": "ev1",
+            "status": "open",
+        }
+    )
+    items.append(
+        {
+            "title": "Keep this manual item",
+            "source": "manual",
+            "status": "open",
+        }
+    )
+    profile = {"care_items": items}
+    removed = prune_visit_action_flood(profile)
+    assert removed >= 35
+    kept = profile["care_items"]
+    assert any(row["title"] == "Keep this manual item" for row in kept)
+    visit = [row for row in kept if row.get("source_event_id") == "ev1"]
+    assert 1 <= len(visit) <= 5
+    assert any("biopsy" in row["title"].lower() for row in visit)
+
+
+def test_cap_visit_actions_prefers_real_next_steps():
+    chosen = cap_visit_actions(
+        [
+            {"title": "Yeah, twice today.", "kind": "other"},
+            {"title": "Transition from IV to oral antibiotics", "kind": "follow_up", "due_at": "2026-11-01"},
+            {"title": "Fast after midnight Sunday", "kind": "exam", "due_at": "2026-11-01"},
+            {"title": "Cancer board Tuesday", "kind": "appointment", "due_at": "2026-11-03"},
+            {"title": "That's something that they would start processing on Monday", "kind": "other"},
+        ]
+    )
+    titles = [row["title"].lower() for row in chosen]
+    assert len(chosen) <= 5
+    assert any("antibiotic" in title or "fast" in title or "cancer board" in title for title in titles)
+    assert all("yeah" not in title for title in titles)
 
 
 def test_fingerprint_dedupes_same_title():

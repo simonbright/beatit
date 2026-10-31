@@ -1324,28 +1324,37 @@
           </div>
         </section>
 
-        <section id="timeline-actions" class="timeline-actions-board" aria-label="Action items">
+        <section id="timeline-actions" class="timeline-actions-board" aria-label="Action items and milestones">
           <div class="timeline-team-head">
-            <h4>Action items <span class="muted small" id="tl-action-count"></span></h4>
+            <h4>Action Items/Milestones <span class="muted small" id="tl-action-count"></span></h4>
             <div class="timeline-filter-group" role="group" aria-label="Action item filter">
               <button type="button" class="btn secondary btn-sm tl-action-filter active" data-action-filter="open">Open</button>
               <button type="button" class="btn ghost btn-sm tl-action-filter" data-action-filter="overdue">Overdue</button>
               <button type="button" class="btn ghost btn-sm tl-action-filter" data-action-filter="done">Done</button>
             </div>
           </div>
-          <p class="muted small">Add one here, or we pull them from chats and visit notes. Tap a day to see what is due. Alert sends WhatsApp, text, or email using their preferred contact.</p>
+          <p class="muted small tl-action-help">Add one here, or we pull them from chats and visit notes. Tap a day to see what is due. Alert sends WhatsApp, text, or email using their preferred contact.</p>
           <form id="tl-action-add" class="tl-action-add" autocomplete="off">
-            <label for="tl-action-add-title">Action
-              <input type="text" id="tl-action-add-title" maxlength="160" required placeholder="e.g. Simon to FU with Internal Med re biopsy">
+            <div class="timeline-filter-group tl-action-kind" role="group" aria-label="Add as">
+              <button type="button" class="btn secondary btn-sm tl-action-kind-btn active" data-action-kind="action" aria-pressed="true">Action item</button>
+              <button type="button" class="btn ghost btn-sm tl-action-kind-btn" data-action-kind="milestone" aria-pressed="false">Milestone</button>
+            </div>
+            <label class="tl-action-add-title" for="tl-action-add-title"><span id="tl-action-add-title-label">Action</span>
+              <textarea id="tl-action-add-title" maxlength="160" required rows="3" placeholder="e.g. Simon to FU with Internal Med re biopsy"></textarea>
             </label>
-            <label for="tl-action-add-who">Who
+            <label class="tl-action-add-who" for="tl-action-add-who">Who
               <input type="text" id="tl-action-add-who" list="tl-action-who-list" maxlength="120" placeholder="Simon">
               <datalist id="tl-action-who-list"></datalist>
+              <button type="button" class="link-button tl-action-add-person" id="btn-tl-action-add-person">Add new person</button>
+              <div id="tl-action-add-person-pick" class="tl-action-add-person-pick hidden" role="group" aria-label="Add new person to">
+                <button type="button" class="btn ghost btn-sm" data-add-person="family">Family</button>
+                <button type="button" class="btn ghost btn-sm" data-add-person="team">Care team</button>
+              </div>
             </label>
             <label for="tl-action-add-due">Date
               <input type="date" id="tl-action-add-due">
             </label>
-            <label for="tl-action-add-time">Time
+            <label class="tl-action-add-time" for="tl-action-add-time">Time
               <input type="time" id="tl-action-add-time">
             </label>
             <button type="submit" class="btn primary btn-sm" id="btn-tl-action-add">Add</button>
@@ -1404,7 +1413,7 @@
             <input type="text" id="tl-location" list="tl-env-list" maxlength="120" placeholder="Unit, room, clinic">
           </label>
           <label for="tl-summary" class="care-item-notes">What happened
-            <textarea id="tl-summary" rows="4" maxlength="4000" placeholder="What was said or done. e.g. Switching to oral antibiotics tomorrow. Biotype still pending."></textarea>
+            <textarea id="tl-summary" rows="4" maxlength="4000" placeholder="Optional short recap. If you attach notes, we summarize those instead of pasting them here."></textarea>
           </label>
           <div id="tl-closeout" class="tl-closeout hidden">
             <label for="tl-next-title">Next action <span class="muted small">(optional)</span>
@@ -1466,6 +1475,7 @@
           <p class="muted small timeline-gaps-note">Days or results that were not logged here — they may still have happened.</p>
         </section>
 
+        <div class="timeline-teams-row">
         <div class="family-team-wrap">
           <div class="timeline-team-head">
             <button type="button" class="tl-fold-btn" id="btn-family-fold" aria-expanded="false" aria-controls="family-team-body">
@@ -1552,7 +1562,7 @@
           <div class="timeline-team-head">
             <button type="button" class="tl-fold-btn" id="btn-team-fold" aria-expanded="false" aria-controls="care-team-body">
               <span class="tl-fold-caret" aria-hidden="true"></span>
-              <h4>Professional care team <span class="muted small" id="timeline-team-hint"></span></h4>
+              <h4><span class="tl-team-wide">Professional care team</span><span class="tl-team-narrow">Pro care</span> <span class="muted small" id="timeline-team-hint"></span></h4>
             </button>
             <div class="timeline-team-head-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-team-share-family">Share with family</button>
@@ -1616,6 +1626,7 @@
           <div id="timeline-team" class="timeline-team"><p class="muted small">No practitioners recorded yet.</p></div>
           </div>
         </div>
+        </div>
 
         <div id="timeline-contacts" class="timeline-panel hidden">
           <div class="row-between wrap">
@@ -1641,7 +1652,11 @@
             </button>
           </div>
           <div id="timeline-log-body" class="tl-fold-body">
-        <div class="timeline-filters">
+        <button type="button" class="tl-fold-btn tl-filters-fold" id="btn-tl-filters-fold" aria-expanded="false" aria-controls="timeline-filters">
+          <span class="tl-fold-caret" aria-hidden="true"></span>
+          <h5>Filters <span class="muted small" id="tl-filters-summary">· Last 5 · All</span></h5>
+        </button>
+        <div id="timeline-filters" class="timeline-filters hidden">
           <div class="timeline-filter-group" role="group" aria-label="Time range">
             <button type="button" class="btn secondary btn-sm tl-range active" data-range="last5">Last 5</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="today">Today</button>
