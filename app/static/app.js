@@ -1979,12 +1979,14 @@ function switchTab(name, options = {}) {
     if (options.openAdd) openLibraryAddPanel();
   }
   if (name === "analyze") {
-    loadLatestAssessment();
-    loadChatObservations().catch(() => {});
-    refreshHandlingFlags().catch(() => {});
+    if (!isSimpleView()) {
+      loadLatestAssessment();
+      loadChatObservations().catch(() => {});
+      refreshHandlingFlags().catch(() => {});
+    }
     let home = options.homeSection || state.homeSection || preferredHomeSection();
     // Labs is its own top-level tab — don't restore Home onto the old Labs sub-pane.
-    if (home === "diagnostics") home = preferredHomeSection();
+    if (home === "diagnostics" || isSimpleView()) home = "log";
     setHomeSection(home);
     if (isMobileLogLayout() && state.homeSection === "log") {
       focusMobileLogViewport({ behavior: "auto" });
@@ -2218,9 +2220,17 @@ const BUILTIN_LOG_TILES = {
     kind: "note",
     icon: '<svg viewBox="0 0 24 24"><path d="M4 14a6 6 0 0 1 6-6h8v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM14 8V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
   },
+  vitals: {
+    label: "Readings",
+    mode: "open",
+    open: "vitals",
+    hint: "temp · HR · BP · O₂",
+    icon: '<svg viewBox="0 0 24 24"><path d="M4 13h3l2-5 3 10 2-5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 4v5M16 6.5h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  },
 };
 
 const DEFAULT_LOG_TILE_ORDER = [
+  "vitals",
   "feel-fine",
   "nauseous",
   "vomiting",
@@ -2349,6 +2359,11 @@ function resolveLogTileOrder(
   }
   for (const key of customKeys) {
     if (!ordered.includes(key)) ordered.push(key);
+  }
+  if (known.has("vitals") && !(source.log_tile_order || []).includes("vitals")) {
+    const idx = ordered.indexOf("vitals");
+    if (idx >= 0) ordered.splice(idx, 1);
+    ordered.unshift("vitals");
   }
   return ordered.filter((key) => {
     const def = resolveLogTileDef(key, source);
@@ -3747,7 +3762,7 @@ const MAIN_NAV_TABS = new Set([
   "library",
   "settings",
 ]);
-const SIMPLE_TABS = new Set(["timeline", "labs", "questions"]);
+const SIMPLE_TABS = new Set(["analyze", "timeline", "labs", "questions"]);
 const DEFAULT_SIMPLE_TAB = "timeline";
 const VIEW_MODE_STORAGE_KEY = "bright-health-view-mode";
 
@@ -3780,6 +3795,11 @@ function applyViewMode(mode) {
     advancedBtn.classList.toggle("active", next === "advanced");
     advancedBtn.setAttribute("aria-pressed", next === "advanced" ? "true" : "false");
   }
+  const homeTab = document.querySelector('.tab[data-tab="analyze"]');
+  if (homeTab) {
+    homeTab.setAttribute("aria-label", next === "simple" ? "Log" : "Home");
+    homeTab.title = next === "simple" ? "Log how you feel and basic readings" : "Home";
+  }
 }
 
 function setViewMode(mode, options = {}) {
@@ -3806,6 +3826,8 @@ function setViewMode(mode, options = {}) {
     DEFAULT_SIMPLE_TAB;
   if (next === "simple" && MAIN_NAV_TABS.has(current) && !SIMPLE_TABS.has(current)) {
     switchTab(DEFAULT_SIMPLE_TAB);
+  } else if (next === "simple" && current === "analyze") {
+    setHomeSection("log");
   }
 }
 
@@ -10833,6 +10855,11 @@ function fillDoctorQuestionPickers(profile = state.patientProfile) {
   }
 }
 
+function setDoctorQuestionContextOpen(open) {
+  const details = document.querySelector("#doctor-question-form .questions-context");
+  if (details) details.open = Boolean(open);
+}
+
 function clearDoctorQuestionForm() {
   const form = document.getElementById("doctor-question-form");
   form?.reset();
@@ -10842,6 +10869,7 @@ function clearDoctorQuestionForm() {
   const saveBtn = document.getElementById("btn-save-doctor-question");
   if (saveBtn) saveBtn.textContent = "Add question";
   document.getElementById("btn-cancel-doctor-question")?.classList.add("hidden");
+  setDoctorQuestionContextOpen(false);
 }
 
 function beginDoctorQuestionEdit(item) {
@@ -10852,6 +10880,7 @@ function beginDoctorQuestionEdit(item) {
   document.getElementById("dq-doctor").value = item.doctor || "";
   document.getElementById("dq-role").value = item.role || "";
   document.getElementById("dq-notes").value = item.notes || "";
+  setDoctorQuestionContextOpen(Boolean(item.notes));
   const saveBtn = document.getElementById("btn-save-doctor-question");
   if (saveBtn) saveBtn.textContent = "Save question";
   document.getElementById("btn-cancel-doctor-question")?.classList.remove("hidden");
@@ -10926,21 +10955,21 @@ function renderDoctorQuestions(profile = state.patientProfile) {
     btn.classList.toggle("ghost", !active);
   });
   if (!profile || !state.activePatientId) {
-    listEl.innerHTML = `<p class="muted small">Select a patient to collect questions.</p>`;
+    listEl.innerHTML = `<div class="questions-empty"><p>Select a patient</p><p class="muted small">Choose someone in the header to collect questions.</p></div>`;
     return;
   }
   const filter = state.questionFilter || "open";
   const items = doctorQuestionsFromProfile(profile).filter((item) => filter === "all" || item.status === filter);
   if (!items.length) {
-    listEl.innerHTML = `<p class="muted small">${
+    const empty =
       filter === "asked"
-        ? "No asked questions yet."
+        ? ["None marked asked", "When you ask one in clinic, tap Asked on the card."]
         : filter === "answered"
-          ? "No answers recorded yet."
+          ? ["No answers recorded yet", "After the visit, tap Answered and save what they said."]
           : filter === "all"
-            ? "No questions yet. Add one above."
-            : "Nothing to ask yet. Add a question above."
-    }</p>`;
+            ? ["No questions yet", "Write a question above and pick who it is for."]
+            : ["Nothing to ask yet", "Write a question above and pick who it is for."];
+    listEl.innerHTML = `<div class="questions-empty"><p>${empty[0]}</p><p class="muted small">${empty[1]}</p></div>`;
     return;
   }
   const groups = new Map();
@@ -12938,6 +12967,10 @@ async function quickLogInstant(key) {
 }
 
 function openJournalForQuick(mode) {
+  if (mode === "vitals") {
+    openVitalsModal();
+    return;
+  }
   if (mode === "exercise" || mode === "walked" || mode === "weights") {
     openExerciseModal(mode);
     return;
@@ -12964,6 +12997,121 @@ function openJournalForQuick(mode) {
   } else if (mode === "food") {
     document.getElementById("journal-food-options")?.scrollIntoView({ block: "nearest" });
     document.getElementById("journal-text")?.focus();
+  }
+}
+
+function todayInputDate() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+}
+
+function resetVitalsModal() {
+  const temp = document.getElementById("vitals-temp");
+  const hr = document.getElementById("vitals-hr");
+  const sys = document.getElementById("vitals-bp-sys");
+  const dia = document.getElementById("vitals-bp-dia");
+  const o2 = document.getElementById("vitals-o2");
+  const dateEl = document.getElementById("vitals-date");
+  const unit = document.getElementById("vitals-temp-unit");
+  if (temp) temp.value = "";
+  if (hr) hr.value = "";
+  if (sys) sys.value = "";
+  if (dia) dia.value = "";
+  if (o2) o2.value = "";
+  if (unit) unit.value = "°C";
+  syncVitalsTempBounds();
+  if (dateEl) dateEl.value = todayInputDate();
+}
+
+function syncVitalsTempBounds() {
+  const temp = document.getElementById("vitals-temp");
+  const unit = document.getElementById("vitals-temp-unit")?.value || "°C";
+  if (!temp) return;
+  if (unit === "°F") {
+    temp.min = "85";
+    temp.max = "113";
+    temp.placeholder = "e.g. 98.6";
+  } else {
+    temp.min = "30";
+    temp.max = "45";
+    temp.placeholder = "e.g. 37.2";
+  }
+}
+
+function openVitalsModal() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  resetVitalsModal();
+  hideModal("modal-journal");
+  showModal("modal-vitals");
+  document.getElementById("vitals-temp")?.focus();
+}
+
+function closeVitalsModal() {
+  hideModal("modal-vitals");
+}
+
+async function postDiagnosticValue({ name, value, unit, recordedAt, notes = null }) {
+  const res = await fetch(`/api/patients/${state.activePatientId}/diagnostics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      name,
+      value,
+      unit,
+      recorded_at: recordedAt,
+      notes,
+      category: "vital",
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Could not save ${name}`);
+  }
+  return res.json();
+}
+
+function readVitalsNumber(id) {
+  const raw = document.getElementById(id)?.value;
+  if (raw === "" || raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function saveVitalsReadings() {
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const date = document.getElementById("vitals-date")?.value || todayInputDate();
+  const temp = readVitalsNumber("vitals-temp");
+  const hr = readVitalsNumber("vitals-hr");
+  const sys = readVitalsNumber("vitals-bp-sys");
+  const dia = readVitalsNumber("vitals-bp-dia");
+  const o2 = readVitalsNumber("vitals-o2");
+  const tempUnit = document.getElementById("vitals-temp-unit")?.value || "°C";
+  const rows = [];
+  if (temp != null) rows.push({ name: "Temperature", value: temp, unit: tempUnit });
+  if (hr != null) rows.push({ name: "Heart rate", value: hr, unit: "bpm" });
+  if (sys != null) rows.push({ name: "Systolic BP", value: sys, unit: "mmHg" });
+  if (dia != null) rows.push({ name: "Diastolic BP", value: dia, unit: "mmHg" });
+  if (o2 != null) rows.push({ name: "Oxygen saturation", value: o2, unit: "%" });
+  if (!rows.length) return toast("Enter at least one reading", "error");
+  if ((sys != null) !== (dia != null)) {
+    return toast("Enter both systolic and diastolic for blood pressure", "error");
+  }
+  const btn = document.getElementById("btn-save-vitals");
+  if (btn) btn.disabled = true;
+  try {
+    let last = null;
+    for (const row of rows) {
+      last = await postDiagnosticValue({ ...row, recordedAt: date });
+    }
+    if (last) applyProfileResponse(last);
+    closeVitalsModal();
+    toast(rows.length === 1 ? `${rows[0].name} logged` : `${rows.length} readings logged`);
+    if (state.homeSection === "log") renderMobileLogRecent({ softObservations: true });
+  } catch (err) {
+    toast(err.message || "Could not save readings", "error");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -13953,7 +14101,7 @@ function labPanelForSeries(item) {
     [["crp", "esr", "sedimentation"], "Inflammation"],
     [["psa"], "Prostate"],
     [["testosterone", "estradiol", "cortisol"], "Hormones"],
-    [["systolic", "diastolic", "blood pressure", "bmi", "weight"], "Vitals"],
+    [["systolic", "diastolic", "blood pressure", "bmi", "weight", "heart rate", "temperature", "oxygen", "spo2"], "Vitals"],
     [["calcium score", "agatston", "bi-rads", "birads"], "Imaging"],
   ];
   for (const [aliases, group] of heuristics) {
@@ -16220,6 +16368,15 @@ document.getElementById("btn-close-quick-scale")?.addEventListener("click", () =
   closeQuickScaleModal();
 });
 
+document.getElementById("btn-close-vitals")?.addEventListener("click", () => closeVitalsModal());
+document.getElementById("btn-cancel-vitals")?.addEventListener("click", () => closeVitalsModal());
+document.getElementById("btn-save-vitals")?.addEventListener("click", () => {
+  saveVitalsReadings().catch((err) => toast(err.message || "Could not save readings", "error"));
+});
+document.getElementById("modal-vitals")?.addEventListener("click", (event) => {
+  if (event.target?.id === "modal-vitals") closeVitalsModal();
+});
+document.getElementById("vitals-temp-unit")?.addEventListener("change", syncVitalsTempBounds);
 document.getElementById("btn-close-exercise")?.addEventListener("click", () => closeExerciseModal());
 document.getElementById("btn-cancel-exercise")?.addEventListener("click", () => closeExerciseModal());
 document.getElementById("modal-exercise")?.addEventListener("click", (event) => {
@@ -18094,34 +18251,189 @@ function tlContactHref(kind, value) {
   const v = String(value || "").trim();
   if (!v) return "";
   if (kind === "email") return `mailto:${encodeURIComponent(v).replace(/%40/g, "@")}`;
-  const digits = v.split(/ext|x|,/i)[0].replace(/[^\d+]/g, "");
+  const digits = v.split(/ext|x|,/i)[0].replace(/[^\d]/g, "");
   if (!digits) return "";
+  if (kind === "whatsapp") return digits.length >= 8 ? `https://wa.me/${digits}` : "";
   return kind === "text" ? `sms:${digits}` : `tel:${digits}`;
+}
+
+function tlWhatsAppNumber(t) {
+  return String(t?.whatsapp || t?.phone || "").trim();
 }
 
 function tlContactHtml(t) {
   const methods = Object.fromEntries((timelineState.data?.contact_methods || []).map((m) => [m.value, m.label]));
   const pref = t.preferred_contact || "";
+  const wa = tlWhatsAppNumber(t);
   const link = (kind, value, label) => {
     const href = tlContactHref(kind, value);
     return href
-      ? `<a class="timeline-contact-link" href="${escapeHtml(href)}" data-stop>${escapeHtml(label || value)}</a>`
+      ? `<a class="timeline-contact-link" href="${escapeHtml(href)}" data-stop${kind === "whatsapp" ? ' target="_blank" rel="noopener"' : ""}>${escapeHtml(label || value)}</a>`
       : escapeHtml(label || value);
   };
   let prefLine = "";
   if (pref) {
     let how = "";
     if ((pref === "phone" || pref === "text") && t.phone) how = link(pref, t.phone, t.phone);
+    else if (pref === "whatsapp" && wa) how = link("whatsapp", wa, t.whatsapp || t.phone);
     else if (pref === "email" && t.email) how = link("email", t.email, t.email);
     else if (t.contact_other) how = escapeHtml(t.contact_other);
     prefLine = `<span class="timeline-contact-pref">Prefers: <strong>${escapeHtml(methods[pref] || pref)}</strong>${how ? ` · ${how}` : ""}</span>`;
   }
   const others = [];
-  if (t.phone && !(pref === "phone" || pref === "text")) others.push(link("phone", t.phone, t.phone));
+  if (t.phone && !(pref === "phone" || pref === "text") && pref !== "whatsapp") others.push(link("phone", t.phone, t.phone));
+  if (t.whatsapp && pref !== "whatsapp") others.push(link("whatsapp", t.whatsapp, `WhatsApp ${t.whatsapp}`));
+  else if (!t.whatsapp && t.phone && pref === "whatsapp") others.push(link("phone", t.phone, t.phone));
   if (t.email && pref !== "email") others.push(link("email", t.email, t.email));
-  if (t.contact_other && (pref === "phone" || pref === "text" || pref === "email" || !pref)) others.push(escapeHtml(t.contact_other));
+  if (t.contact_other && (pref === "phone" || pref === "text" || pref === "whatsapp" || pref === "email" || !pref)) {
+    others.push(escapeHtml(t.contact_other));
+  }
   const otherLine = others.length ? `<span class="timeline-team-meta">${others.join(" · ")}</span>` : "";
   return prefLine + otherLine;
+}
+
+function tlInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function tlAvatarHtml(person) {
+  if (person?.avatar_url) {
+    return `<span class="team-avatar"><img src="${escapeHtml(person.avatar_url)}" alt=""></span>`;
+  }
+  if (person?.avatar_emoji) {
+    return `<span class="team-avatar team-avatar-emoji" title="${escapeHtml(person.avatar_key || "")}">${escapeHtml(person.avatar_emoji)}</span>`;
+  }
+  return `<span class="team-avatar team-avatar-initials">${escapeHtml(tlInitials(person?.name))}</span>`;
+}
+
+function tlAvatarPreset(key) {
+  return (timelineState.data?.avatar_presets || []).find((p) => p.key === key) || null;
+}
+
+function renderAvatarPicker(prefix, selectedKey) {
+  const el = document.getElementById(`${prefix}-avatar-picker`);
+  if (!el) return;
+  const presets = timelineState.data?.avatar_presets || [];
+  const themes = [];
+  const seen = new Set();
+  for (const p of presets) {
+    if (!seen.has(p.theme)) {
+      seen.add(p.theme);
+      themes.push({ theme: p.theme, label: p.theme_label || p.theme });
+    }
+  }
+  el.innerHTML = themes
+    .map((th) => {
+      const items = presets.filter((p) => p.theme === th.theme);
+      return `<div class="team-avatar-theme">
+        <span class="team-avatar-theme-label">${escapeHtml(th.label)}</span>
+        <div class="team-avatar-grid">
+          ${items
+            .map(
+              (p) => `<button type="button" class="team-avatar-choice${p.key === selectedKey ? " is-selected" : ""}" data-avatar-prefix="${escapeHtml(prefix)}" data-avatar-key="${escapeHtml(p.key)}" title="${escapeHtml(p.label)}" aria-pressed="${p.key === selectedKey ? "true" : "false"}">
+            <span class="team-avatar-choice-emoji">${p.emoji}</span>
+            <span class="team-avatar-choice-name">${escapeHtml(p.label)}</span>
+          </button>`
+            )
+            .join("")}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function tlAvatarFormState(prefix) {
+  const form = document.getElementById(prefix === "fam" ? "family-form" : "team-form");
+  if (!form) return { file: null, clear: false, objectUrl: "" };
+  if (!form._avatar) form._avatar = { file: null, clear: false, objectUrl: "" };
+  return form._avatar;
+}
+
+function updateAvatarPreview(prefix, person = null) {
+  const el = document.getElementById(`${prefix}-avatar-preview`);
+  if (!el) return;
+  const pending = tlAvatarFormState(prefix);
+  const name = document.getElementById(`${prefix}-name`)?.value || person?.name || "";
+  const key = document.getElementById(`${prefix}-avatar-key`)?.value || "";
+  const emoji = tlAvatarPreset(key)?.emoji || person?.avatar_emoji || "";
+  const url = pending.objectUrl || (!pending.clear && person?.avatar_url) || "";
+  const clearBtn = document.getElementById(`${prefix}-avatar-clear-photo`);
+  clearBtn?.classList.toggle("hidden", !url);
+  if (url) {
+    el.className = "team-avatar team-avatar-preview";
+    el.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+    return;
+  }
+  if (emoji) {
+    el.className = "team-avatar team-avatar-preview team-avatar-emoji";
+    el.textContent = emoji;
+    return;
+  }
+  el.className = "team-avatar team-avatar-preview team-avatar-initials";
+  el.textContent = tlInitials(name);
+}
+
+function resetAvatarForm(prefix) {
+  const pending = tlAvatarFormState(prefix);
+  if (pending.objectUrl) URL.revokeObjectURL(pending.objectUrl);
+  pending.file = null;
+  pending.clear = false;
+  pending.objectUrl = "";
+  const fileEl = document.getElementById(`${prefix}-avatar-file`);
+  if (fileEl) fileEl.value = "";
+  const keyEl = document.getElementById(`${prefix}-avatar-key`);
+  if (keyEl) keyEl.value = "";
+  updateAvatarPreview(prefix);
+}
+
+function selectAvatarChoice(prefix, key) {
+  const keyEl = document.getElementById(`${prefix}-avatar-key`);
+  const next = keyEl && keyEl.value === key ? "" : key;
+  if (keyEl) keyEl.value = next;
+  document.getElementById(`${prefix}-avatar-picker`)?.querySelectorAll(".team-avatar-choice").forEach((btn) => {
+    const on = btn.dataset.avatarKey === next;
+    btn.classList.toggle("is-selected", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
+}
+
+function tlEditingTeam() {
+  const id = document.getElementById("team-edit-id")?.value;
+  return (timelineState.data?.team_members || []).find((m) => m.id === id) || null;
+}
+
+function tlEditingFamily() {
+  const id = document.getElementById("fam-edit-id")?.value;
+  return (timelineState.data?.family_team || []).find((m) => m.id === id) || null;
+}
+
+async function saveMemberAvatarIfNeeded(prefix, kind, memberId) {
+  if (!memberId) return false;
+  const pending = tlAvatarFormState(prefix);
+  const pid = state.activePatientId;
+  if (pending.file) {
+    const body = new FormData();
+    body.append("file", pending.file);
+    const res = await fetch(`/api/patients/${pid}/${kind}/${memberId}/avatar`, {
+      method: "POST",
+      credentials: "include",
+      body,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save photo");
+    }
+    return true;
+  }
+  if (pending.clear) {
+    await fetch(`/api/patients/${pid}/${kind}/${memberId}/avatar`, { method: "DELETE", credentials: "include" });
+    return true;
+  }
+  return false;
 }
 
 function renderTimelineTeam() {
@@ -18162,7 +18474,7 @@ function renderTimelineTeam() {
           ? `<span class="timeline-team-action" data-team-adopt="${escapeHtml(t.name)}" role="button" tabindex="0">+ Add to team</span>`
           : "";
       return `<div class="timeline-team-card${active ? " is-active" : ""}${t.member_id ? "" : " is-unlisted"}" data-tl-who="${escapeHtml(key)}" role="button" tabindex="0">
-        <div class="timeline-team-top"><strong>${escapeHtml(t.name || "Unnamed")}</strong>${action}</div>
+        <div class="timeline-team-top">${tlAvatarHtml(t)}<div class="timeline-team-identity"><strong>${escapeHtml(t.name || "Unnamed")}</strong>${action}</div></div>
         ${t.role ? `<span class="timeline-team-role">${escapeHtml(t.role)}</span>` : `<span class="timeline-team-meta">No role yet</span>`}
         ${envChips ? `<span class="timeline-env-chips">${envChips}</span>` : ""}
         <span class="timeline-team-meta">${last ? `Last in: ${escapeHtml(tlShortWhen(last, lastHasTime))}` : "Not seen yet"} · ${t.contacts} contact${t.contacts === 1 ? "" : "s"}</span>
@@ -18200,15 +18512,21 @@ function openTeamForm(member = null, presetName = "") {
   document.getElementById("team-role").value = member?.role || fromTeam?.role || "";
   document.getElementById("team-envs").value = (member?.environments || fromTeam?.environments || []).join(", ");
   document.getElementById("team-phone").value = member?.phone || "";
+  document.getElementById("team-whatsapp").value = member?.whatsapp || "";
   document.getElementById("team-email").value = member?.email || "";
   document.getElementById("team-other").value = member?.contact_other || "";
   document.getElementById("team-preferred").value = member?.preferred_contact || "";
+  resetAvatarForm("team");
+  document.getElementById("team-avatar-key").value = member?.avatar_key || "";
+  renderAvatarPicker("team", member?.avatar_key || "");
+  updateAvatarPreview("team", member);
   document.getElementById("btn-team-save").textContent = member ? "Save" : "Add to care team";
   document.getElementById("btn-team-remove")?.classList.toggle("hidden", !member);
   (member || presetName ? document.getElementById("team-role") : document.getElementById("team-name"))?.focus();
 }
 
 function closeTeamForm() {
+  resetAvatarForm("team");
   const form = document.getElementById("team-form");
   form?.reset();
   form?.classList.add("hidden");
@@ -18226,9 +18544,11 @@ async function saveTeamForm(event) {
     role: document.getElementById("team-role").value.trim(),
     environments: document.getElementById("team-envs").value.split(",").map((x) => x.trim()).filter(Boolean),
     phone: document.getElementById("team-phone").value.trim(),
+    whatsapp: document.getElementById("team-whatsapp").value.trim(),
     email: document.getElementById("team-email").value.trim(),
     contact_other: document.getElementById("team-other").value.trim(),
     preferred_contact: document.getElementById("team-preferred").value,
+    avatar_key: document.getElementById("team-avatar-key").value,
   };
   if (!body.name) return toast("Enter a name", "error");
   try {
@@ -18242,9 +18562,13 @@ async function saveTeamForm(event) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || "Could not save");
     }
-    timelineState.data = await res.json();
+    const data = await res.json();
+    timelineState.data = data;
+    const memberId = id || data.member?.id;
+    const photoChanged = await saveMemberAvatarIfNeeded("team", "care-team", memberId);
     closeTeamForm();
-    renderTimeline();
+    if (photoChanged) await loadTimeline({ quiet: true });
+    else renderTimeline();
     toast(id ? "Care team updated" : `${body.name} added to the care team`);
   } catch (err) {
     toast(err.message || "Could not save", "error");
@@ -18504,11 +18828,12 @@ function populateTimelineForm() {
   if (roleList) roleList.innerHTML = (data.role_presets || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
   for (const prefId of ["team-preferred", "fam-preferred"]) {
     const prefEl = document.getElementById(prefId);
-    if (prefEl && prefEl.options.length <= 1) {
-      prefEl.innerHTML =
-        `<option value="">— Not set —</option>` +
-        (data.contact_methods || []).map((m) => `<option value="${escapeHtml(m.value)}">${escapeHtml(m.label)}</option>`).join("");
-    }
+    if (!prefEl) continue;
+    const current = prefEl.value;
+    prefEl.innerHTML =
+      `<option value="">— Not set —</option>` +
+      (data.contact_methods || []).map((m) => `<option value="${escapeHtml(m.value)}">${escapeHtml(m.label)}</option>`).join("");
+    if ([...prefEl.options].some((o) => o.value === current)) prefEl.value = current;
   }
   const envList = document.getElementById("tl-env-list");
   if (envList) envList.innerHTML = (data.environment_presets || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
@@ -18558,7 +18883,7 @@ function renderFamilyTeam() {
             .map((r) => `<span class="timeline-env-chip family-role-chip">${escapeHtml(roleLabel[r] || r)}</span>`)
             .join("");
           return `<div class="timeline-team-card family-card" data-family-edit="${escapeHtml(m.id)}" role="button" tabindex="0">
-            <div class="timeline-team-top"><strong>${escapeHtml(m.name)}</strong><span class="timeline-team-action">Edit</span></div>
+            <div class="timeline-team-top">${tlAvatarHtml(m)}<div class="timeline-team-identity"><strong>${escapeHtml(m.name)}</strong><span class="timeline-team-action">Edit</span></div></div>
             ${m.relationship ? `<span class="timeline-team-role">${escapeHtml(m.relationship)}</span>` : ""}
             ${chips ? `<span class="timeline-env-chips">${chips}</span>` : `<span class="timeline-team-meta">No role yet</span>`}
             ${m.availability ? `<span class="timeline-team-meta">${escapeHtml(m.availability)}</span>` : ""}
@@ -18601,10 +18926,15 @@ function openFamilyForm(member = null, presetName = "") {
   document.getElementById("fam-name").value = member?.name || presetName || "";
   document.getElementById("fam-rel").value = member?.relationship || "";
   document.getElementById("fam-phone").value = member?.phone || "";
+  document.getElementById("fam-whatsapp").value = member?.whatsapp || "";
   document.getElementById("fam-email").value = member?.email || "";
   document.getElementById("fam-preferred").value = member?.preferred_contact || "";
   document.getElementById("fam-availability").value = member?.availability || "";
   document.getElementById("fam-role-custom").value = "";
+  resetAvatarForm("fam");
+  document.getElementById("fam-avatar-key").value = member?.avatar_key || "";
+  renderAvatarPicker("fam", member?.avatar_key || "");
+  updateAvatarPreview("fam", member);
   renderFamilyRoleChecks("fam-roles", member?.roles || []);
   document.getElementById("btn-family-save").textContent = member ? "Save" : "Add to family team";
   document.getElementById("btn-family-remove")?.classList.toggle("hidden", !member);
@@ -18613,6 +18943,7 @@ function openFamilyForm(member = null, presetName = "") {
 }
 
 function closeFamilyForm() {
+  resetAvatarForm("fam");
   const form = document.getElementById("family-form");
   form?.reset();
   form?.classList.add("hidden");
@@ -18648,19 +18979,24 @@ async function saveFamilyForm(event) {
     name: document.getElementById("fam-name").value.trim(),
     relationship: document.getElementById("fam-rel").value.trim(),
     phone: document.getElementById("fam-phone").value.trim(),
+    whatsapp: document.getElementById("fam-whatsapp").value.trim(),
     email: document.getElementById("fam-email").value.trim(),
     preferred_contact: document.getElementById("fam-preferred").value,
     availability: document.getElementById("fam-availability").value.trim(),
+    avatar_key: document.getElementById("fam-avatar-key").value,
     roles,
   };
   if (!body.name) return toast("Enter a name", "error");
   try {
-    await tlSendTimeline(
+    const data = await tlSendTimeline(
       id ? `/api/patients/${pid}/family-team/${id}` : `/api/patients/${pid}/family-team`,
       id ? "PATCH" : "POST",
       body
     );
+    const memberId = id || data.family_member?.id;
+    const photoChanged = await saveMemberAvatarIfNeeded("fam", "family-team", memberId);
     closeFamilyForm();
+    if (photoChanged) await loadTimeline({ quiet: true });
     toast(id ? "Family team updated" : `${body.name} added to the family team`);
   } catch (err) {
     toast(err.message, "error");
@@ -19234,8 +19570,99 @@ function refreshFamilyUpdateText() {
   if (el) el.value = buildFamilyUpdateText(timelineState.updateRange);
 }
 
+function formatAsOfDate(isoDate) {
+  const raw = isoDate || new Date().toISOString().slice(0, 10);
+  const parts = raw.split("-").map(Number);
+  if (parts.length !== 3 || !parts[0]) return raw;
+  const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  return dt.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+}
+
+function buildContactSheet(audience, asOf) {
+  const patient = state.activePatientLabel || "the patient";
+  const asOfLabel = formatAsOfDate(asOf);
+  const methods = Object.fromEntries((timelineState.data?.contact_methods || []).map((m) => [m.value, m.label]));
+  const roleLabel = Object.fromEntries((timelineState.data?.family_roles || []).map((r) => [r.key, r.label]));
+  const lines = [];
+  if (audience === "staff") {
+    lines.push(
+      `Family contacts for ${patient}`,
+      `As of ${asOfLabel}`,
+      "For the care team — who to call in the family.",
+      ""
+    );
+    const family = timelineState.data?.family_team || [];
+    if (!family.length) lines.push("No family contacts recorded yet.");
+    for (const m of family) {
+      lines.push(m.relationship ? `${m.name} — ${m.relationship}` : m.name);
+      const roles = (m.roles || []).map((r) => roleLabel[r] || r);
+      if (roles.length) lines.push(`Roles: ${roles.join(" · ")}`);
+      if (m.phone) lines.push(`Phone: ${m.phone}`);
+      if (m.whatsapp) lines.push(`WhatsApp: ${m.whatsapp}`);
+      if (m.email) lines.push(`Email: ${m.email}`);
+      if (m.preferred_contact) lines.push(`Prefers: ${methods[m.preferred_contact] || m.preferred_contact}`);
+      if (m.availability) lines.push(`Availability: ${m.availability}`);
+      lines.push("");
+    }
+  } else {
+    lines.push(
+      `Care team contacts for ${patient}`,
+      `As of ${asOfLabel}`,
+      "For the family — who to reach on the professional team.",
+      ""
+    );
+    const team = [...(timelineState.data?.team_members || [])].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""))
+    );
+    if (!team.length) lines.push("No care team contacts recorded yet.");
+    for (const m of team) {
+      lines.push(m.role ? `${m.name} — ${m.role}` : m.name);
+      if (m.environments?.length) lines.push(`Where: ${m.environments.join(", ")}`);
+      if (m.phone) lines.push(`Phone: ${m.phone}`);
+      if (m.whatsapp) lines.push(`WhatsApp: ${m.whatsapp}`);
+      if (m.email) lines.push(`Email: ${m.email}`);
+      if (m.contact_other) lines.push(`Other: ${m.contact_other}`);
+      if (m.preferred_contact) lines.push(`Prefers: ${methods[m.preferred_contact] || m.preferred_contact}`);
+      if (m.notes) lines.push(`Notes: ${m.notes}`);
+      lines.push("");
+    }
+  }
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function refreshContactSheet() {
+  const panel = document.getElementById("timeline-contacts");
+  const text = document.getElementById("tl-contacts-text");
+  const asof = document.getElementById("tl-contacts-asof");
+  if (!panel || !text) return;
+  if (asof && !asof.value) asof.value = new Date().toISOString().slice(0, 10);
+  text.value = buildContactSheet(panel.dataset.audience || "staff", asof?.value);
+}
+
+function showContactSheet(audience) {
+  const panel = document.getElementById("timeline-contacts");
+  if (!panel) return;
+  panel.dataset.audience = audience === "family" ? "family" : "staff";
+  const title = document.getElementById("tl-contacts-title");
+  const hint = document.getElementById("tl-contacts-hint");
+  if (title) title.textContent = audience === "family" ? "Care team contacts for family" : "Family contacts for staff";
+  if (hint) {
+    hint.textContent =
+      audience === "family"
+        ? "Share this with family so they know who to call."
+        : "Share this with the hospital or clinic team.";
+  }
+  const asof = document.getElementById("tl-contacts-asof");
+  if (asof) asof.value = new Date().toISOString().slice(0, 10);
+  document.getElementById("timeline-import")?.classList.add("hidden");
+  document.getElementById("timeline-update")?.classList.add("hidden");
+  panel.classList.remove("hidden");
+  refreshContactSheet();
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
 function toggleTimelinePanel(id) {
-  ["timeline-import", "timeline-update"].forEach((pid) => {
+  ["timeline-import", "timeline-update", "timeline-contacts"].forEach((pid) => {
     const el = document.getElementById(pid);
     if (!el) return;
     if (pid === id) el.classList.toggle("hidden");
@@ -19305,7 +19732,39 @@ document.getElementById("timeline-gaps-list")?.addEventListener("click", (e) => 
   const btn = e.target.closest("[data-gap-idx]");
   if (btn) runGapAction(Number(btn.dataset.gapIdx));
 });
+function bindAvatarForm(prefix) {
+  document.getElementById(`${prefix}-avatar-picker`)?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-avatar-key]");
+    if (btn) selectAvatarChoice(prefix, btn.dataset.avatarKey);
+  });
+  document.getElementById(`${prefix}-avatar-file`)?.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    const pending = tlAvatarFormState(prefix);
+    if (pending.objectUrl) URL.revokeObjectURL(pending.objectUrl);
+    pending.file = file || null;
+    pending.clear = false;
+    pending.objectUrl = file ? URL.createObjectURL(file) : "";
+    updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
+  });
+  document.getElementById(`${prefix}-avatar-clear-photo`)?.addEventListener("click", () => {
+    const pending = tlAvatarFormState(prefix);
+    if (pending.objectUrl) URL.revokeObjectURL(pending.objectUrl);
+    pending.file = null;
+    pending.clear = true;
+    pending.objectUrl = "";
+    const fileEl = document.getElementById(`${prefix}-avatar-file`);
+    if (fileEl) fileEl.value = "";
+    updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
+  });
+  document.getElementById(`${prefix}-name`)?.addEventListener("input", () => {
+    updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
+  });
+}
+bindAvatarForm("fam");
+bindAvatarForm("team");
 document.getElementById("btn-family-add")?.addEventListener("click", () => openFamilyForm());
+document.getElementById("btn-family-share-staff")?.addEventListener("click", () => showContactSheet("staff"));
+document.getElementById("btn-team-share-family")?.addEventListener("click", () => showContactSheet("family"));
 document.getElementById("btn-family-cancel")?.addEventListener("click", closeFamilyForm);
 document.getElementById("btn-family-remove")?.addEventListener("click", () => removeFamilyMember());
 document.getElementById("family-form")?.addEventListener("submit", saveFamilyForm);
@@ -19357,6 +19816,29 @@ document.getElementById("timeline-env-filter")?.addEventListener("click", (e) =>
   timelineState.env = btn.dataset.tlEnv || "";
   renderTimelineTeam();
 });
+document.getElementById("btn-tl-contacts-copy")?.addEventListener("click", async () => {
+  const text = document.getElementById("tl-contacts-text")?.value || "";
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Contact list copied");
+  } catch {
+    toast("Could not copy — select the text and copy manually", "error");
+  }
+});
+document.getElementById("btn-tl-contacts-share")?.addEventListener("click", async () => {
+  const text = document.getElementById("tl-contacts-text")?.value || "";
+  const title = document.getElementById("tl-contacts-title")?.textContent || "Contacts";
+  if (typeof navigator.share !== "function") return toast("Sharing isn't supported here — use Copy", "error");
+  try {
+    await navigator.share({ title, text });
+  } catch (err) {
+    if (err?.name !== "AbortError") toast("Share failed", "error");
+  }
+});
+document.getElementById("btn-tl-contacts-close")?.addEventListener("click", () => {
+  document.getElementById("timeline-contacts")?.classList.add("hidden");
+});
+document.getElementById("tl-contacts-asof")?.addEventListener("change", refreshContactSheet);
 document.getElementById("btn-team-add")?.addEventListener("click", () => openTeamForm());
 document.getElementById("btn-team-cancel")?.addEventListener("click", closeTeamForm);
 document.getElementById("btn-team-remove")?.addEventListener("click", () => removeTeamMember().catch((err) => toast(err.message, "error")));

@@ -134,6 +134,100 @@ def _photo_url(patient_id: str) -> str | None:
     return f"/api/patients/{patient_id}/photo?t={mtime}"
 
 
+AVATAR_KINDS = frozenset({"care-team", "family-team"})
+_AVATAR_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _safe_member_id(member_id: str) -> str:
+    text = "".join(c for c in str(member_id or "") if c.isalnum() or c in "-")
+    if len(text) < 8 or len(text) > 64:
+        raise ValueError("Invalid team member")
+    return text
+
+
+def _avatar_stem(kind: str, member_id: str) -> str:
+    prefix = "care" if kind == "care-team" else "family"
+    return f"{prefix}-{_safe_member_id(member_id)}"
+
+
+def _avatars_dir(patient_id: str) -> Path:
+    return _patient_dir(patient_id) / "avatars"
+
+
+def find_member_avatar(patient_id: str, kind: str, member_id: str) -> Path | None:
+    if kind not in AVATAR_KINDS:
+        return None
+    try:
+        stem = _avatar_stem(kind, member_id)
+    except ValueError:
+        return None
+    d = _avatars_dir(patient_id)
+    if not d.exists():
+        return None
+    for ext in _AVATAR_EXTS:
+        path = d / f"{stem}{ext}"
+        if path.exists():
+            return path
+    return None
+
+
+def save_member_avatar(
+    patient_id: str, kind: str, member_id: str, data: bytes, content_type: str, filename: str = ""
+) -> Path:
+    if kind not in AVATAR_KINDS:
+        raise ValueError("Unknown team")
+    ext = PHOTO_EXT_BY_TYPE.get((content_type or "").lower())
+    if not ext:
+        suffix = Path(filename or "").suffix.lower()
+        if suffix in {".jpg", ".jpeg"}:
+            ext = ".jpg"
+        elif suffix in {".png", ".webp"}:
+            ext = suffix
+    if not ext:
+        raise ValueError("Photo must be JPEG, PNG, or WebP")
+    stem = _avatar_stem(kind, member_id)
+    d = _avatars_dir(patient_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for old_ext in _AVATAR_EXTS:
+        old = d / f"{stem}{old_ext}"
+        if old.exists():
+            old.unlink()
+    path = d / f"{stem}{ext}"
+    path.write_bytes(data)
+    return path
+
+
+def delete_member_avatar(patient_id: str, kind: str, member_id: str) -> bool:
+    path = find_member_avatar(patient_id, kind, member_id)
+    if not path:
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+
+def member_avatar_url(patient_id: str, kind: str, member_id: str) -> str | None:
+    path = find_member_avatar(patient_id, kind, member_id)
+    if not path:
+        return None
+    mtime = int(path.stat().st_mtime)
+    return f"/api/patients/{patient_id}/{kind}/{member_id}/avatar?t={mtime}"
+
+
+def find_directory_member(patient_id: str, kind: str, member_id: str) -> dict[str, Any] | None:
+    if kind not in AVATAR_KINDS:
+        return None
+    profile = get_patient_profile(patient_id)
+    key = "care_team" if kind == "care-team" else "family_team"
+    return next((m for m in (profile.get(key) or []) if m.get("id") == member_id), None)
+
+
+def attach_member_avatars(patient_id: str, members: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    for member in members:
+        mid = member.get("id") or member.get("member_id")
+        member["avatar_url"] = member_avatar_url(patient_id, kind, mid) if mid else None
+    return members
+
+
 def _serialize_patient(patient: dict) -> dict[str, Any]:
     pid = patient["id"]
     profile = get_patient_profile(pid)
@@ -676,6 +770,9 @@ DIAGNOSTIC_PRESETS = [
     {"name": "Coronary calcium score", "unit": "AU", "category": "imaging"},
     {"name": "Systolic BP", "unit": "mmHg", "category": "vital"},
     {"name": "Diastolic BP", "unit": "mmHg", "category": "vital"},
+    {"name": "Temperature", "unit": "°C", "category": "vital"},
+    {"name": "Heart rate", "unit": "bpm", "category": "vital"},
+    {"name": "Oxygen saturation", "unit": "%", "category": "vital"},
 ]
 
 
@@ -719,6 +816,12 @@ def _infer_diagnostic_category(name: str, explicit: str | None = None) -> str:
     if any(bit in lower for bit in imaging_bits):
         return "imaging"
     if "bp" in lower or "blood pressure" in lower:
+        return "vital"
+    if "heart rate" in lower or lower in {"pulse", "hr", "pulse rate"}:
+        return "vital"
+    if "temperature" in lower or lower in {"temp", "body temp", "body temperature"}:
+        return "vital"
+    if "oxygen" in lower or "spo2" in lower or "o2 sat" in lower:
         return "vital"
     return "blood"
 
@@ -2079,6 +2182,9 @@ def add_patient_team_member(
     contact_other: str | None = None,
     preferred_contact: str | None = None,
     notes: str | None = None,
+    whatsapp: str | None = None,
+    avatar_key: str | None = None,
+    avatar_emoji: str | None = None,
 ) -> dict[str, Any] | None:
     from app.services.care_timeline import find_team_member, normalize_team_member
 
@@ -2091,10 +2197,13 @@ def add_patient_team_member(
             "role": role,
             "environments": environments,
             "phone": phone,
+            "whatsapp": whatsapp,
             "email": email,
             "contact_other": contact_other,
             "preferred_contact": preferred_contact,
             "notes": notes,
+            "avatar_key": avatar_key,
+            "avatar_emoji": avatar_emoji,
         }
     )
     if not member:
@@ -2132,10 +2241,13 @@ def update_patient_team_member(
         "role",
         "environments",
         "phone",
+        "whatsapp",
         "email",
         "contact_other",
         "preferred_contact",
         "notes",
+        "avatar_key",
+        "avatar_emoji",
     ):
         if key in fields and fields[key] is not None:
             member[key] = fields[key]
@@ -2168,6 +2280,7 @@ def delete_patient_team_member(patient_id: str, member_id: str) -> dict[str, Any
         return None
     profile["care_team"] = [m for m in team if m.get("id") != member_id]
     save_patient_profile(patient_id, profile, reload=False)
+    delete_member_avatar(patient_id, "care-team", member_id)
     return removed
 
 
@@ -2258,7 +2371,17 @@ def update_patient_family_member(
     if idx is None:
         return None
     member = dict(family[idx])
-    for key in ("name", "relationship", "phone", "email", "preferred_contact", "availability"):
+    for key in (
+        "name",
+        "relationship",
+        "phone",
+        "whatsapp",
+        "email",
+        "preferred_contact",
+        "availability",
+        "avatar_key",
+        "avatar_emoji",
+    ):
         if key in fields and fields[key] is not None:
             member[key] = fields[key]
     member["updated_at"] = _now_iso()
@@ -2322,6 +2445,7 @@ def delete_patient_family_member(
     _apply_family_roles(profile, dict(removed), [], by)
     profile["family_team"] = [m for m in family if m.get("id") != member_id]
     save_patient_profile(patient_id, profile, reload=False)
+    delete_member_avatar(patient_id, "family-team", member_id)
     return removed
 
 

@@ -6,6 +6,7 @@ from app.services.action_items import (
     action_item_fingerprint,
     extract_action_items,
     items_from_event,
+    prune_noisy_extracted_items,
     resolve_due,
 )
 
@@ -79,6 +80,90 @@ def test_whatsapp_skips_chatter_and_keeps_actions():
         }
     )
     assert long == []
+
+
+def test_whatsapp_skips_ai_paste_and_loose_bring():
+    paste = items_from_event(
+        {
+            "id": "w4",
+            "source": "whatsapp",
+            "kind": "family_update",
+            "minor": False,
+            "occurred_at": "2026-10-30T11:03:00-04:00",
+            "recorded_by": "David Tobin",
+            "summary": (
+                "From OpenEvidence AI the most advanced medical AI program: Below are "
+                "plain-language questions the family can bring to the next oncology visit."
+            ),
+        }
+    )
+    assert paste == []
+    questions = extract_action_items(
+        "Below are plain-language questions the family can bring to rounds tomorrow.",
+        occurred_at="2026-10-30T11:00:00-04:00",
+        source_kind="whatsapp",
+    )
+    assert questions == []
+
+
+def test_whatsapp_skips_questions_and_finished_chatter():
+    chatter = [
+        "Do we call Oncology?",
+        "Just got off the phone with Simon.",
+        "G can also call me anytime",
+        "If you need to reach me, call on regular cellphone",
+        "Going to book a hotel room in Kingston",
+        "Yeah I will ask the Doctor once they get here",
+        "Can we get David on the phone with a Doctor?",
+        "On exit if no volunteer, head for black phone on the wall.",
+        "Pick up and tell them the name and room 12.",
+        "Ask the Nurse for the exact address and if flowers can be brought in",
+    ]
+    for summary in chatter:
+        items = items_from_event(
+            {
+                "id": "chatter",
+                "source": "whatsapp",
+                "kind": "family_update",
+                "minor": False,
+                "occurred_at": "2026-10-30T11:04:00-04:00",
+                "summary": summary,
+            }
+        )
+        assert items == [], summary
+    keep = items_from_event(
+        {
+            "id": "keep",
+            "source": "whatsapp",
+            "kind": "family_update",
+            "minor": False,
+            "occurred_at": "2026-10-30T11:05:00-04:00",
+            "recorded_by": "Hadas",
+            "summary": "Call the resident managing Mom's case and ask why oncology has not seen her.",
+        }
+    )
+    assert keep and "resident" in keep[0]["title"].lower()
+
+
+def test_prune_drops_openevidence_extracts():
+    profile = {
+        "care_items": [
+            {
+                "title": "From OpenEvidence AI the most advanced medical AI program: Below are plain-language questions…",
+                "source": "extracted",
+                "source_kind": "whatsapp",
+                "status": "open",
+            },
+            {
+                "title": "Book MRI Monday",
+                "source": "extracted",
+                "source_kind": "whatsapp",
+                "status": "open",
+            },
+        ]
+    }
+    assert prune_noisy_extracted_items(profile) == 1
+    assert [row["title"] for row in profile["care_items"]] == ["Book MRI Monday"]
 
 
 def test_fingerprint_dedupes_same_title():

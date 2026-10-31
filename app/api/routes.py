@@ -175,6 +175,13 @@ from app.services.case_manager import (
     sibling_case_dirs,
     find_patient_photo,
     save_patient_photo,
+    find_member_avatar,
+    save_member_avatar,
+    delete_member_avatar,
+    member_avatar_url,
+    find_directory_member,
+    attach_member_avatars,
+    AVATAR_KINDS,
     get_patient_profile,
     get_patient_log_bootstrap,
     get_patient_journal_entries,
@@ -4716,6 +4723,7 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         _name_key,
         family_roles_payload,
         CONTACT_METHODS,
+        TEAM_AVATAR_PRESETS,
         ENVIRONMENT_PRESETS,
         ROLE_PRESETS,
         build_care_team,
@@ -4758,12 +4766,13 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         "patient_id": patient_id,
         "patient": {"id": patient_id},
         "events": build_timeline(profile, documents),
-        "care_team": build_care_team(care_events, members),
-        "team_members": members,
+        "care_team": attach_member_avatars(patient_id, build_care_team(care_events, members), "care-team"),
+        "team_members": attach_member_avatars(patient_id, members, "care-team"),
         "environment_presets": environments[:40],
         "contact_methods": [{"value": k, "label": v} for k, v in CONTACT_METHODS.items()],
+        "avatar_presets": TEAM_AVATAR_PRESETS,
         "gaps": build_gaps(profile, tz_name=tz_name),
-        "family_team": family,
+        "family_team": attach_member_avatars(patient_id, family, "family-team"),
         "family_roles": family_roles_payload(family),
         "family_role_presets": FAMILY_ROLE_PRESETS,
         "chat_senders_not_on_family_team": [
@@ -4902,10 +4911,13 @@ class PatientTeamMemberRequest(BaseModel):
     role: str | None = Field(default=None, max_length=80)
     environments: list[str] | None = Field(default=None, max_length=8)
     phone: str | None = Field(default=None, max_length=60)
+    whatsapp: str | None = Field(default=None, max_length=60)
     email: str | None = Field(default=None, max_length=120)
     contact_other: str | None = Field(default=None, max_length=160)
     preferred_contact: str | None = Field(default=None, max_length=30)
     notes: str | None = Field(default=None, max_length=400)
+    avatar_key: str | None = Field(default=None, max_length=40)
+    avatar_emoji: str | None = Field(default=None, max_length=16)
 
 
 def _validate_team_contact(body: "PatientTeamMemberRequest") -> None:
@@ -4917,6 +4929,9 @@ def _validate_team_contact(body: "PatientTeamMemberRequest") -> None:
     method = (body.preferred_contact or "").strip()
     if method in {"phone", "text"} and "phone" in body.model_fields_set and not (body.phone or "").strip():
         raise HTTPException(status_code=400, detail="Add a phone number for the preferred method")
+    if method == "whatsapp" and "whatsapp" in body.model_fields_set and "phone" in body.model_fields_set:
+        if not (body.whatsapp or "").strip() and not (body.phone or "").strip():
+            raise HTTPException(status_code=400, detail="Add a WhatsApp or phone number for the preferred method")
     if method == "email" and "email" in body.model_fields_set and not email:
         raise HTTPException(status_code=400, detail="Add an email address for the preferred method")
 
@@ -4931,10 +4946,13 @@ async def api_add_team_member(patient_id: str, body: PatientTeamMemberRequest, r
             role=body.role,
             environments=body.environments,
             phone=body.phone,
+            whatsapp=body.whatsapp,
             email=body.email,
             contact_other=body.contact_other,
             preferred_contact=body.preferred_contact,
             notes=body.notes,
+            avatar_key=body.avatar_key,
+            avatar_emoji=body.avatar_emoji,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4997,9 +5015,12 @@ class PatientFamilyMemberRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     relationship: str | None = Field(default=None, max_length=60)
     phone: str | None = Field(default=None, max_length=60)
+    whatsapp: str | None = Field(default=None, max_length=60)
     email: str | None = Field(default=None, max_length=120)
     preferred_contact: str | None = Field(default=None, max_length=30)
     availability: str | None = Field(default=None, max_length=200)
+    avatar_key: str | None = Field(default=None, max_length=40)
+    avatar_emoji: str | None = Field(default=None, max_length=16)
     roles: list[str] | None = Field(default=None, max_length=12)
 
 
@@ -5013,6 +5034,10 @@ def _validate_family_contact(body: PatientFamilyMemberRequest) -> None:
     email = (body.email or "").strip()
     if email and not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise HTTPException(status_code=400, detail="That email address doesn't look right")
+    method = (body.preferred_contact or "").strip()
+    if method == "whatsapp" and "whatsapp" in body.model_fields_set and "phone" in body.model_fields_set:
+        if not (body.whatsapp or "").strip() and not (body.phone or "").strip():
+            raise HTTPException(status_code=400, detail="Add a WhatsApp or phone number for the preferred method")
 
 
 @router.post("/patients/{patient_id}/family-team")
@@ -5076,6 +5101,53 @@ async def api_delete_family_member(patient_id: str, member_id: str, request: Req
     payload = await _timeline_payload(patient_id)
     payload["ok"] = True
     return payload
+
+
+def _avatar_media_type(path) -> str:
+    suffix = path.suffix.lower()
+    return {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}.get(
+        suffix, "image/jpeg"
+    )
+
+
+@router.get("/patients/{patient_id}/{kind}/{member_id}/avatar")
+async def api_get_member_avatar(patient_id: str, kind: str, member_id: str):
+    if kind not in AVATAR_KINDS:
+        raise HTTPException(status_code=404, detail="Not found")
+    path = find_member_avatar(patient_id, kind, member_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="No photo")
+    return FileResponse(
+        path, media_type=_avatar_media_type(path), headers={"Cache-Control": "private, max-age=3600"}
+    )
+
+
+@router.post("/patients/{patient_id}/{kind}/{member_id}/avatar")
+async def api_set_member_avatar(patient_id: str, kind: str, member_id: str, file: UploadFile = File(...)):
+    if kind not in AVATAR_KINDS:
+        raise HTTPException(status_code=404, detail="Not found")
+    if find_directory_member(patient_id, kind, member_id) is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo must be 5 MB or smaller")
+    try:
+        save_member_avatar(patient_id, kind, member_id, content, file.content_type or "", file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "avatar_url": member_avatar_url(patient_id, kind, member_id)}
+
+
+@router.delete("/patients/{patient_id}/{kind}/{member_id}/avatar")
+async def api_delete_member_avatar(patient_id: str, kind: str, member_id: str):
+    if kind not in AVATAR_KINDS:
+        raise HTTPException(status_code=404, detail="Not found")
+    if find_directory_member(patient_id, kind, member_id) is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    delete_member_avatar(patient_id, kind, member_id)
+    return {"ok": True}
 
 
 @router.put("/patients/{patient_id}/family-roles/{role}")

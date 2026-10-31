@@ -86,7 +86,7 @@ _HEURISTICS: list[tuple[tuple[str, ...], str]] = [
     (("crp", "esr", "sed rate", "sedimentation"), "Inflammation"),
     (("psa",), "Prostate"),
     (("testosterone", "estradiol", "cortisol"), "Hormones"),
-    (("systolic", "diastolic", "blood pressure", "bmi", "weight"), "Vitals"),
+    (("systolic", "diastolic", "blood pressure", "bmi", "weight", "heart rate", "temperature", "oxygen", "spo2"), "Vitals"),
     (("calcium score", "agatston", "bi-rads", "birads"), "Imaging"),
 ]
 

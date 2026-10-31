@@ -115,9 +115,11 @@
     </div>
     <nav class="header-nav" aria-label="Main navigation">
       <div class="tabs header-tabs header-tabs-icons" role="tablist">
-        <button class="tab tab-icon" data-tab="analyze" role="tab" aria-selected="false" title="Home" aria-label="Home">
-          <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-          <span class="tab-icon-label">Home</span>
+        <button class="tab tab-icon" data-tab="analyze" data-simple-tab role="tab" aria-selected="false" title="Home" aria-label="Home">
+          <svg class="tab-icon-svg tab-icon-home" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <svg class="tab-icon-svg tab-icon-log-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="tab-icon-label tab-label-home">Home</span>
+          <span class="tab-icon-label tab-label-log">Log</span>
         </button>
         <button class="tab tab-icon" data-tab="labs" data-simple-tab role="tab" title="Labs" aria-label="Labs">
           <svg class="tab-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -279,6 +281,55 @@
         <button type="button" class="quick-scale-btn" data-sev="3" title="Moderate">3<span>Mod</span></button>
         <button type="button" class="quick-scale-btn" data-sev="4">4<span></span></button>
         <button type="button" class="quick-scale-btn" data-sev="5" title="Severe">5<span>Bad</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick vitals / basic readings -->
+  <div id="modal-vitals" class="modal-overlay hidden">
+    <div class="modal-card modal-vitals-card" role="dialog" aria-modal="true" aria-labelledby="vitals-title">
+      <div class="row-between wrap">
+        <h3 id="vitals-title">Basic readings</h3>
+        <button type="button" class="btn ghost btn-sm" id="btn-close-vitals">Close</button>
+      </div>
+      <p class="muted small">Log any of these now. Leave a field blank to skip it.</p>
+      <div class="vitals-fields">
+        <label for="vitals-temp">Temperature
+          <span class="vitals-input-row">
+            <input type="number" id="vitals-temp" class="input" min="30" max="45" step="0.1" inputmode="decimal" placeholder="e.g. 37.2">
+            <select id="vitals-temp-unit" aria-label="Temperature unit">
+              <option value="°C" selected>°C</option>
+              <option value="°F">°F</option>
+            </select>
+          </span>
+        </label>
+        <label for="vitals-hr">Heart rate
+          <span class="vitals-input-row">
+            <input type="number" id="vitals-hr" class="input" min="20" max="250" step="1" inputmode="numeric" placeholder="e.g. 78">
+            <span class="vitals-unit">bpm</span>
+          </span>
+        </label>
+        <label>Blood pressure
+          <span class="vitals-input-row vitals-bp-row">
+            <input type="number" id="vitals-bp-sys" class="input" min="50" max="260" step="1" inputmode="numeric" placeholder="Sys" aria-label="Systolic blood pressure">
+            <span class="vitals-bp-slash" aria-hidden="true">/</span>
+            <input type="number" id="vitals-bp-dia" class="input" min="30" max="180" step="1" inputmode="numeric" placeholder="Dia" aria-label="Diastolic blood pressure">
+            <span class="vitals-unit">mmHg</span>
+          </span>
+        </label>
+        <label for="vitals-o2">Oxygen saturation
+          <span class="vitals-input-row">
+            <input type="number" id="vitals-o2" class="input" min="50" max="100" step="1" inputmode="numeric" placeholder="e.g. 97">
+            <span class="vitals-unit">%</span>
+          </span>
+        </label>
+        <label for="vitals-date">Date
+          <input type="date" id="vitals-date" class="input">
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="btn-cancel-vitals">Cancel</button>
+        <button type="button" class="btn primary" id="btn-save-vitals">Log readings</button>
       </div>
     </div>
   </div>
@@ -1117,28 +1168,34 @@
     <!-- QUESTIONS FOR THE DOCTOR -->
     <section id="panel-questions" class="panel">
       <div class="card questions-card">
-        <div class="row-between wrap timeline-head">
+        <div class="questions-head">
           <div>
             <h3>Questions for the doctor</h3>
             <p class="muted small">Park what to ask, and which doctor it is for. Copy a list before the visit.</p>
           </div>
+          <button type="button" class="btn secondary btn-sm" id="btn-copy-open-questions">Copy open questions</button>
         </div>
-        <form id="doctor-question-form" class="care-item-form questions-form" autocomplete="off">
-          <label for="dq-text">Question
+        <form id="doctor-question-form" class="questions-form" autocomplete="off">
+          <label class="questions-field-main" for="dq-text">Question
             <textarea id="dq-text" rows="2" maxlength="500" required placeholder="e.g. What does the latest scan change about the plan?"></textarea>
           </label>
-          <label for="dq-doctor">Which doctor
-            <input type="text" id="dq-doctor" list="dq-doctor-list" maxlength="120" placeholder="Pick from the care team, or type a name">
-            <datalist id="dq-doctor-list"></datalist>
-          </label>
-          <label for="dq-role">Role / specialty
-            <input type="text" id="dq-role" list="dq-role-list" maxlength="80" placeholder="e.g. Oncology">
-            <datalist id="dq-role-list"></datalist>
-          </label>
-          <label for="dq-notes" class="care-item-notes">Why / context
-            <textarea id="dq-notes" rows="2" maxlength="2000" placeholder="Optional — what prompted this, or what to mention"></textarea>
-          </label>
-          <div class="care-item-form-actions">
+          <div class="questions-who">
+            <label for="dq-doctor">Which doctor
+              <input type="text" id="dq-doctor" list="dq-doctor-list" maxlength="120" placeholder="Care team, or type a name">
+              <datalist id="dq-doctor-list"></datalist>
+            </label>
+            <label for="dq-role">Role / specialty
+              <input type="text" id="dq-role" list="dq-role-list" maxlength="80" placeholder="e.g. Oncology">
+              <datalist id="dq-role-list"></datalist>
+            </label>
+          </div>
+          <details class="questions-context">
+            <summary>Add context <span class="muted">(optional)</span></summary>
+            <label for="dq-notes">Why / context
+              <textarea id="dq-notes" rows="2" maxlength="2000" placeholder="What prompted this, or what to mention"></textarea>
+            </label>
+          </details>
+          <div class="questions-form-actions">
             <button type="submit" class="btn primary" id="btn-save-doctor-question">Add question</button>
             <button type="button" class="btn ghost hidden" id="btn-cancel-doctor-question">Cancel edit</button>
           </div>
@@ -1151,10 +1208,12 @@
             <button type="button" class="btn ghost btn-sm question-filter-btn" data-question-filter="answered">Answered</button>
             <button type="button" class="btn ghost btn-sm question-filter-btn" data-question-filter="all">All</button>
           </div>
-          <button type="button" class="btn secondary btn-sm" id="btn-copy-open-questions">Copy open questions</button>
         </div>
         <div id="doctor-questions-list" class="doctor-questions-list">
-          <p class="muted small">Nothing to ask yet. Add a question above.</p>
+          <div class="questions-empty">
+            <p>Nothing to ask yet</p>
+            <p class="muted small">Write a question above and pick who it is for.</p>
+          </div>
         </div>
       </div>
     </section>
@@ -1321,7 +1380,10 @@
         <div class="family-team-wrap">
           <div class="timeline-team-head">
             <h4>Family care team <span class="muted small">· who's covering what</span></h4>
-            <button type="button" class="btn ghost btn-sm" id="btn-family-add">+ Add family member</button>
+            <div class="timeline-team-head-actions">
+              <button type="button" class="btn ghost btn-sm" id="btn-family-share-staff">Share with staff</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-family-add">+ Add family member</button>
+            </div>
           </div>
           <div id="family-suggest" class="family-suggest hidden"></div>
           <form id="family-form" class="care-item-form timeline-form hidden" autocomplete="off">
@@ -1336,8 +1398,23 @@
                 <option value="Grandchild"></option><option value="Niece"></option><option value="Nephew"></option><option value="Friend"></option>
               </datalist>
             </label>
+            <fieldset class="team-avatar-picker">
+              <legend>Picture or emoji</legend>
+              <div class="team-avatar-photo-row">
+                <span class="team-avatar team-avatar-preview team-avatar-initials" id="fam-avatar-preview" aria-hidden="true">?</span>
+                <label class="btn ghost btn-sm" for="fam-avatar-file">Add photo</label>
+                <input type="file" id="fam-avatar-file" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
+                <button type="button" class="btn ghost btn-sm hidden" id="fam-avatar-clear-photo">Remove photo</button>
+              </div>
+              <p class="muted small">Or pick a Simpsons or Star Wars emoji</p>
+              <div id="fam-avatar-picker" class="team-avatar-themes"></div>
+              <input type="hidden" id="fam-avatar-key" value="">
+            </fieldset>
             <label for="fam-phone">Phone
               <input type="tel" id="fam-phone" maxlength="60">
+            </label>
+            <label for="fam-whatsapp">WhatsApp
+              <input type="tel" id="fam-whatsapp" maxlength="60" placeholder="Number for WhatsApp, if different">
             </label>
             <label for="fam-email">Email
               <input type="email" id="fam-email" maxlength="120">
@@ -1376,7 +1453,10 @@
         <div class="timeline-team-wrap">
           <div class="timeline-team-head">
             <h4>Professional care team <span class="muted small" id="timeline-team-hint"></span></h4>
-            <button type="button" class="btn ghost btn-sm" id="btn-team-add">+ Add person</button>
+            <div class="timeline-team-head-actions">
+              <button type="button" class="btn ghost btn-sm" id="btn-team-share-family">Share with family</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-team-add">+ Add person</button>
+            </div>
           </div>
           <div id="timeline-env-filter" class="timeline-filter-group hidden" role="group" aria-label="Where"></div>
           <form id="team-form" class="care-item-form timeline-form hidden" autocomplete="off">
@@ -1390,8 +1470,23 @@
               <input type="text" id="team-envs" list="tl-env-list" maxlength="300" placeholder="e.g. Hospital — inpatient, Cancer centre">
               <span class="muted small">Separate several places with commas.</span>
             </label>
+            <fieldset class="team-avatar-picker">
+              <legend>Picture or emoji</legend>
+              <div class="team-avatar-photo-row">
+                <span class="team-avatar team-avatar-preview team-avatar-initials" id="team-avatar-preview" aria-hidden="true">?</span>
+                <label class="btn ghost btn-sm" for="team-avatar-file">Add photo</label>
+                <input type="file" id="team-avatar-file" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
+                <button type="button" class="btn ghost btn-sm hidden" id="team-avatar-clear-photo">Remove photo</button>
+              </div>
+              <p class="muted small">Or pick a Simpsons or Star Wars emoji</p>
+              <div id="team-avatar-picker" class="team-avatar-themes"></div>
+              <input type="hidden" id="team-avatar-key" value="">
+            </fieldset>
             <label for="team-phone">Phone
               <input type="tel" id="team-phone" maxlength="60" placeholder="e.g. 613-555-0142 ext. 4410">
+            </label>
+            <label for="team-whatsapp">WhatsApp
+              <input type="tel" id="team-whatsapp" maxlength="60" placeholder="Number for WhatsApp, if different">
             </label>
             <label for="team-email">Email
               <input type="email" id="team-email" maxlength="120" placeholder="name@hospital.ca">
@@ -1411,6 +1506,22 @@
           </form>
           <datalist id="tl-env-list"></datalist>
           <div id="timeline-team" class="timeline-team"><p class="muted small">No practitioners recorded yet.</p></div>
+        </div>
+
+        <div id="timeline-contacts" class="timeline-panel hidden">
+          <div class="row-between wrap">
+            <h4 id="tl-contacts-title">Contact list</h4>
+            <label class="tl-contacts-asof" for="tl-contacts-asof">As of
+              <input type="date" id="tl-contacts-asof">
+            </label>
+          </div>
+          <p id="tl-contacts-hint" class="muted small">Review it, then copy or share.</p>
+          <textarea id="tl-contacts-text" rows="14" class="timeline-update-text"></textarea>
+          <div class="care-item-form-actions">
+            <button type="button" class="btn primary btn-sm" id="btn-tl-contacts-copy">Copy</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-tl-contacts-share">Share…</button>
+            <button type="button" class="btn ghost btn-sm" id="btn-tl-contacts-close">Close</button>
+          </div>
         </div>
 
         <div class="timeline-filters">

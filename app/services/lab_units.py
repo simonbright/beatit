@@ -152,6 +152,9 @@ _IDENTITY_NAMES = {
     "systolic bp",
     "diastolic bp",
     "heart rate",
+    "temperature",
+    "oxygen saturation",
+    "spo2",
 }
 
 

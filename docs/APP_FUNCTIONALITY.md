@@ -31,7 +31,7 @@ Live production: [brighthealth.onrender.com](https://brighthealth.onrender.com) 
 
 ## Global shell
 
-- **Views:** **Simple** (default) shows Timeline, Labs, and Questions. A header toggle switches to **Advanced** (Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings). The choice is remembered.
+- **Views:** **Simple** (default) shows **Log** (heart), Timeline, Labs, and Questions. A header toggle switches to **Advanced** (Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings). The choice is remembered.
 - **Main tabs (Advanced):** Home · Labs · Plan · Timeline · Questions · Tasks · Library · Settings
 - **Header:** Simple/Advanced toggle, patient photo/name (switch who/case), Export PDF, AI Chat, update notifications, How are you?, How-to, day/night theme, Sign out
 - **Status:** LLM connection pill, background job bar, toasts, version footer
@@ -74,7 +74,9 @@ Wrong case context can produce the wrong assessment — Settings warns when the 
 
 Daily/symptom logging for the **active patient** (not tied to case).
 
-- **Quick tiles** on Home: one-tap or 1–5 severity scales
+- **Simple view:** Log is a top-level heart tab (Home extras stay in Advanced)
+- **Quick tiles** on Home / Simple Log: one-tap or 1–5 severity scales
+- **Readings** shortcut: temperature, heart rate, blood pressure, oxygen saturation — logged as vitals and shown on Labs
 - **How are you?** modal: feeling/action chips, meds (including ones normally hidden from Log), food/drink, severity, free-text details, optional datetime
 - **Exercise:** Walked (minutes) or Weights (weight, reps, time + how it felt)
 - History as **Timeline** or **List**; range Today → All
@@ -275,14 +277,17 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 
 - A **role board** shows every family role at a glance — who holds it and since when. Unfilled roles are flagged *Unassigned*.
 - Preset roles: Point person, Bedside rotation, Medical liaison, Records keeper, Family communicator, Admin & insurance, Logistics, Emotional support. Custom roles can be added per person (e.g. *Pharmacy runs*).
-- Tap a role tile to reassign it (tick who covers it). Tap a person's card to edit their relationship, contact (phone, email, best way to reach them), availability and roles.
+- Tap a role tile to reassign it (tick who covers it). Tap a person's card to edit their picture or Simpsons / Star Wars emoji, relationship, contact (phone, WhatsApp, email, best way to reach them), availability and roles.
+- **Share with staff** builds a dated family contact list (as of today, or any date you pick) to copy or send to the hospital or clinic team.
 - **From the family chat**: people who posted in the imported WhatsApp group but aren't on the team yet appear as one-tap suggestions.
 - Every role change is recorded on the timeline (*Family role* entries: "Aron — Point person", "Hadas no longer Point person") with who made the change, and the **Family update** starts with the current roles.
 
 **Professional care team directory**
 
 - **+ Add person**: name, role, and where they work — one or several places (e.g. *Hospital — inpatient, Cancer centre, Home care*).
-- Contact info (all optional): phone, email, other (pager, portal, assistant, nurse station…), and **preferred way to reach them** — phone call, text message, email, pager, patient portal message, through the nurse station, or in person / at rounds. The card shows the preferred method first; phone and email are tap-to-call / text / email links.
+- Each person can have a photo or a Simpsons / Star Wars / people emoji on their card.
+- Contact info (all optional): phone, WhatsApp, email, other (pager, portal, assistant, nurse station…), and **preferred way to reach them** — phone call, text message, WhatsApp, email, pager, patient portal message, through the nurse station, or in person / at rounds. The card shows the preferred method first; phone, WhatsApp, and email are tap-to-call / chat / email links.
+- **Share with family** builds a dated professional contact list to copy or send to the family.
 - Logging a visit with a new name adds that person automatically; their role fills in from the directory next time.
 - **Edit** on a card changes name, role or places. Renaming updates that person's past timeline entries. **Remove from team** keeps past entries as they are.
 - When more than one place is recorded, a place filter appears above the cards.

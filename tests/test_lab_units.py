@@ -143,3 +143,22 @@ def test_iron_mcg_dl_reenriches_stale_dual_units():
     row = enrich_diagnostic_units(stale)
     assert abs(row["value_si"] - (101 / 5.587)) < 0.05
     assert row["unit_si"] in {"µmol/L", "umol/L"}
+
+
+def test_basic_vitals_stay_identity_units():
+    temp = enrich_diagnostic_units({"name": "Temperature", "value": 37.2, "unit": "°C"})
+    assert temp["value_si"] == 37.2 and temp["unit_si"] == "°C"
+    hr = enrich_diagnostic_units({"name": "Heart rate", "value": 78, "unit": "bpm"})
+    assert hr["value_si"] == 78
+    o2 = enrich_diagnostic_units({"name": "Oxygen saturation", "value": 97, "unit": "%"})
+    assert o2["value_si"] == 97
+
+
+def test_vital_category_for_basic_readings():
+    from app.services.case_manager import _infer_diagnostic_category
+
+    assert _infer_diagnostic_category("Temperature") == "vital"
+    assert _infer_diagnostic_category("Heart rate") == "vital"
+    assert _infer_diagnostic_category("Oxygen saturation") == "vital"
+    assert _infer_diagnostic_category("Systolic BP") == "vital"
+    assert _infer_diagnostic_category("Transferrin Saturation") == "blood"

@@ -69,12 +69,63 @@ ENVIRONMENT_PRESETS: list[str] = [
 CONTACT_METHODS: dict[str, str] = {
     "phone": "Phone call",
     "text": "Text message",
+    "whatsapp": "WhatsApp",
     "email": "Email",
     "pager": "Pager",
     "portal": "Patient portal message",
     "nurse_station": "Through the nurse station",
     "in_person": "In person / at rounds",
 }
+
+TEAM_AVATAR_PRESETS: list[dict[str, str]] = [
+    {"key": "person-woman", "theme": "people", "theme_label": "People", "label": "Woman", "emoji": "👩"},
+    {"key": "person-man", "theme": "people", "theme_label": "People", "label": "Man", "emoji": "👨"},
+    {"key": "person", "theme": "people", "theme_label": "People", "label": "Person", "emoji": "🧑"},
+    {"key": "person-older-woman", "theme": "people", "theme_label": "People", "label": "Older woman", "emoji": "👵"},
+    {"key": "person-older-man", "theme": "people", "theme_label": "People", "label": "Older man", "emoji": "👴"},
+    {"key": "person-woman-health", "theme": "people", "theme_label": "People", "label": "Clinician", "emoji": "👩‍⚕️"},
+    {"key": "person-man-health", "theme": "people", "theme_label": "People", "label": "Clinician", "emoji": "👨‍⚕️"},
+    {"key": "person-health", "theme": "people", "theme_label": "People", "label": "Health worker", "emoji": "🧑‍⚕️"},
+    {"key": "simpsons-homer", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Homer", "emoji": "🍩"},
+    {"key": "simpsons-marge", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Marge", "emoji": "💙"},
+    {"key": "simpsons-bart", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Bart", "emoji": "🛹"},
+    {"key": "simpsons-lisa", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Lisa", "emoji": "🎷"},
+    {"key": "simpsons-maggie", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Maggie", "emoji": "🍼"},
+    {"key": "simpsons-burns", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Mr. Burns", "emoji": "💰"},
+    {"key": "simpsons-flanders", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Ned", "emoji": "⛪"},
+    {"key": "simpsons-krusty", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Krusty", "emoji": "🤡"},
+    {"key": "simpsons-barney", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Barney", "emoji": "🍺"},
+    {"key": "simpsons-grandpa", "theme": "simpsons", "theme_label": "The Simpsons", "label": "Abe", "emoji": "👴"},
+    {"key": "sw-luke", "theme": "starwars", "theme_label": "Star Wars", "label": "Luke", "emoji": "⚔️"},
+    {"key": "sw-leia", "theme": "starwars", "theme_label": "Star Wars", "label": "Leia", "emoji": "👑"},
+    {"key": "sw-han", "theme": "starwars", "theme_label": "Star Wars", "label": "Han", "emoji": "🚀"},
+    {"key": "sw-chewie", "theme": "starwars", "theme_label": "Star Wars", "label": "Chewie", "emoji": "🐻"},
+    {"key": "sw-yoda", "theme": "starwars", "theme_label": "Star Wars", "label": "Yoda", "emoji": "🟢"},
+    {"key": "sw-vader", "theme": "starwars", "theme_label": "Star Wars", "label": "Vader", "emoji": "🖤"},
+    {"key": "sw-r2", "theme": "starwars", "theme_label": "Star Wars", "label": "R2-D2", "emoji": "⚙️"},
+    {"key": "sw-c3po", "theme": "starwars", "theme_label": "Star Wars", "label": "C-3PO", "emoji": "🤖"},
+    {"key": "sw-grogu", "theme": "starwars", "theme_label": "Star Wars", "label": "Grogu", "emoji": "🐣"},
+    {"key": "sw-rey", "theme": "starwars", "theme_label": "Star Wars", "label": "Rey", "emoji": "🌟"},
+]
+_AVATAR_BY_KEY = {p["key"]: p for p in TEAM_AVATAR_PRESETS}
+
+
+def normalize_avatar_fields(raw: dict[str, Any] | None) -> tuple[str, str]:
+    """Return (avatar_key, avatar_emoji). A known key wins; otherwise a short emoji is kept."""
+    data = raw if isinstance(raw, dict) else {}
+    key = str(data.get("avatar_key") or "").strip().lower()
+    preset = _AVATAR_BY_KEY.get(key)
+    if preset:
+        return preset["key"], preset["emoji"]
+    emoji = str(data.get("avatar_emoji") or "").strip()
+    if emoji and len(emoji) <= 16 and "<" not in emoji and ">" not in emoji:
+        return "", emoji
+    return "", ""
+
+
+def avatar_label(key: str) -> str:
+    preset = _AVATAR_BY_KEY.get(key or "")
+    return preset["label"] if preset else ""
 
 
 def normalize_contact_method(value: Any) -> str:
@@ -134,14 +185,18 @@ def normalize_family_member(raw: dict[str, Any]) -> dict[str, Any] | None:
             roles.append(key)
     since_raw = raw.get("role_since") if isinstance(raw.get("role_since"), dict) else {}
     role_since = {k: str(since_raw.get(k)) for k in roles if since_raw.get(k)}
+    avatar_key, avatar_emoji = normalize_avatar_fields(raw)
     return {
         "id": member_id,
         "name": name,
         "relationship": _clean(raw.get("relationship"), 60),
         "phone": _clean(raw.get("phone"), 60),
+        "whatsapp": _clean(raw.get("whatsapp"), 60),
         "email": _clean(raw.get("email"), 120),
         "preferred_contact": normalize_contact_method(raw.get("preferred_contact")),
         "availability": _clean(raw.get("availability"), 200),
+        "avatar_key": avatar_key,
+        "avatar_emoji": avatar_emoji,
         "roles": roles[:12],
         "role_since": role_since,
         "aliases": [a for a in (_clean(x, 120) for x in (raw.get("aliases") or [])) if a][:6],
@@ -258,16 +313,20 @@ def normalize_team_member(raw: dict[str, Any]) -> dict[str, Any] | None:
         cleaned = _clean(env, 80)
         if cleaned and cleaned.lower() not in {e.lower() for e in envs}:
             envs.append(cleaned)
+    avatar_key, avatar_emoji = normalize_avatar_fields(raw)
     return {
         "id": member_id,
         "name": name,
         "role": _clean(raw.get("role"), 80),
         "environments": envs[:8],
         "phone": _clean(raw.get("phone"), 60),
+        "whatsapp": _clean(raw.get("whatsapp"), 60),
         "email": _clean(raw.get("email"), 120),
         "contact_other": _clean(raw.get("contact_other"), 160),
         "preferred_contact": normalize_contact_method(raw.get("preferred_contact")),
         "notes": _clean(raw.get("notes"), 400),
+        "avatar_key": avatar_key,
+        "avatar_emoji": avatar_emoji,
         "created_at": str(raw.get("created_at") or _now_iso()),
         "updated_at": str(raw.get("updated_at") or "") or None,
     }
@@ -799,10 +858,13 @@ def build_care_team(
             "role": m.get("role") or "",
             "environments": list(m.get("environments") or []),
             "phone": m.get("phone") or "",
+            "whatsapp": m.get("whatsapp") or "",
             "email": m.get("email") or "",
             "contact_other": m.get("contact_other") or "",
             "preferred_contact": m.get("preferred_contact") or "",
             "notes": m.get("notes") or "",
+            "avatar_key": m.get("avatar_key") or "",
+            "avatar_emoji": m.get("avatar_emoji") or "",
             "contacts": 0,
             "events": 0,
             "first_at": None,
@@ -825,7 +887,10 @@ def build_care_team(
                 "role": role,
                 "environments": [],
                 "phone": "",
+                "whatsapp": "",
                 "notes": "",
+                "avatar_key": "",
+                "avatar_emoji": "",
                 "contacts": 0,
                 "events": 0,
                 "first_at": None,
@@ -1024,6 +1089,7 @@ def build_gaps(
             key = day.isoformat()
             counts = by_day.get(key, {"contacts": 0, "tests": 0, "family": 0})
             is_today = day == today
+            is_recent = (today - day).days <= 1
             label = "today so far" if is_today else _fmt_day(day)
             sev = "info" if is_today else "warn"
             mentions = chat_mentions.get(key, {"care": 0, "tests": 0})
@@ -1033,7 +1099,8 @@ def build_gaps(
                     return ""
                 return f" — {n} family message{'s' if n != 1 else ''} mention{'' if n != 1 else 's'} {what}; use Classify to record it"
 
-            if not counts["contacts"]:
+            # Only flag a quiet older day when chat actually mentioned a visit or test.
+            if not counts["contacts"] and (is_recent or mentions["care"]):
                 add(
                     sev,
                     "no_visit",
@@ -1041,7 +1108,7 @@ def build_gaps(
                     day=key,
                     action="log_visit",
                 )
-            if not counts["tests"]:
+            if not counts["tests"] and (is_recent or mentions["tests"]):
                 add(
                     sev,
                     "no_tests",

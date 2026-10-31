@@ -373,6 +373,48 @@ def test_team_contact_and_preferred_method(patient):
     assert team[0]["phone"].startswith("613") and team[0]["email"] == "drg@example.org"
 
 
+def test_team_whatsapp_and_avatar(patient):
+    m = case_manager.add_patient_team_member(
+        patient,
+        name="Dr. Yoda",
+        phone="416-555-0100",
+        whatsapp="14165550100",
+        preferred_contact="WhatsApp",
+        avatar_key="sw-yoda",
+    )
+    assert m["preferred_contact"] == "whatsapp"
+    assert m["whatsapp"] == "14165550100"
+    assert m["avatar_key"] == "sw-yoda"
+    assert m["avatar_emoji"] == "🟢"
+    team = build_care_team([], [m])
+    assert team[0]["whatsapp"] == "14165550100"
+    assert team[0]["avatar_emoji"] == "🟢"
+    updated = case_manager.update_patient_team_member(patient, m["id"], avatar_key="simpsons-homer")
+    assert updated["avatar_key"] == "simpsons-homer" and updated["avatar_emoji"] == "🍩"
+
+
+def test_family_whatsapp_avatar_and_photo(patient):
+    hadas = case_manager.add_patient_family_member(
+        patient,
+        name="Hadas",
+        relationship="Daughter",
+        phone="416-555-0199",
+        whatsapp="14165550199",
+        preferred_contact="whatsapp",
+        avatar_key="simpsons-lisa",
+    )
+    assert hadas["whatsapp"] == "14165550199"
+    assert hadas["avatar_key"] == "simpsons-lisa"
+    assert hadas["avatar_emoji"] == "🎷"
+    path = case_manager.save_member_avatar(
+        patient, "family-team", hadas["id"], b"fakepng", "image/png", "face.png"
+    )
+    assert path.exists() and path.suffix == ".png"
+    assert case_manager.member_avatar_url(patient, "family-team", hadas["id"])
+    case_manager.delete_patient_family_member(patient, hadas["id"])
+    assert case_manager.find_member_avatar(patient, "family-team", hadas["id"]) is None
+
+
 # --- Family care team -----------------------------------------------------
 
 from app.services.care_timeline import family_roles_payload  # noqa: E402
