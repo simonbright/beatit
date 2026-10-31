@@ -95,6 +95,7 @@ def test_import_is_idempotent(patient):
     profile = case_manager.get_patient_profile(patient)
     assert len(profile["care_events"]) == 4
     assert all(e["source"] == "whatsapp" for e in profile["care_events"])
+    assert profile["last_whatsapp_chat"] == "Susan Health Updates"
 
 
 ANDROID_REEXPORT = """27/10/2026, 11:07 - Hadas Brajtman: 1. Mom's blood pressure is too low and not improving with fluids.

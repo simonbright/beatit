@@ -1243,6 +1243,23 @@
           </div>
         </div>
 
+        <div id="timeline-import" class="timeline-panel hidden" tabindex="-1">
+          <h4>Import from WhatsApp</h4>
+          <p class="muted small">On the phone: group → name → <strong>Export Chat → Without Media</strong>. Then choose that file here (the <code>.zip</code> or <code>.txt</code> WhatsApp makes). A full export is fine — old messages are skipped.</p>
+          <div class="timeline-import-stack">
+            <label class="btn secondary" for="tl-import-file">Choose chat export</label>
+            <input type="file" id="tl-import-file">
+            <p id="tl-import-filename" class="muted small">No file chosen yet.</p>
+            <label for="tl-import-name">Chat name
+              <input type="text" id="tl-import-name" list="tl-import-name-list" maxlength="120" placeholder="Last named chat">
+              <datalist id="tl-import-name-list"></datalist>
+              <span class="muted small">Defaults to the last chat you imported — change it if this is a different group.</span>
+            </label>
+            <button type="button" class="btn primary" id="btn-tl-import-run">Import</button>
+          </div>
+          <p id="tl-import-status" class="muted small"></p>
+        </div>
+
         <section id="who-has-ball" class="who-has-ball" aria-label="Who has the ball">
           <div class="timeline-team-head">
             <h4>Who has the ball</h4>
@@ -1392,21 +1409,6 @@
           </div>
           <input type="hidden" id="tl-edit-id" value="">
         </form>
-
-        <div id="timeline-import" class="timeline-panel hidden">
-          <h4>Import from WhatsApp</h4>
-          <p class="muted small">On the phone: group → name → <strong>Export Chat → Without Media</strong>. Then choose that file here (the <code>.zip</code> or <code>.txt</code> WhatsApp makes). A full export is fine — old messages are skipped.</p>
-          <div class="timeline-import-stack">
-            <label class="btn secondary" for="tl-import-file">Choose chat export</label>
-            <input type="file" id="tl-import-file">
-            <p id="tl-import-filename" class="muted small">No file chosen yet.</p>
-            <label for="tl-import-name">Chat name <span class="muted small">(optional)</span>
-              <input type="text" id="tl-import-name" maxlength="120" placeholder="e.g. Susan Health Updates">
-            </label>
-            <button type="button" class="btn primary" id="btn-tl-import-run">Import</button>
-          </div>
-          <p id="tl-import-status" class="muted small"></p>
-        </div>
 
         <div id="timeline-update" class="timeline-panel hidden">
           <div class="row-between wrap">

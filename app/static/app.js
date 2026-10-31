@@ -20237,6 +20237,51 @@ function guessWhatsAppChatName(file) {
   return match ? match[1].trim() : "";
 }
 
+function whatsappChatStorageKey() {
+  return `bright-health-whatsapp-chat:${state.activePatientId || "none"}`;
+}
+
+function rememberWhatsAppChatName(name) {
+  const cleaned = String(name || "").trim();
+  if (!cleaned || !state.activePatientId) return;
+  try {
+    localStorage.setItem(whatsappChatStorageKey(), cleaned);
+  } catch {
+    /* ignore quota / private mode */
+  }
+  if (timelineState.data) timelineState.data.last_whatsapp_chat = cleaned;
+}
+
+function knownWhatsAppChatNames() {
+  const names = [];
+  const add = (value) => {
+    const name = String(value || "").trim();
+    if (name && !names.includes(name)) names.push(name);
+  };
+  add(timelineState.data?.last_whatsapp_chat);
+  try {
+    add(localStorage.getItem(whatsappChatStorageKey()));
+  } catch {
+    /* ignore */
+  }
+  for (const ev of timelineState.data?.events || []) {
+    if (ev.source === "whatsapp") add(ev.source_document_title);
+  }
+  return names;
+}
+
+function lastWhatsAppChatName() {
+  return knownWhatsAppChatNames()[0] || "";
+}
+
+function fillWhatsAppChatName() {
+  const input = document.getElementById("tl-import-name");
+  const list = document.getElementById("tl-import-name-list");
+  const names = knownWhatsAppChatNames();
+  if (list) list.innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+  if (input && !input.value.trim() && names[0]) input.value = names[0];
+}
+
 async function runWhatsAppImport() {
   const pid = state.activePatientId;
   if (!pid) return toast("Select a patient first", "error");
@@ -20246,7 +20291,8 @@ async function runWhatsAppImport() {
   const file = fileEl?.files?.[0];
   if (!file) return toast("Choose the exported chat file", "error");
   if (nameEl) nameEl.textContent = file.name;
-  let chatName = document.getElementById("tl-import-name")?.value.trim() || guessWhatsAppChatName(file);
+    let chatName =
+      document.getElementById("tl-import-name")?.value.trim() || lastWhatsAppChatName() || guessWhatsAppChatName(file);
   if (file.size > 12 * 1024 * 1024) {
     return toast("Export chat without media — that file is too large to import here", "error");
   }
@@ -20273,6 +20319,7 @@ async function runWhatsAppImport() {
     const msg = `${r.added || 0} new message${r.added === 1 ? "" : "s"} added · ${r.skipped || 0} already on the timeline`;
     if (status) status.textContent = msg;
     toast(msg);
+    if (chatName) rememberWhatsAppChatName(chatName);
     if (fileEl) fileEl.value = "";
     if (nameEl) nameEl.textContent = "No file chosen yet.";
     document.getElementById("timeline-import")?.classList.add("hidden");
@@ -20479,9 +20526,11 @@ function toggleTimelinePanel(id) {
     if (pid === id) el.classList.toggle("hidden");
     else el.classList.add("hidden");
   });
-  if (id === "timeline-update" && !document.getElementById("timeline-update")?.classList.contains("hidden")) {
-    refreshFamilyUpdateText();
-  }
+  const panel = document.getElementById(id);
+  if (!panel || panel.classList.contains("hidden")) return;
+  if (id === "timeline-import") fillWhatsAppChatName();
+  if (id === "timeline-update") refreshFamilyUpdateText();
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 document.getElementById("btn-timeline-log")?.addEventListener("click", () => openTimelineForm());
@@ -20550,7 +20599,7 @@ document.getElementById("tl-import-file")?.addEventListener("change", () => {
   if (nameEl) nameEl.textContent = file ? file.name : "No file chosen yet.";
   const nameInput = document.getElementById("tl-import-name");
   if (file && nameInput && !nameInput.value.trim()) {
-    nameInput.value = guessWhatsAppChatName(file);
+    nameInput.value = lastWhatsAppChatName() || guessWhatsAppChatName(file);
   }
   if (file) runWhatsAppImport();
 });

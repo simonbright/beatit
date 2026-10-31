@@ -8794,6 +8794,7 @@ body.app-updating-active {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--surface-2, var(--surface));
+  scroll-margin-top: calc(var(--sticky-header-offset, 5.5rem) + 0.75rem);
 }
 .timeline-panel h4 { margin: 0 0 0.35rem; }
 .timeline-import-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }

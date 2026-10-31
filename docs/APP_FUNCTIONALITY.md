@@ -311,7 +311,7 @@ Only days or results that were **not logged** — not hospital status, and not o
 - **Alert** messages someone about their open tasks using their preferred contact (WhatsApp, text, or email) from the Family or care team card.
 - **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role, or **vitals check**) while keeping the original text and sender.
 - **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
-- **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added. The import panel hides when it finishes.
+- **Import WhatsApp**: tap the button to jump to the import panel. Chat name defaults to the last named chat and can be changed. On a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added. The import panel hides when it finishes.
 
 Timeline entries are patient-wide (not case-scoped) and stored in the patient profile (`care_events`). Add, edit, delete and imports are written to the audit trail (Settings → Audit → *timeline*).
 

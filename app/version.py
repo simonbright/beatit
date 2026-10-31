@@ -8,7 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 APP_NAME = "Bright Health"
-APP_VERSION = "1.8.25"
+APP_VERSION = "1.8.26"
 # Optional ISO override (date or datetime). Leave empty to use git/file timestamp.
 APP_UPDATED = ""
 

@@ -280,6 +280,7 @@ def _empty_profile() -> dict[str, Any]:
         "family_role_history": [],
         "dismissed_gaps": [],
         "ball_holders": [],
+        "last_whatsapp_chat": "",
         "log_custom_tiles": [],
         "log_tile_order": [],
         "log_tile_hidden": [],
@@ -455,6 +456,7 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     from app.services.care_workspace import normalize_ball_holders
 
     profile["ball_holders"] = normalize_ball_holders(data.get("ball_holders"))
+    profile["last_whatsapp_chat"] = " ".join(str(data.get("last_whatsapp_chat") or "").split())[:120]
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
@@ -632,6 +634,7 @@ def save_patient_profile(
         "family_role_history": _normalize_role_history(profile.get("family_role_history")),
         "dismissed_gaps": _normalize_dismissed_gaps(profile.get("dismissed_gaps")),
         "ball_holders": list(profile.get("ball_holders") or []),
+        "last_whatsapp_chat": " ".join(str(profile.get("last_whatsapp_chat") or "").split())[:120],
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
@@ -2805,6 +2808,12 @@ def import_patient_care_events(
         events.append(entry)
         seen |= incoming_keys
         added += 1
+    chat_name = next(
+        (str(row.get("source_document_title") or "").strip() for row in incoming or [] if row.get("source_document_title")),
+        "",
+    )
+    if chat_name:
+        profile["last_whatsapp_chat"] = chat_name[:120]
     profile["care_events"] = events
     save_patient_profile(patient_id, profile, reload=False)
     if added:

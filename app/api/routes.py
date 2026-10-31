@@ -4803,6 +4803,7 @@ async def _timeline_payload(patient_id: str, tz_name: str = "America/Toronto") -
         "documents": linkable_documents(documents),
         "action_items": profile.get("care_items") or [],
         "ball_holders": profile.get("ball_holders") or [],
+        "last_whatsapp_chat": profile.get("last_whatsapp_chat") or "",
         "professional_kinds": sorted(PROFESSIONAL_VISIT_KINDS),
         "counts": {
             "care_events": len(care_events),
