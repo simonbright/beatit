@@ -296,11 +296,12 @@
       <div class="vitals-fields">
         <label for="vitals-temp">Temperature
           <span class="vitals-input-row">
-            <input type="number" id="vitals-temp" class="input" min="30" max="45" step="0.1" inputmode="decimal" placeholder="e.g. 37.2">
-            <select id="vitals-temp-unit" aria-label="Temperature unit">
-              <option value="°C" selected>°C</option>
-              <option value="°F">°F</option>
-            </select>
+            <input type="number" id="vitals-temp" class="input vitals-temp-input" min="30" max="45" step="0.1" inputmode="decimal" placeholder="e.g. 37.2">
+            <span class="vitals-unit-toggle" role="group" aria-label="Temperature unit">
+              <button type="button" class="vitals-unit-btn active" data-temp-unit="°C" aria-pressed="true">C</button>
+              <button type="button" class="vitals-unit-btn" data-temp-unit="°F" aria-pressed="false">F</button>
+            </span>
+            <input type="hidden" id="vitals-temp-unit" value="°C">
           </span>
         </label>
         <label for="vitals-hr">Heart rate
@@ -1142,9 +1143,9 @@
         <div class="plan-layout">
           <div class="plan-calendar-wrap">
             <div class="plan-calendar-header">
-              <button type="button" class="btn ghost btn-sm" id="btn-plan-prev-month" aria-label="Previous month">‹</button>
-              <h4 id="plan-calendar-label">Month</h4>
-              <button type="button" class="btn ghost btn-sm" id="btn-plan-next-month" aria-label="Next month">›</button>
+              <button type="button" class="btn ghost btn-sm" id="btn-plan-prev-month" aria-label="Previous week">‹</button>
+              <h4 id="plan-calendar-label">This week</h4>
+              <button type="button" class="btn ghost btn-sm" id="btn-plan-next-month" aria-label="Next week">›</button>
               <button type="button" class="btn secondary btn-sm" id="btn-plan-today">Today</button>
             </div>
             <div id="plan-calendar" class="plan-calendar" aria-label="Plan calendar"></div>
@@ -1247,9 +1248,9 @@
           <div class="timeline-actions-layout">
             <div class="plan-calendar-wrap">
               <div class="plan-calendar-header">
-                <button type="button" class="btn ghost btn-sm" id="btn-tl-action-prev" aria-label="Previous month">‹</button>
-                <h4 id="tl-action-calendar-label">Month</h4>
-                <button type="button" class="btn ghost btn-sm" id="btn-tl-action-next" aria-label="Next month">›</button>
+                <button type="button" class="btn ghost btn-sm" id="btn-tl-action-prev" aria-label="Previous week">‹</button>
+                <h4 id="tl-action-calendar-label">This week</h4>
+                <button type="button" class="btn ghost btn-sm" id="btn-tl-action-next" aria-label="Next week">›</button>
                 <button type="button" class="btn secondary btn-sm" id="btn-tl-action-today">Today</button>
               </div>
               <div id="tl-action-calendar" class="plan-calendar" aria-label="Action calendar"></div>
@@ -1379,7 +1380,7 @@
 
         <div class="family-team-wrap">
           <div class="timeline-team-head">
-            <h4>Family care team <span class="muted small">· who's covering what</span></h4>
+            <h4>Family <span class="muted small">· add people</span></h4>
             <div class="timeline-team-head-actions">
               <button type="button" class="btn ghost btn-sm" id="btn-family-share-staff">Share with staff</button>
               <button type="button" class="btn ghost btn-sm" id="btn-family-add">+ Add family member</button>
@@ -1425,11 +1426,9 @@
             <label for="fam-availability">Availability
               <input type="text" id="fam-availability" maxlength="200" placeholder="e.g. Local; evenings and weekends">
             </label>
-            <fieldset class="family-role-picker care-item-notes">
-              <legend>Roles</legend>
-              <div id="fam-roles" class="family-role-checks"></div>
-              <input type="text" id="fam-role-custom" maxlength="60" placeholder="Another role (optional), e.g. Pharmacy runs">
-            </fieldset>
+            <label for="fam-role">Role <span class="muted small">(optional)</span>
+              <input type="text" id="fam-role" maxlength="80" placeholder="Only if you want one — e.g. Point person">
+            </label>
             <div class="care-item-form-actions">
               <button type="submit" class="btn primary" id="btn-family-save">Add to family team</button>
               <button type="button" class="btn ghost" id="btn-family-cancel">Cancel</button>

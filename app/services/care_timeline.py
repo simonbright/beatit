@@ -243,11 +243,11 @@ def normalize_role_history(raw: Any) -> list[dict[str, Any]]:
 
 
 def family_roles_payload(members: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Role board: every preset role plus custom roles in use, with who holds them."""
-    keys = [r["key"] for r in FAMILY_ROLE_PRESETS]
+    """Roles someone actually holds — empty presets stay off the board."""
+    keys: list[str] = []
     for m in members or []:
         for r in m.get("roles") or []:
-            if r not in keys:
+            if r and r not in keys:
                 keys.append(r)
     board = []
     for key in keys:
@@ -257,6 +257,8 @@ def family_roles_payload(members: list[dict[str, Any]] | None) -> list[dict[str,
             for m in members or []
             if key in (m.get("roles") or [])
         ]
+        if not holders:
+            continue
         board.append(
             {
                 "key": key,
@@ -833,7 +835,6 @@ def build_timeline(
         *medication_rows(profile.get("medications")),
         *plan_rows(profile.get("care_items")),
         *milestone_rows(profile.get("milestones")),
-        *role_history_rows(profile.get("family_role_history")),
         *document_rows(documents),
     ]
     rows = [r for r in rows if r.get("at")]
@@ -956,9 +957,6 @@ STAY_START_KINDS = frozenset({"admission"})
 STAY_END_KINDS = frozenset({"discharge"})
 TEST_KINDS = frozenset({"test_ordered", "test_done"})
 RESULT_KINDS = frozenset({"result"})
-KEY_FAMILY_ROLES = ("point_person", "bedside")
-
-
 def _local_dt(value: Any, tz) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -1180,13 +1178,6 @@ def build_gaps(
         due = item.get("due_at")
         if (item.get("status") or "open") == "open" and due and due < today.isoformat():
             add("warn", "overdue", f"Overdue from the plan: {item.get('title')} (due {_fmt_day(datetime.fromisoformat(due).date())})", action="open_plan")
-
-    # 5) Family roles nobody holds
-    family = profile.get("family_team") or []
-    held = {r for m in family for r in (m.get("roles") or [])}
-    for key in KEY_FAMILY_ROLES:
-        if key not in held:
-            add("warn" if family else "info", "role_unassigned", f"No one is {family_role_label(key).lower()}", action="assign_role", ref=key)
 
     # Warnings first; within each, standing issues before per-day ones, newest day first.
     order = {"warn": 0, "info": 1}

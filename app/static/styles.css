@@ -1133,19 +1133,43 @@ body {
 }
 
 .vitals-input-row .input {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 10rem;
+  min-width: 8rem;
 }
 
-.vitals-input-row select {
+.vitals-temp-input {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+}
+
+.vitals-unit-toggle {
+  display: inline-flex;
   flex: 0 0 auto;
-  font: inherit;
-  font-weight: 650;
-  padding: 0.5rem 0.45rem;
-  border-radius: 10px;
   border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.vitals-unit-btn {
+  appearance: none;
+  width: 2.15rem;
+  padding: 0.48rem 0;
+  border: none;
   background: var(--surface-solid, var(--surface));
-  color: var(--text);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.vitals-unit-btn + .vitals-unit-btn {
+  border-left: 1px solid var(--border);
+}
+
+.vitals-unit-btn.active {
+  background: var(--accent);
+  color: #fff;
 }
 
 .vitals-unit {
@@ -8478,6 +8502,9 @@ body.app-updating-active {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 0.25rem;
+}
+.plan-cal-grid.is-week .plan-cal-cell {
+  min-height: 4.4rem;
 }
 .plan-cal-dow {
   text-align: center;

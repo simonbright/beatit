@@ -436,7 +436,7 @@ def test_family_roles_board_and_history(patient):
     board = {r["key"]: r for r in family_roles_payload(profile["family_team"])}
     assert [h["name"] for h in board["point_person"]["holders"]] == ["Aron"]
     assert [h["name"] for h in board["bedside"]["holders"]] == ["Hadas"]
-    assert board["records"]["holders"] == []  # unassigned shows on the board
+    assert "records" not in board  # empty presets stay off the board
 
     history = profile["family_role_history"]
     assert sorted((h["person"], h["role"], h["action"]) for h in history) == sorted(
@@ -449,8 +449,7 @@ def test_family_roles_board_and_history(patient):
     )
     assert history[-1]["by"] == "hadas"
     rows = [r for r in build_timeline(profile, []) if r["kind"] == "role_change"]
-    titles = {r["title"] for r in rows}
-    assert "Aron — Point person" in titles and "Hadas no longer Point person" in titles
+    assert rows == []
 
 
 def test_family_custom_role_and_removal(patient):
@@ -505,8 +504,7 @@ def test_gaps_flag_days_with_no_visit_or_tests(patient):
     assert "result_pending" not in _kinds(gaps)
     # Dr. G last seen Oct 27, two days ago
     assert any(i["kind"] == "not_seen" and "Dr. G (Oncology)" in i["text"] for i in gaps["items"])
-    # Key family roles uncovered (no family team yet → info)
-    assert _kinds(gaps).count("role_unassigned") == 2
+    assert "role_unassigned" not in _kinds(gaps)
 
 
 def test_gaps_pending_result_and_discharge(patient):

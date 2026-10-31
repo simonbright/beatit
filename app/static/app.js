@@ -7768,11 +7768,13 @@ function renderPushUi({ subscribed = false, blocked = false, unsupported = false
     );
   }
   if (prompt) {
+    const choice = pushPromptChoice();
     const hide =
       unsupported ||
       blocked ||
       subscribed ||
-      pushPromptChoice() === "dismissed" ||
+      choice === "dismissed" ||
+      choice === "enabled" ||
       (window.Notification && Notification.permission === "denied");
     prompt.classList.toggle("hidden", hide);
   }
@@ -7817,6 +7819,8 @@ async function enablePushNotifications() {
     renderPushUi({ blocked: permission === "denied" });
     throw new Error(permission === "denied" ? "Notifications are blocked" : "Notifications were not allowed");
   }
+  setPushPromptChoice("enabled");
+  renderPushUi({ subscribed: true });
   const keyPayload = await api("/api/push/public-key");
   const publicKey = keyPayload.public_key;
   if (!publicKey) throw new Error("Could not load the notification key");
@@ -7829,7 +7833,6 @@ async function enablePushNotifications() {
     method: "POST",
     body: JSON.stringify(currentPushSubscriptionJson(subscription)),
   });
-  setPushPromptChoice("enabled");
   renderPushUi({ subscribed: true });
 }
 
@@ -10611,10 +10614,33 @@ function careMonthStart(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
+function startOfWeek(date = new Date()) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+function addLocalDays(date, days) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function localDateIso(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatWeekRange(start) {
+  const end = addLocalDays(start, 6);
+  const startStr = start.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const endOpts = start.getMonth() === end.getMonth() ? { day: "numeric" } : { month: "short", day: "numeric" };
+  return `${startStr} – ${end.toLocaleDateString(undefined, endOpts)}`;
+}
+
 function ensurePlanMonth() {
-  if (!(state.planMonth instanceof Date) || Number.isNaN(state.planMonth.getTime())) {
-    state.planMonth = careMonthStart();
-  }
+  state.planMonth = startOfWeek(
+    state.planMonth instanceof Date && !Number.isNaN(state.planMonth.getTime())
+      ? state.planMonth
+      : new Date()
+  );
   return state.planMonth;
 }
 
@@ -10670,40 +10696,31 @@ function filterCareItems(items, filter, selectedDay) {
   });
 }
 
-function renderPlanCalendar(items) {
-  const el = document.getElementById("plan-calendar");
-  const label = document.getElementById("plan-calendar-label");
+function renderWeekCalendar(el, labelEl, weekStart, items, selectedDay, dayAttr) {
   if (!el) return;
-  const month = ensurePlanMonth();
-  const year = month.getFullYear();
-  const monthIdx = month.getMonth();
-  if (label) {
-    label.textContent = month.toLocaleString(undefined, { month: "long", year: "numeric" });
-  }
-  const firstDow = new Date(year, monthIdx, 1).getDay();
-  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const start = startOfWeek(weekStart);
+  if (labelEl) labelEl.textContent = formatWeekRange(start);
   const today = careTodayIso();
-  const byDay = new Map();
-  for (const item of items) {
-    const due = item.due_at;
-    if (!due || !due.startsWith(`${year}-${String(monthIdx + 1).padStart(2, "0")}`)) continue;
-    if (!byDay.has(due)) byDay.set(due, []);
-    byDay.get(due).push(item);
-  }
   const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     .map((d) => `<div class="plan-cal-dow">${d}</div>`)
     .join("");
+  const byDay = new Map();
+  for (const item of items) {
+    const due = item.due_at;
+    if (!due) continue;
+    if (!byDay.has(due)) byDay.set(due, []);
+    byDay.get(due).push(item);
+  }
   let cells = "";
-  for (let i = 0; i < firstDow; i++) cells += `<div class="plan-cal-cell is-empty"></div>`;
-  for (let day = 1; day <= daysInMonth; day++) {
-    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  for (let i = 0; i < 7; i++) {
+    const day = addLocalDays(start, i);
+    const iso = localDateIso(day);
     const dayItems = byDay.get(iso) || [];
-    const openCount = dayItems.filter((i) => (i.status || "open") === "open").length;
-    const overdue = dayItems.some((i) => careItemIsOverdue(i, today));
+    const overdue = dayItems.some((item) => careItemIsOverdue(item, today));
     const classes = [
       "plan-cal-cell",
       iso === today ? "is-today" : "",
-      iso === state.planSelectedDay ? "is-selected" : "",
+      iso === selectedDay ? "is-selected" : "",
       dayItems.length ? "has-items" : "",
       overdue ? "is-overdue" : "",
     ]
@@ -10712,16 +10729,27 @@ function renderPlanCalendar(items) {
     const dots = dayItems
       .slice(0, 3)
       .map(
-        (i) =>
-          `<span class="plan-cal-dot kind-${escapeHtml(i.kind || "other")} status-${escapeHtml(i.status || "open")}"></span>`
+        (item) =>
+          `<span class="plan-cal-dot kind-${escapeHtml(item.kind || "other")} status-${escapeHtml(item.status || "open")}"></span>`
       )
       .join("");
-    cells += `<button type="button" class="${classes}" data-plan-day="${iso}" aria-label="${iso}${openCount ? `, ${openCount} open` : ""}">
-      <span class="plan-cal-daynum">${day}</span>
+    cells += `<button type="button" class="${classes}" data-${dayAttr}="${iso}" aria-label="${iso}">
+      <span class="plan-cal-daynum">${day.getDate()}</span>
       <span class="plan-cal-dots">${dots}</span>
     </button>`;
   }
-  el.innerHTML = `<div class="plan-cal-grid">${weekdays}${cells}</div>`;
+  el.innerHTML = `<div class="plan-cal-grid is-week">${weekdays}${cells}</div>`;
+}
+
+function renderPlanCalendar(items) {
+  renderWeekCalendar(
+    document.getElementById("plan-calendar"),
+    document.getElementById("plan-calendar-label"),
+    ensurePlanMonth(),
+    items,
+    state.planSelectedDay,
+    "plan-day"
+  );
 }
 
 function formatCareActivity(activity) {
@@ -13005,6 +13033,18 @@ function todayInputDate() {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 }
 
+function setVitalsTempUnit(unit) {
+  const next = unit === "°F" ? "°F" : "°C";
+  const hidden = document.getElementById("vitals-temp-unit");
+  if (hidden) hidden.value = next;
+  document.querySelectorAll(".vitals-unit-btn").forEach((btn) => {
+    const on = btn.dataset.tempUnit === next;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  syncVitalsTempBounds();
+}
+
 function resetVitalsModal() {
   const temp = document.getElementById("vitals-temp");
   const hr = document.getElementById("vitals-hr");
@@ -13012,14 +13052,12 @@ function resetVitalsModal() {
   const dia = document.getElementById("vitals-bp-dia");
   const o2 = document.getElementById("vitals-o2");
   const dateEl = document.getElementById("vitals-date");
-  const unit = document.getElementById("vitals-temp-unit");
   if (temp) temp.value = "";
   if (hr) hr.value = "";
   if (sys) sys.value = "";
   if (dia) dia.value = "";
   if (o2) o2.value = "";
-  if (unit) unit.value = "°C";
-  syncVitalsTempBounds();
+  setVitalsTempUnit("°C");
   if (dateEl) dateEl.value = todayInputDate();
 }
 
@@ -16376,7 +16414,9 @@ document.getElementById("btn-save-vitals")?.addEventListener("click", () => {
 document.getElementById("modal-vitals")?.addEventListener("click", (event) => {
   if (event.target?.id === "modal-vitals") closeVitalsModal();
 });
-document.getElementById("vitals-temp-unit")?.addEventListener("change", syncVitalsTempBounds);
+document.querySelectorAll(".vitals-unit-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setVitalsTempUnit(btn.dataset.tempUnit));
+});
 document.getElementById("btn-close-exercise")?.addEventListener("click", () => closeExerciseModal());
 document.getElementById("btn-cancel-exercise")?.addEventListener("click", () => closeExerciseModal());
 document.getElementById("modal-exercise")?.addEventListener("click", (event) => {
@@ -17872,19 +17912,17 @@ document.getElementById("btn-cancel-care-edit")?.addEventListener("click", () =>
 });
 
 document.getElementById("btn-plan-prev-month")?.addEventListener("click", () => {
-  const month = ensurePlanMonth();
-  state.planMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+  state.planMonth = addLocalDays(ensurePlanMonth(), -7);
   renderCarePlan(state.patientProfile);
 });
 
 document.getElementById("btn-plan-next-month")?.addEventListener("click", () => {
-  const month = ensurePlanMonth();
-  state.planMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+  state.planMonth = addLocalDays(ensurePlanMonth(), 7);
   renderCarePlan(state.patientProfile);
 });
 
 document.getElementById("btn-plan-today")?.addEventListener("click", () => {
-  state.planMonth = careMonthStart();
+  state.planMonth = startOfWeek(new Date());
   state.planSelectedDay = careTodayIso();
   renderCarePlan(state.patientProfile);
 });
@@ -17985,18 +18023,15 @@ document.getElementById("tl-action-calendar")?.addEventListener("click", (event)
   renderTimelineActions();
 });
 document.getElementById("btn-tl-action-prev")?.addEventListener("click", () => {
-  const month = ensureActionMonth();
-  timelineState.actionMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+  timelineState.actionMonth = addLocalDays(ensureActionMonth(), -7);
   renderTimelineActions();
 });
 document.getElementById("btn-tl-action-next")?.addEventListener("click", () => {
-  const month = ensureActionMonth();
-  timelineState.actionMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+  timelineState.actionMonth = addLocalDays(ensureActionMonth(), 7);
   renderTimelineActions();
 });
 document.getElementById("btn-tl-action-today")?.addEventListener("click", () => {
-  const now = new Date();
-  timelineState.actionMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  timelineState.actionMonth = startOfWeek(new Date());
   timelineState.actionSelectedDay = careTodayIso();
   renderTimelineActions();
 });
@@ -18863,14 +18898,15 @@ function renderFamilyTeam() {
     const dt = tlParseAt(iso);
     return dt ? dt.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
   };
-  board.innerHTML = roles
+  const held = roles.filter((r) => r.holders.length);
+  board.classList.toggle("hidden", !held.length);
+  board.innerHTML = held
     .map((r) => {
       const names = r.holders.map((h) => h.name.split(" ")[0]);
-      const empty = !r.holders.length;
       const since = r.holders.length === 1 && r.holders[0].since ? `since ${sinceLabel(r.holders[0].since)}` : "";
-      return `<button type="button" class="family-role-tile${empty ? " is-empty" : ""}" data-family-role="${escapeHtml(r.key)}" title="${escapeHtml(r.hint || "")}">
+      return `<button type="button" class="family-role-tile" data-family-role="${escapeHtml(r.key)}" title="${escapeHtml(r.hint || "")}">
         <span class="family-role-name">${escapeHtml(r.label)}</span>
-        <span class="family-role-holders">${empty ? "Unassigned" : escapeHtml(names.join(" · "))}</span>
+        <span class="family-role-holders">${escapeHtml(names.join(" · "))}</span>
         ${since ? `<span class="family-role-since">${escapeHtml(since)}</span>` : ""}
       </button>`;
     })
@@ -18885,13 +18921,13 @@ function renderFamilyTeam() {
           return `<div class="timeline-team-card family-card" data-family-edit="${escapeHtml(m.id)}" role="button" tabindex="0">
             <div class="timeline-team-top">${tlAvatarHtml(m)}<div class="timeline-team-identity"><strong>${escapeHtml(m.name)}</strong><span class="timeline-team-action">Edit</span></div></div>
             ${m.relationship ? `<span class="timeline-team-role">${escapeHtml(m.relationship)}</span>` : ""}
-            ${chips ? `<span class="timeline-env-chips">${chips}</span>` : `<span class="timeline-team-meta">No role yet</span>`}
+            ${chips ? `<span class="timeline-env-chips">${chips}</span>` : ""}
             ${m.availability ? `<span class="timeline-team-meta">${escapeHtml(m.availability)}</span>` : ""}
             ${tlContactHtml(m)}
           </div>`;
         })
         .join("")
-    : `<p class="muted small">Add the people helping — then tap a role above to assign it.</p>`;
+    : `<p class="muted small">Add the people helping. Give someone a role only if you want one.</p>`;
   const senders = data.chat_senders_not_on_family_team || [];
   if (suggest) {
     suggest.classList.toggle("hidden", !senders.length);
@@ -18930,12 +18966,14 @@ function openFamilyForm(member = null, presetName = "") {
   document.getElementById("fam-email").value = member?.email || "";
   document.getElementById("fam-preferred").value = member?.preferred_contact || "";
   document.getElementById("fam-availability").value = member?.availability || "";
-  document.getElementById("fam-role-custom").value = "";
+  const roleLabel = Object.fromEntries((timelineState.data?.family_roles || []).map((r) => [r.key, r.label]));
+  document.getElementById("fam-role").value = (member?.roles || [])
+    .map((r) => roleLabel[r] || r)
+    .join(", ");
   resetAvatarForm("fam");
   document.getElementById("fam-avatar-key").value = member?.avatar_key || "";
   renderAvatarPicker("fam", member?.avatar_key || "");
   updateAvatarPreview("fam", member);
-  renderFamilyRoleChecks("fam-roles", member?.roles || []);
   document.getElementById("btn-family-save").textContent = member ? "Save" : "Add to family team";
   document.getElementById("btn-family-remove")?.classList.toggle("hidden", !member);
   (member || presetName ? document.getElementById("fam-rel") : document.getElementById("fam-name"))?.focus();
@@ -18972,9 +19010,10 @@ async function saveFamilyForm(event) {
   const pid = state.activePatientId;
   if (!pid) return toast("Select a patient first", "error");
   const id = document.getElementById("fam-edit-id").value;
-  const roles = [...document.querySelectorAll("#fam-roles input:checked")].map((i) => i.value);
-  const custom = document.getElementById("fam-role-custom").value.trim();
-  if (custom) roles.push(custom);
+  const roles = (document.getElementById("fam-role")?.value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
   const body = {
     name: document.getElementById("fam-name").value.trim(),
     relationship: document.getElementById("fam-rel").value.trim(),
@@ -19150,64 +19189,23 @@ function tlActionItems() {
 }
 
 function ensureActionMonth() {
-  if (!(timelineState.actionMonth instanceof Date) || Number.isNaN(timelineState.actionMonth.getTime())) {
-    const now = new Date();
-    timelineState.actionMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  }
+  timelineState.actionMonth = startOfWeek(
+    timelineState.actionMonth instanceof Date && !Number.isNaN(timelineState.actionMonth.getTime())
+      ? timelineState.actionMonth
+      : new Date()
+  );
   return timelineState.actionMonth;
 }
 
 function renderTimelineActionCalendar(items) {
-  const el = document.getElementById("tl-action-calendar");
-  const label = document.getElementById("tl-action-calendar-label");
-  if (!el) return;
-  const month = ensureActionMonth();
-  const year = month.getFullYear();
-  const monthIdx = month.getMonth();
-  if (label) {
-    label.textContent = month.toLocaleString(undefined, { month: "long", year: "numeric" });
-  }
-  const firstDow = new Date(year, monthIdx, 1).getDay();
-  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
-  const today = careTodayIso();
-  const byDay = new Map();
-  for (const item of items) {
-    const due = item.due_at;
-    if (!due || !due.startsWith(`${year}-${String(monthIdx + 1).padStart(2, "0")}`)) continue;
-    if (!byDay.has(due)) byDay.set(due, []);
-    byDay.get(due).push(item);
-  }
-  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    .map((d) => `<div class="plan-cal-dow">${d}</div>`)
-    .join("");
-  let cells = "";
-  for (let i = 0; i < firstDow; i++) cells += `<div class="plan-cal-cell is-empty"></div>`;
-  for (let day = 1; day <= daysInMonth; day++) {
-    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const dayItems = byDay.get(iso) || [];
-    const overdue = dayItems.some((item) => careItemIsOverdue(item, today));
-    const classes = [
-      "plan-cal-cell",
-      iso === today ? "is-today" : "",
-      iso === timelineState.actionSelectedDay ? "is-selected" : "",
-      dayItems.length ? "has-items" : "",
-      overdue ? "is-overdue" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const dots = dayItems
-      .slice(0, 3)
-      .map(
-        (item) =>
-          `<span class="plan-cal-dot kind-${escapeHtml(item.kind || "other")} status-${escapeHtml(item.status || "open")}"></span>`
-      )
-      .join("");
-    cells += `<button type="button" class="${classes}" data-tl-action-day="${iso}" aria-label="${iso}">
-      <span class="plan-cal-daynum">${day}</span>
-      <span class="plan-cal-dots">${dots}</span>
-    </button>`;
-  }
-  el.innerHTML = `<div class="plan-cal-grid">${weekdays}${cells}</div>`;
+  renderWeekCalendar(
+    document.getElementById("tl-action-calendar"),
+    document.getElementById("tl-action-calendar-label"),
+    ensureActionMonth(),
+    items,
+    timelineState.actionSelectedDay,
+    "tl-action-day"
+  );
 }
 
 function renderTimelineActionRow(item) {
