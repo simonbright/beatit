@@ -441,10 +441,13 @@ def harvest_event_actions(
         )
     incoming.extend(extra_items or [])
     added = _store_items(profile, incoming)
+    from app.services.reading_extract import readings_from_event, store_extracted_readings
+
+    store_extracted_readings(profile, readings_from_event(event, extra_text=extra_text))
     events = list(profile.get("care_events") or [])
     for i, row in enumerate(events):
         if row.get("id") == event.get("id"):
-            events[i] = {**row, "actions_scanned": True}
+            events[i] = {**row, "actions_scanned": True, "readings_scanned": True}
             profile["care_events"] = events
             break
     save_patient_profile(patient_id, profile, reload=False)
@@ -461,14 +464,18 @@ def harvest_unscanned_events(patient_id: str, *, limit: int = MAX_SCAN_EVENTS) -
     added = 0
     scanned = 0
     changed = pruned > 0
+    from app.services.reading_extract import readings_from_event, store_extracted_readings
+
     for i, event in enumerate(events):
-        if event.get("actions_scanned"):
+        if event.get("actions_scanned") and event.get("readings_scanned"):
             continue
         if scanned >= limit:
             break
-        incoming = items_from_event(event)
+        incoming = items_from_event(event) if not event.get("actions_scanned") else []
         added += _store_items(profile, incoming)
-        events[i] = {**event, "actions_scanned": True}
+        if not event.get("readings_scanned"):
+            store_extracted_readings(profile, readings_from_event(event))
+        events[i] = {**event, "actions_scanned": True, "readings_scanned": True}
         scanned += 1
         changed = True
     if changed:

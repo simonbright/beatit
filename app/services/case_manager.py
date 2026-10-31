@@ -277,6 +277,7 @@ def _empty_profile() -> dict[str, Any]:
         "care_team": [],
         "family_team": [],
         "family_role_history": [],
+        "dismissed_gaps": [],
         "log_custom_tiles": [],
         "log_tile_order": [],
         "log_tile_hidden": [],
@@ -448,6 +449,7 @@ def get_patient_profile(patient_id: str) -> dict[str, Any]:
     profile["care_team"] = _normalize_team(data.get("care_team"))
     profile["family_team"] = _normalize_family(data.get("family_team"))
     profile["family_role_history"] = _normalize_role_history(data.get("family_role_history"))
+    profile["dismissed_gaps"] = _normalize_dismissed_gaps(data.get("dismissed_gaps"))
     safety = data.get("medication_safety")
     if isinstance(safety, dict):
         profile["medication_safety"] = safety
@@ -623,6 +625,7 @@ def save_patient_profile(
         "care_team": _normalize_team(profile.get("care_team")),
         "family_team": _normalize_family(profile.get("family_team")),
         "family_role_history": _normalize_role_history(profile.get("family_role_history")),
+        "dismissed_gaps": _normalize_dismissed_gaps(profile.get("dismissed_gaps")),
         "medication_safety": profile.get("medication_safety") or None,
     }
     _profile_path(patient_id).write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
@@ -826,6 +829,22 @@ def _infer_diagnostic_category(name: str, explicit: str | None = None) -> str:
     return "blood"
 
 
+def _normalize_recorded_at(raw: str) -> str:
+    text = (raw or "").strip()
+    if len(text) == 10 and text[4:5] == "-" and text[7:8] == "-":
+        datetime.fromisoformat(text)
+        return text
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("recorded_at must be YYYY-MM-DD or YYYY-MM-DDTHH:MM") from exc
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    if dt.hour or dt.minute or "T" in text:
+        return dt.strftime("%Y-%m-%dT%H:%M")
+    return dt.date().isoformat()
+
+
 def add_patient_diagnostic(
     patient_id: str,
     *,
@@ -858,9 +877,9 @@ def add_patient_diagnostic(
         raise ValueError("Diagnostic value or result text is required")
     date_raw = (recorded_at or "").strip()
     try:
-        date_iso = datetime.fromisoformat(date_raw[:10]).date().isoformat()
+        recorded_iso = _normalize_recorded_at(date_raw)
     except ValueError as exc:
-        raise ValueError("recorded_at must be YYYY-MM-DD") from exc
+        raise ValueError("recorded_at must be YYYY-MM-DD or YYYY-MM-DDTHH:MM") from exc
     profile = get_patient_profile(patient_id)
     unit_clean = (unit or "").strip() or None
     if numeric is not None and not unit_clean:
@@ -881,7 +900,7 @@ def add_patient_diagnostic(
         "name": cleaned_name,
         "value": numeric,
         "unit": unit_clean,
-        "recorded_at": date_iso,
+        "recorded_at": recorded_iso,
         "category": cat,
         "notes": notes_clean,
         "result": result_clean,
@@ -1768,6 +1787,55 @@ def _normalize_care_item(raw: dict[str, Any]) -> dict[str, Any] | None:
         "source_event_id": (str(raw.get("source_event_id") or "").strip()[:80] or None),
         "source_kind": (str(raw.get("source_kind") or "").strip()[:20] or None),
     }
+
+
+def gap_dismiss_id(kind: str, day: str | None = None, ref: str | None = None) -> str:
+    return f"{kind or ''}|{day or ''}|{ref or ''}"
+
+
+def _normalize_dismissed_gaps(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in raw:
+        if isinstance(row, str):
+            key = row.strip()
+            parts = key.split("|")
+            kind = parts[0] if parts else ""
+            day = parts[1] if len(parts) > 1 else ""
+            ref = parts[2] if len(parts) > 2 else ""
+        elif isinstance(row, dict):
+            kind = str(row.get("kind") or "").strip()
+            day = str(row.get("day") or "").strip()
+            ref = str(row.get("ref") or "").strip()
+            key = str(row.get("id") or "").strip() or gap_dismiss_id(kind, day, ref)
+        else:
+            continue
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"id": key, "kind": kind, "day": day or None, "ref": ref or None})
+    return out[-300:]
+
+
+def dismiss_patient_gap(
+    patient_id: str,
+    *,
+    kind: str,
+    day: str | None = None,
+    ref: str | None = None,
+) -> dict[str, Any] | None:
+    profile = get_patient_profile(patient_id)
+    if not profile:
+        return None
+    key = gap_dismiss_id(kind, day, ref)
+    rows = _normalize_dismissed_gaps(profile.get("dismissed_gaps"))
+    if not any(row.get("id") == key for row in rows):
+        rows.append({"id": key, "kind": kind, "day": day or None, "ref": ref or None})
+        profile["dismissed_gaps"] = rows
+        save_patient_profile(patient_id, profile)
+    return get_patient_profile(patient_id)
 
 
 def _normalize_care_items(raw: Any) -> list[dict[str, Any]]:
@@ -3083,7 +3151,7 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
         group["readings"].append(
             {
                 "id": enriched.get("id"),
-                "recorded_at": str(enriched.get("recorded_at") or "")[:10],
+                "recorded_at": str(enriched.get("recorded_at") or ""),
                 "value": enriched.get("value"),
                 "unit": enriched.get("unit"),
                 "value_si": enriched.get("value_si", enriched.get("value")),
@@ -3095,6 +3163,7 @@ def group_diagnostics_for_charts(profile: dict[str, Any] | None) -> list[dict[st
                 "result": enriched.get("result"),
                 "source": enriched.get("source")
                 or ("library" if enriched.get("source_document_id") else "manual"),
+                "source_kind": enriched.get("source_kind"),
                 "source_document_id": enriched.get("source_document_id"),
             }
         )

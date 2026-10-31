@@ -324,8 +324,8 @@
             <span class="vitals-unit">%</span>
           </span>
         </label>
-        <label for="vitals-date">Date
-          <input type="date" id="vitals-date" class="input">
+        <label for="vitals-when">When
+          <input type="datetime-local" id="vitals-when" class="input">
         </label>
       </div>
       <div class="modal-actions">
@@ -1225,11 +1225,10 @@
         <div class="row-between wrap timeline-head">
           <div>
             <h3>Family timeline</h3>
-            <p class="muted small">What happened, who was in, and where each fact came from. Visit notes can be summarized into bullets; links stay clickable; every entry still shows its source.</p>
+            <p class="muted small">Add a visit, test, or note — attach files if you have them. Links stay clickable; every entry shows its source.</p>
           </div>
           <div class="timeline-head-actions">
-            <button type="button" class="btn primary btn-sm" id="btn-timeline-log">+ Log what happened</button>
-            <button type="button" class="btn secondary btn-sm" id="btn-timeline-transcript">Record a visit</button>
+            <button type="button" class="btn primary btn-sm" id="btn-timeline-log">+ Add</button>
             <button type="button" class="btn secondary btn-sm" id="btn-timeline-update">Family update</button>
             <button type="button" class="btn ghost btn-sm" id="btn-timeline-import">Import WhatsApp</button>
           </div>
@@ -1299,54 +1298,33 @@
           <label for="tl-summary" class="care-item-notes">What happened / what was said
             <textarea id="tl-summary" rows="4" maxlength="4000" placeholder="Stick to what was said or done. e.g. Blood cultures still pending. Continuing IV antibiotics. CT abdomen ordered for tomorrow."></textarea>
           </label>
+          <label for="tl-file" class="care-item-notes">Notes or files <span class="muted small">(optional)</span>
+            <input type="file" id="tl-file" multiple>
+            <span class="muted small">txt, md, docx, pdf — we’ll summarize them onto the timeline.</span>
+          </label>
+          <p id="tl-file-list" class="muted small tr-file-list"></p>
+          <label for="tl-extra" class="care-item-notes">…or paste longer notes
+            <textarea id="tl-extra" rows="4" placeholder="Paste visit notes or a transcript if you have them"></textarea>
+          </label>
           <div class="care-item-form-actions">
             <button type="submit" class="btn primary" id="btn-tl-save">Add to timeline</button>
             <button type="button" class="btn ghost" id="btn-tl-cancel">Cancel</button>
+            <span id="tl-status" class="muted small"></span>
           </div>
           <input type="hidden" id="tl-edit-id" value="">
         </form>
 
-        <form id="timeline-transcript" class="care-item-form timeline-form hidden" autocomplete="off">
-          <div class="timeline-form-head">
-            <h4>Record a visit</h4>
-            <p class="muted small">Attach one or more files — <code>.txt</code>, <code>.md</code>, <code>.docx</code>, <code>.pdf</code>, <code>.vtt</code>, <code>.srt</code> — and/or paste text. Files are saved to the Library. Notes are summarized into a few timeline bullets.</p>
-          </div>
-          <label for="tr-who">Who was in
-            <input type="text" id="tr-who" list="tl-practitioner-list" maxlength="120" placeholder="Pick from the care team or type a name">
-          </label>
-          <label for="tr-role">Role
-            <input type="text" id="tr-role" list="tl-role-list" maxlength="80" placeholder="e.g. Oncology">
-          </label>
-          <label for="tr-when">When
-            <input type="datetime-local" id="tr-when">
-          </label>
-          <label for="tr-where">Where
-            <input type="text" id="tr-where" list="tl-env-list" maxlength="120" placeholder="e.g. Hospital — inpatient">
-          </label>
-          <label for="tr-file" class="care-item-notes">Files
-            <input type="file" id="tr-file" multiple accept=".txt,.md,.vtt,.srt,.docx,.pdf,text/plain,text/markdown,text/vtt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-          </label>
-          <p id="tr-file-list" class="muted small tr-file-list"></p>
-          <label for="tr-text" class="care-item-notes">…and/or paste text
-            <textarea id="tr-text" rows="5" placeholder="Paste notes or a transcript here"></textarea>
-          </label>
-          <label for="tr-summary" class="care-item-notes">Key points for the timeline (optional)
-            <textarea id="tr-summary" rows="2" maxlength="4000" placeholder="Leave blank to auto-summarize the notes into a few bullets."></textarea>
-          </label>
-          <div class="care-item-form-actions">
-            <button type="submit" class="btn primary" id="btn-tr-save">Save visit</button>
-            <button type="button" class="btn ghost" id="btn-tr-cancel">Cancel</button>
-            <span id="tr-status" class="muted small"></span>
-          </div>
-        </form>
-
         <div id="timeline-import" class="timeline-panel hidden">
           <h4>Import from WhatsApp</h4>
-          <p class="muted small">On a phone: open the group → tap its name → <strong>Export Chat → Without Media</strong>. Upload the <code>.txt</code> (or the <code>.zip</code> WhatsApp creates). A full export is fine — messages already on the timeline are skipped; only new ones are added.</p>
-          <div class="timeline-import-row">
-            <input type="file" id="tl-import-file" accept=".txt,.zip,text/plain,application/zip">
-            <input type="text" id="tl-import-name" maxlength="120" placeholder="Chat name (e.g. Susan Health Updates)">
-            <button type="button" class="btn primary btn-sm" id="btn-tl-import-run">Import</button>
+          <p class="muted small">On the phone: group → name → <strong>Export Chat → Without Media</strong>. Then choose that file here (the <code>.zip</code> or <code>.txt</code> WhatsApp makes). A full export is fine — old messages are skipped.</p>
+          <div class="timeline-import-stack">
+            <label class="btn secondary" for="tl-import-file">Choose chat export</label>
+            <input type="file" id="tl-import-file">
+            <p id="tl-import-filename" class="muted small">No file chosen yet.</p>
+            <label for="tl-import-name">Chat name <span class="muted small">(optional)</span>
+              <input type="text" id="tl-import-name" maxlength="120" placeholder="e.g. Susan Health Updates">
+            </label>
+            <button type="button" class="btn primary" id="btn-tl-import-run">Import</button>
           </div>
           <p id="tl-import-status" class="muted small"></p>
         </div>

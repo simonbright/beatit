@@ -75,6 +75,17 @@ def test_zip_export():
     assert "catheter" in text
 
 
+def test_iphone_utf16_and_raw_zip_bytes():
+    from app.services.whatsapp_import import text_from_export_bytes
+
+    utf16 = IOS_EXPORT.encode("utf-16")
+    assert "catheter" in text_from_export_bytes(utf16)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("_chat.txt", IOS_EXPORT.encode("utf-16"))
+    assert "catheter" in text_from_export_bytes(buf.getvalue())
+
+
 def test_import_is_idempotent(patient):
     events = messages_to_care_events(parse_whatsapp_export(IOS_EXPORT), chat_name="Susan Health Updates")
     first = case_manager.import_patient_care_events(patient, events)
@@ -532,3 +543,16 @@ def test_gap_hint_when_chat_mentions_care_team(patient):
     gaps = build_gaps(case_manager.get_patient_profile(patient), now=NOW)
     visit_gap = next(i for i in gaps["items"] if i.get("day") == "2026-10-28" and i["kind"] == "no_visit")
     assert visit_gap["severity"] == "warn" and "1 family message mentions the care team" in visit_gap["text"]
+
+
+def test_dismissed_day_gaps_stay_hidden(patient):
+    case_manager.add_patient_care_event(
+        patient, kind="admission", occurred_at="2026-10-28T08:00:00-04:00", summary="Admitted"
+    )
+    profile = case_manager.get_patient_profile(patient)
+    gaps = build_gaps(profile, now=NOW)
+    no_visit = next(i for i in gaps["items"] if i.get("day") == "2026-10-28" and i["kind"] == "no_visit")
+    saved = case_manager.dismiss_patient_gap(patient, kind="no_visit", day="2026-10-28")
+    hidden = build_gaps(saved, now=NOW)
+    assert no_visit["id"] not in {i.get("id") for i in hidden["items"]}
+    assert "no_visit" not in _kinds(hidden, "2026-10-28")

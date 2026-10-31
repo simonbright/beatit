@@ -234,22 +234,53 @@ def messages_to_care_events(messages: list[dict[str, Any]], *, chat_name: str = 
     return events
 
 
-def text_from_export_zip(zip_base64: str, *, max_text_bytes: int = 5_000_000) -> str:
+def _decode_chat_text(raw: bytes) -> str:
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        return raw.decode("utf-16")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8", errors="replace")
+    if len(raw) >= 4 and raw[1:2] == b"\x00" and raw[3:4] == b"\x00":
+        try:
+            return raw.decode("utf-16-le")
+        except UnicodeError:
+            pass
+    return raw.decode("utf-8", errors="replace")
+
+
+def text_from_export_zip_bytes(raw: bytes, *, max_text_bytes: int = 5_000_000) -> str:
     """Pull the chat .txt out of a WhatsApp export .zip (media is ignored)."""
-    import base64
     import io
     import zipfile
 
     try:
-        raw = base64.b64decode(zip_base64, validate=False)
         zf = zipfile.ZipFile(io.BytesIO(raw))
-    except (ValueError, zipfile.BadZipFile) as exc:
+    except zipfile.BadZipFile as exc:
         raise ValueError("That file is not a valid WhatsApp export .zip") from exc
     names = [n for n in zf.namelist() if n.lower().endswith(".txt") and not n.startswith("__MACOSX")]
     if not names:
         raise ValueError("No chat .txt found inside the .zip")
-    names.sort(key=lambda n: (0 if n.endswith("_chat.txt") else 1, n))
+    names.sort(key=lambda n: (0 if n.lower().endswith("_chat.txt") else 1, n))
     info = zf.getinfo(names[0])
     if info.file_size > max_text_bytes:
         raise ValueError("Chat text is too large to import")
-    return zf.read(names[0]).decode("utf-8", errors="replace")
+    return _decode_chat_text(zf.read(names[0]))
+
+
+def text_from_export_zip(zip_base64: str, *, max_text_bytes: int = 5_000_000) -> str:
+    """Pull the chat .txt out of a WhatsApp export .zip sent as base64."""
+    import base64
+
+    raw = base64.b64decode(zip_base64, validate=False)
+    return text_from_export_zip_bytes(raw, max_text_bytes=max_text_bytes)
+
+
+def text_from_export_bytes(raw: bytes, *, max_text_bytes: int = 5_000_000) -> str:
+    """Read a WhatsApp export that is either a .txt or a .zip (iPhone default)."""
+    if not raw:
+        raise ValueError("That file was empty")
+    if raw[:2] == b"PK":
+        return text_from_export_zip_bytes(raw, max_text_bytes=max_text_bytes)
+    text = _decode_chat_text(raw)
+    if len(text.encode("utf-8")) > max_text_bytes:
+        raise ValueError("Chat text is too large to import")
+    return text

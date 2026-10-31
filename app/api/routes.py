@@ -189,6 +189,7 @@ from app.services.case_manager import (
     add_patient_measurement,
     delete_patient_measurement,
     add_patient_diagnostic,
+    dismiss_patient_gap,
     delete_patient_diagnostic,
     clear_patient_diagnostics,
     group_diagnostics_for_charts,
@@ -3354,15 +3355,15 @@ async def api_add_patient_diagnostic(patient_id: str, body: PatientDiagnosticReq
     if not body.recorded_at.strip():
         raise HTTPException(status_code=400, detail="recorded_at is required")
     try:
-        datetime.fromisoformat(body.recorded_at.strip()[:10])
+        datetime.fromisoformat(body.recorded_at.strip().replace("Z", "+00:00")[:16])
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="recorded_at must be YYYY-MM-DD") from exc
+        raise HTTPException(status_code=400, detail="recorded_at must be YYYY-MM-DD or YYYY-MM-DDTHH:MM") from exc
     try:
         entry = add_patient_diagnostic(
             patient_id,
             name=body.name,
             value=body.value,
-            recorded_at=body.recorded_at.strip()[:10],
+            recorded_at=body.recorded_at.strip(),
             unit=body.unit,
             notes=body.notes,
             result=body.result,
@@ -4809,6 +4810,28 @@ async def api_patient_timeline(patient_id: str, tz: str | None = Query(default=N
     return await _timeline_payload(patient_id, tz_name)
 
 
+class PatientGapDismissRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=40)
+    day: str | None = Field(default=None, max_length=10)
+    ref: str | None = Field(default=None, max_length=80)
+
+
+@router.post("/patients/{patient_id}/gaps/dismiss")
+async def api_dismiss_patient_gap(patient_id: str, body: PatientGapDismissRequest, request: Request):
+    if not any(p["id"] == patient_id for p in list_patients()):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    day = (body.day or "").strip() or None
+    if day:
+        try:
+            datetime.fromisoformat(day)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD") from exc
+    profile = dismiss_patient_gap(patient_id, kind=body.kind.strip(), day=day, ref=(body.ref or "").strip() or None)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return await _timeline_payload(patient_id)
+
+
 @router.post("/patients/{patient_id}/care-events")
 async def api_add_patient_care_event(
     patient_id: str,
@@ -5429,40 +5452,58 @@ async def api_import_visit_transcript(
 
 
 @router.post("/patients/{patient_id}/care-events/import/whatsapp")
-async def api_import_whatsapp_care_events(
-    patient_id: str,
-    body: PatientWhatsAppImportRequest,
-    request: Request,
-):
+async def api_import_whatsapp_care_events(patient_id: str, request: Request):
     from app.services.whatsapp_import import (
         messages_to_care_events,
         parse_whatsapp_export,
+        text_from_export_bytes,
         text_from_export_zip,
     )
 
-    text = body.text or ""
-    if not text and body.zip_base64:
+    ctype = (request.headers.get("content-type") or "").lower()
+    text = ""
+    chat_name = ""
+    tz_name = "America/Toronto"
+    if ctype.startswith("multipart/"):
+        form = await request.form()
+        upload = form.get("file")
+        chat_name = str(form.get("chat_name") or "").strip()
+        tz_name = str(form.get("timezone") or tz_name).strip() or tz_name
+        if upload is None or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="Choose the exported chat file")
+        raw = await upload.read()
         try:
-            text = text_from_export_zip(body.zip_base64)
+            text = text_from_export_bytes(raw)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        try:
+            body = PatientWhatsAppImportRequest.model_validate(await request.json())
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)") from exc
+        text = body.text or ""
+        chat_name = (body.chat_name or "").strip()
+        tz_name = body.timezone or tz_name
+        if not text and body.zip_base64:
+            try:
+                text = text_from_export_zip(body.zip_base64)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not text.strip():
         raise HTTPException(status_code=400, detail="Upload the exported chat (.txt or .zip)")
     try:
-        messages = await asyncio.to_thread(
-            parse_whatsapp_export, text, tz_name=body.timezone or "America/Toronto"
-        )
+        messages = await asyncio.to_thread(parse_whatsapp_export, text, tz_name=tz_name)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not read that export: {exc}") from exc
     if not messages:
         raise HTTPException(
             status_code=400,
-            detail="No messages found. Use WhatsApp → group info → Export Chat → Without Media, and upload the .txt.",
+            detail="No messages found. On the phone use Export Chat → Without Media, then upload that file.",
         )
     result = await asyncio.to_thread(
         import_patient_care_events,
         patient_id,
-        messages_to_care_events(messages, chat_name=body.chat_name or ""),
+        messages_to_care_events(messages, chat_name=chat_name),
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -5473,7 +5514,7 @@ async def api_import_whatsapp_care_events(
         resource_id=patient_id,
         metadata={
             "patient_id": patient_id,
-            "chat_name": body.chat_name,
+            "chat_name": chat_name,
             "messages": len(messages),
             "added": result["added"],
             "skipped": result["skipped"],

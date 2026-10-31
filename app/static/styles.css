@@ -8787,6 +8787,19 @@ body.app-updating-active {
 .timeline-panel h4 { margin: 0 0 0.35rem; }
 .timeline-import-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .timeline-import-row input[type="text"] { flex: 1 1 14rem; min-width: 0; }
+.timeline-import-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  align-items: stretch;
+}
+.timeline-import-stack input[type="file"],
+.timeline-import-stack input[type="text"] {
+  width: 100%;
+  min-height: 2.75rem;
+  font-size: 1rem;
+}
+.timeline-import-stack .btn { width: 100%; }
 .timeline-update-text {
   width: 100%;
   box-sizing: border-box;
@@ -9010,7 +9023,7 @@ body.app-updating-active {
   color: var(--text);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
 }
-#team-form, #timeline-transcript { margin: 0.5rem 0 0.85rem; }
+#team-form { margin: 0.5rem 0 0.85rem; }
 #btn-team-add, #btn-family-add, #btn-family-share-staff, #btn-team-share-family { white-space: nowrap; flex: 0 0 auto; }
 .timeline-team-head-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
 .timeline-contact-pref { font-size: 0.78rem; color: var(--text); }
@@ -9172,6 +9185,12 @@ body.app-updating-active {
 .timeline-gap.is-warn .timeline-gap-icon { color: #fff; background: var(--danger); }
 .timeline-gap-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .timeline-gap .btn-sm { flex: 0 0 auto; }
+.timeline-gap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
 .timeline-gaps-note { margin: 0.5rem 0 0; }
 .tl-gaps-more { margin-top: 0.2rem; align-self: flex-start; font-size: 0.82rem; }
 .timeline-day-flags { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; margin-left: 0.5rem; vertical-align: middle; }

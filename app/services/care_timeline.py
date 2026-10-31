@@ -464,6 +464,7 @@ def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "source_ref": _clean(raw.get("source_ref"), 80) or None,
         "minor": bool(raw.get("minor")),
         "actions_scanned": bool(raw.get("actions_scanned")),
+        "readings_scanned": bool(raw.get("readings_scanned")),
         "created_at": str(raw.get("created_at") or _now_iso()),
         "updated_at": str(raw.get("updated_at") or "") or None,
         "updated_by": _clean(raw.get("updated_by"), 120) or None,
@@ -602,6 +603,20 @@ def care_event_rows(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]
     return rows
 
 
+def _labs_provenance(items: list[dict[str, Any]]) -> str:
+    kinds = {str(d.get("source_kind") or "") for d in items}
+    notes = next((str(d.get("notes") or "") for d in items if d.get("notes")), "")
+    if "whatsapp" in kinds:
+        return notes or "From chat"
+    if "visit" in kinds or "transcript" in kinds:
+        return notes or "From visit notes"
+    if any(d.get("source") == "extracted" for d in items):
+        return notes or "Extracted"
+    if any(d.get("source_document_id") for d in items):
+        return "From the Labs record (report)"
+    return "From the Labs record"
+
+
 def lab_rows(diagnostics: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     by_date: dict[str, list[dict[str, Any]]] = {}
     for d in diagnostics or []:
@@ -640,7 +655,7 @@ def lab_rows(diagnostics: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
                 kind_label="Results",
                 title=title,
                 detail="\n".join(lines),
-                provenance="From the Labs record (date of collection)",
+                provenance=_labs_provenance(items),
                 provenance_type="lab_record",
             )
         )
@@ -1060,10 +1075,19 @@ def build_gaps(
 
     items: list[dict[str, Any]] = []
     day_flags: dict[str, list[str]] = {}
+    dismissed = {
+        str(row.get("id") or "")
+        for row in (profile.get("dismissed_gaps") or [])
+        if isinstance(row, dict)
+    }
 
     def add(severity, kind, text, *, day=None, action=None, ref=None):
+        gap_id = f"{kind}|{day or ''}|{ref or ''}"
+        if gap_id in dismissed:
+            return
         items.append(
             {
+                "id": gap_id,
                 "severity": severity,
                 "kind": kind,
                 "text": text,

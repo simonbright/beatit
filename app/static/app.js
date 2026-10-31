@@ -13051,14 +13051,14 @@ function resetVitalsModal() {
   const sys = document.getElementById("vitals-bp-sys");
   const dia = document.getElementById("vitals-bp-dia");
   const o2 = document.getElementById("vitals-o2");
-  const dateEl = document.getElementById("vitals-date");
+  const whenEl = document.getElementById("vitals-when");
   if (temp) temp.value = "";
   if (hr) hr.value = "";
   if (sys) sys.value = "";
   if (dia) dia.value = "";
   if (o2) o2.value = "";
   setVitalsTempUnit("°C");
-  if (dateEl) dateEl.value = todayInputDate();
+  if (whenEl) whenEl.value = toDatetimeLocalValue(new Date());
 }
 
 function syncVitalsTempBounds() {
@@ -13118,7 +13118,7 @@ function readVitalsNumber(id) {
 
 async function saveVitalsReadings() {
   if (!state.activePatientId) return toast("Select a patient first", "error");
-  const date = document.getElementById("vitals-date")?.value || todayInputDate();
+  const date = document.getElementById("vitals-when")?.value || toDatetimeLocalValue(new Date());
   const temp = readVitalsNumber("vitals-temp");
   const hr = readVitalsNumber("vitals-hr");
   const sys = readVitalsNumber("vitals-bp-sys");
@@ -13849,12 +13849,23 @@ function formatDiagDate(iso, system = state.labUnitSystem) {
 }
 
 /** Human date + ISO for hover / doctor reference (e.g. 10 Jun 2026 · 2026-06-10). */
+function formatDiagTime(iso) {
+  const match = String(iso || "").match(/T(\d{2}):(\d{2})/);
+  if (!match) return "";
+  const hour = Number(match[1]);
+  const minute = match[2];
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${minute} ${suffix}`;
+}
+
 function formatDiagDatePrecise(iso, system = state.labUnitSystem) {
   const raw = String(iso || "").slice(0, 10);
   const pretty = formatDiagDate(raw, system);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return pretty;
-  if (pretty === raw) return raw;
-  return `${pretty} · ${raw}`;
+  const time = formatDiagTime(iso);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return time ? `${pretty} · ${time}` : pretty;
+  if (pretty === raw) return time ? `${raw} · ${time}` : raw;
+  return time ? `${pretty} · ${time}` : `${pretty} · ${raw}`;
 }
 
 function formatDiagDateAxis(iso, system = state.labUnitSystem) {
@@ -14324,7 +14335,14 @@ function diagnosticSourceBadge(reading) {
   if (docId) {
     return `<button type="button" class="btn-link diag-source-link" data-doc-id="${escapeHtml(
       docId
-    )}" title="Open source report in Library">Source</button>`;
+    )}" title="Open source report in Library">From report</button>`;
+  }
+  const kind = String(reading?.source_kind || "").trim();
+  const extracted = String(reading?.source || "") === "extracted" || kind === "whatsapp" || kind === "visit";
+  if (extracted) {
+    const label = kind === "whatsapp" ? "From chat" : kind === "visit" || kind === "transcript" ? "From visit" : "Extracted";
+    const tip = String(reading?.notes || label);
+    return `<span class="care-source-pill" title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`;
   }
   return `<span class="muted small diag-source-manual" title="Entered manually">Manual</span>`;
 }
@@ -15279,10 +15297,13 @@ function renderDiagnosticsCharts(profile, series, opts = {}) {
       );
       const chartable = numericReadings.length > 0;
       const resultText = String(latest?.result || latest?.notes || "").trim();
+      const latestWhen = [formatDiagDate(latest?.recorded_at), formatDiagTime(latest?.recorded_at)]
+        .filter(Boolean)
+        .join(" · ");
       const latestLabel = chartable
-        ? `${formatDiagValue(latest.value)}${unit}${reportedAside} · ${formatDiagDate(latest.recorded_at)}`
+        ? `${formatDiagValue(latest.value)}${unit}${reportedAside} · ${latestWhen}`
         : latest
-          ? `${resultText ? (resultText.length > 80 ? `${resultText.slice(0, 77)}…` : resultText) : "Logged"} · ${formatDiagDate(latest.recorded_at)}`
+          ? `${resultText ? (resultText.length > 80 ? `${resultText.slice(0, 77)}…` : resultText) : "Logged"} · ${latestWhen}`
           : "—";
       const stroke = statusColor(status);
       const cat =
@@ -18628,102 +18649,47 @@ const VISIT_FILE_MAX_BYTES = 20 * 1024 * 1024;
 const VISIT_FILE_MAX_COUNT = 12;
 
 function renderTrFileList() {
-  const files = [...(document.getElementById("tr-file")?.files || [])];
-  const el = document.getElementById("tr-file-list");
+  const files = [...(document.getElementById("tl-file")?.files || [])];
+  const el = document.getElementById("tl-file-list");
   if (!el) return;
   el.textContent = files.length
     ? `${files.length} file${files.length === 1 ? "" : "s"}: ${files.map((f) => f.name).join(", ")}`
     : "";
 }
 
-function openTranscriptForm() {
-  const form = document.getElementById("timeline-transcript");
-  if (!form) return;
-  populateTimelineForm();
-  form.classList.remove("hidden");
-  document.getElementById("tr-when").value = tlToLocalInput(new Date());
-  document.getElementById("tr-status").textContent = "";
-  renderTrFileList();
-  document.getElementById("tr-who")?.focus();
-}
-
-function closeTranscriptForm() {
-  const form = document.getElementById("timeline-transcript");
-  form?.reset();
-  form?.classList.add("hidden");
-  renderTrFileList();
-}
-
-async function saveTranscriptForm(event) {
-  event?.preventDefault?.();
+async function saveVisitWithFiles({ files, pasted, whenRaw, practitioner, role, location, summary }) {
   const pid = state.activePatientId;
-  if (!pid) return toast("Select a patient first", "error");
-  const files = [...(document.getElementById("tr-file")?.files || [])];
-  const pasted = document.getElementById("tr-text").value;
-  if (!files.length && !pasted.trim()) return toast("Choose one or more files, or paste the text", "error");
   if (files.length > VISIT_FILE_MAX_COUNT) {
-    return toast(`Upload up to ${VISIT_FILE_MAX_COUNT} files at a time`, "error");
+    throw new Error(`Upload up to ${VISIT_FILE_MAX_COUNT} files at a time`);
   }
   const oversized = files.find((f) => f.size > VISIT_FILE_MAX_BYTES);
-  if (oversized) return toast(`${oversized.name} is larger than 20 MB`, "error");
-  const whenRaw = document.getElementById("tr-when").value;
+  if (oversized) throw new Error(`${oversized.name} is larger than 20 MB`);
   const body = {
-    practitioner: document.getElementById("tr-who").value.trim(),
-    role: document.getElementById("tr-role").value.trim(),
-    location: document.getElementById("tr-where").value.trim(),
+    practitioner,
+    role,
+    location,
     occurred_at: whenRaw ? new Date(whenRaw).toISOString() : null,
-    summary: document.getElementById("tr-summary").value.trim(),
+    summary,
     files: [],
   };
   if (pasted.trim()) body.text = pasted;
-  const status = document.getElementById("tr-status");
-  const btn = document.getElementById("btn-tr-save");
-  if (btn) btn.disabled = true;
-  if (status) {
-    status.textContent = body.summary
-      ? files.length > 1
-        ? `Saving ${files.length} files…`
-        : "Saving…"
-      : "Saving and summarizing…";
-  }
-  try {
-    for (const file of files) {
-      body.files.push({
-        filename: file.name,
-        file_base64: tlArrayBufferToBase64(await file.arrayBuffer()),
-      });
-    }
-    const res = await fetch(`/api/patients/${pid}/care-events/transcript`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(body),
+  for (const file of files) {
+    body.files.push({
+      filename: file.name,
+      file_base64: tlArrayBufferToBase64(await file.arrayBuffer()),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Could not save visit");
-    }
-    const data = await res.json();
-    timelineState.data = data;
-    closeTranscriptForm();
-    renderTimeline();
-    const count = (data.documents || []).length || (data.document ? 1 : 0);
-    const summarized = data.summary_source === "ai" || data.summary_source === "fallback";
-    toast(
-      summarized
-        ? count > 1
-          ? `${count} files saved and summarized on the timeline`
-          : "Visit saved and summarized on the timeline"
-        : count > 1
-          ? `${count} files saved and linked to the visit`
-          : "Visit saved and linked on the timeline"
-    );
-  } catch (err) {
-    if (status) status.textContent = err.message || "Could not save visit";
-    toast(err.message || "Could not save visit", "error");
-  } finally {
-    if (btn) btn.disabled = false;
   }
+  const res = await fetch(`/api/patients/${pid}/care-events/transcript`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not save visit");
+  }
+  return res.json();
 }
 
 function renderTimelineEvent(ev) {
@@ -19154,7 +19120,10 @@ function renderTimelineGaps() {
         return `<div class="timeline-gap is-${escapeHtml(i.severity)}">
           <span class="timeline-gap-icon" aria-hidden="true">${i.severity === "warn" ? "!" : "·"}</span>
           <span class="timeline-gap-text">${escapeHtml(i.text)}</span>
-          ${act ? `<button type="button" class="btn ghost btn-sm" data-gap-idx="${items.indexOf(i)}">${escapeHtml(act.label)}</button>` : ""}
+          <span class="timeline-gap-actions">
+            ${act ? `<button type="button" class="btn ghost btn-sm" data-gap-idx="${items.indexOf(i)}">${escapeHtml(act.label)}</button>` : ""}
+            <button type="button" class="btn ghost btn-sm" data-gap-dismiss="${escapeHtml(i.id || "")}" data-gap-kind="${escapeHtml(i.kind || "")}" data-gap-day="${escapeHtml(i.day || "")}" data-gap-ref="${escapeHtml(i.ref || "")}">Dismiss</button>
+          </span>
         </div>`;
       })
       .join("") +
@@ -19338,6 +19307,13 @@ function openTimelineForm(ev = null, preset = null) {
   document.getElementById("tl-role").value = ev?.role || "";
   document.getElementById("tl-location").value = ev?.location || "";
   document.getElementById("tl-summary").value = ev?.detail || "";
+  const extra = document.getElementById("tl-extra");
+  if (extra) extra.value = "";
+  const fileEl = document.getElementById("tl-file");
+  if (fileEl) fileEl.value = "";
+  renderTrFileList();
+  const status = document.getElementById("tl-status");
+  if (status) status.textContent = "";
   const srcEl = document.getElementById("tl-source");
   if (srcEl) srcEl.value = ev?.source === "whatsapp" ? "" : ev?.source_document_id || "";
   document.getElementById("btn-tl-save").textContent = ev ? "Save changes" : "Add to timeline";
@@ -19375,10 +19351,33 @@ async function saveTimelineForm(event) {
     body.source_document_id = srcId || null;
     body.source_document_title = srcTitle || null;
   }
-  if (!body.summary && !body.practitioner) return toast("Add who was in or what happened", "error");
+  const files = [...(document.getElementById("tl-file")?.files || [])];
+  const pasted = document.getElementById("tl-extra")?.value || "";
+  if (!body.summary && !body.practitioner && !files.length && !pasted.trim()) {
+    return toast("Add who was in, what happened, or a file", "error");
+  }
   const btn = document.getElementById("btn-tl-save");
+  const status = document.getElementById("tl-status");
   if (btn) btn.disabled = true;
   try {
+    if (!editId && (files.length || pasted.trim().length > 80)) {
+      if (status) status.textContent = files.length ? "Saving and summarizing…" : "Saving…";
+      const data = await saveVisitWithFiles({
+        files,
+        pasted,
+        whenRaw,
+        practitioner: body.practitioner,
+        role: body.role,
+        location: body.location,
+        summary: body.summary,
+      });
+      timelineState.data = data;
+      closeTimelineForm();
+      renderTimeline();
+      const count = (data.documents || []).length || (data.document ? 1 : 0);
+      toast(count ? `${count} file${count === 1 ? "" : "s"} saved on the timeline` : "Added to timeline");
+      return;
+    }
     const res = await fetch(editId ? `/api/patients/${pid}/care-events/${editId}` : `/api/patients/${pid}/care-events`, {
       method: editId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -19422,41 +19421,42 @@ function tlArrayBufferToBase64(buf) {
   return btoa(binary);
 }
 
+function guessWhatsAppChatName(file) {
+  const name = file?.name || "";
+  const match = name.match(/WhatsApp Chat\s*[-–]\s*(.+?)\.(zip|txt)$/i) || name.match(/^(.+?)\.(zip|txt)$/i);
+  return match ? match[1].trim() : "";
+}
+
 async function runWhatsAppImport() {
   const pid = state.activePatientId;
   if (!pid) return toast("Select a patient first", "error");
   const fileEl = document.getElementById("tl-import-file");
   const status = document.getElementById("tl-import-status");
+  const nameEl = document.getElementById("tl-import-filename");
   const file = fileEl?.files?.[0];
   if (!file) return toast("Choose the exported chat file", "error");
-  let chatName = document.getElementById("tl-import-name").value.trim();
-  if (!chatName) {
-    const m = file.name.match(/WhatsApp Chat\s*-\s*(.+?)\.(zip|txt)$/i);
-    if (m) chatName = m[1].trim();
-  }
-  const body = {
-    chat_name: chatName || null,
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto",
-  };
-  const isZip = /\.zip$/i.test(file.name) || file.type === "application/zip";
-  if (file.size > 8 * 1024 * 1024) {
+  if (nameEl) nameEl.textContent = file.name;
+  let chatName = document.getElementById("tl-import-name")?.value.trim() || guessWhatsAppChatName(file);
+  if (file.size > 12 * 1024 * 1024) {
     return toast("Export chat without media — that file is too large to import here", "error");
   }
   const btn = document.getElementById("btn-tl-import-run");
   if (btn) btn.disabled = true;
   if (status) status.textContent = "Importing…";
   try {
-    if (isZip) body.zip_base64 = tlArrayBufferToBase64(await file.arrayBuffer());
-    else body.text = await file.text();
+    const form = new FormData();
+    form.append("file", file, file.name || "whatsapp-export");
+    if (chatName) form.append("chat_name", chatName);
+    form.append("timezone", Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Toronto");
     const res = await fetch(`/api/patients/${pid}/care-events/import/whatsapp`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify(body),
+      body: form,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Import failed");
+      const detail = Array.isArray(err.detail) ? err.detail[0]?.msg : err.detail;
+      throw new Error(detail || `Import failed (${res.status})`);
     }
     const data = await res.json();
     const r = data.import || {};
@@ -19464,6 +19464,7 @@ async function runWhatsAppImport() {
     if (status) status.textContent = msg;
     toast(msg);
     if (fileEl) fileEl.value = "";
+    if (nameEl) nameEl.textContent = "No file chosen yet.";
     await loadTimeline({ quiet: true });
   } catch (err) {
     if (status) status.textContent = err.message || "Import failed";
@@ -19677,6 +19678,17 @@ document.getElementById("timeline-form")?.addEventListener("submit", saveTimelin
 document.getElementById("btn-timeline-import")?.addEventListener("click", () => toggleTimelinePanel("timeline-import"));
 document.getElementById("btn-timeline-update")?.addEventListener("click", () => toggleTimelinePanel("timeline-update"));
 document.getElementById("btn-tl-import-run")?.addEventListener("click", runWhatsAppImport);
+document.getElementById("tl-import-file")?.addEventListener("change", () => {
+  const file = document.getElementById("tl-import-file")?.files?.[0];
+  const nameEl = document.getElementById("tl-import-filename");
+  if (nameEl) nameEl.textContent = file ? file.name : "No file chosen yet.";
+  const nameInput = document.getElementById("tl-import-name");
+  if (file && nameInput && !nameInput.value.trim()) {
+    nameInput.value = guessWhatsAppChatName(file);
+  }
+  if (file) runWhatsAppImport();
+});
+document.getElementById("tl-file")?.addEventListener("change", renderTrFileList);
 document.getElementById("btn-tl-update-copy")?.addEventListener("click", async () => {
   const text = document.getElementById("tl-update-text")?.value || "";
   try {
@@ -19727,9 +19739,31 @@ document.getElementById("timeline-gaps-list")?.addEventListener("click", (e) => 
     renderTimelineGaps();
     return;
   }
+  const dismissBtn = e.target.closest("[data-gap-dismiss]");
+  if (dismissBtn) {
+    dismissTimelineGap(dismissBtn);
+    return;
+  }
   const btn = e.target.closest("[data-gap-idx]");
   if (btn) runGapAction(Number(btn.dataset.gapIdx));
 });
+
+async function dismissTimelineGap(btn) {
+  const pid = state.activePatientId;
+  if (!pid) return;
+  try {
+    const data = await tlSendTimeline(`/api/patients/${pid}/gaps/dismiss`, "POST", {
+      kind: btn.dataset.gapKind,
+      day: btn.dataset.gapDay || null,
+      ref: btn.dataset.gapRef || null,
+    });
+    timelineState.data = data;
+    renderTimeline();
+    toast("Hidden");
+  } catch (err) {
+    toast(err.message || "Could not dismiss", "error");
+  }
+}
 function bindAvatarForm(prefix) {
   document.getElementById(`${prefix}-avatar-picker`)?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-avatar-key]");
@@ -19841,12 +19875,7 @@ document.getElementById("btn-team-add")?.addEventListener("click", () => openTea
 document.getElementById("btn-team-cancel")?.addEventListener("click", closeTeamForm);
 document.getElementById("btn-team-remove")?.addEventListener("click", () => removeTeamMember().catch((err) => toast(err.message, "error")));
 document.getElementById("team-form")?.addEventListener("submit", saveTeamForm);
-document.getElementById("btn-timeline-transcript")?.addEventListener("click", openTranscriptForm);
-document.getElementById("btn-tr-cancel")?.addEventListener("click", closeTranscriptForm);
-document.getElementById("timeline-transcript")?.addEventListener("submit", saveTranscriptForm);
-document.getElementById("tr-file")?.addEventListener("change", renderTrFileList);
 document.getElementById("tl-practitioner")?.addEventListener("change", () => tlFillFromMember("tl-practitioner", "tl-role", "tl-location"));
-document.getElementById("tr-who")?.addEventListener("change", () => tlFillFromMember("tr-who", "tr-role", "tr-where"));
 document.getElementById("panel-timeline")?.addEventListener("click", (e) => {
   if (e.target.closest("#tl-clear-who")) {
     timelineState.practitioner = "";
