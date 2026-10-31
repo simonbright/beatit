@@ -1132,8 +1132,11 @@
           <label for="care-item-due">Date
             <input type="date" id="care-item-due">
           </label>
+          <label for="care-item-time">Time
+            <input type="time" id="care-item-time">
+          </label>
           <label for="care-item-contact">Who / where
-            <input type="text" id="care-item-contact" maxlength="120" placeholder="Clinic, doctor, contact">
+            <input type="text" id="care-item-contact" list="tl-action-who-list" maxlength="120" placeholder="Clinic, doctor, contact">
           </label>
           <label for="care-item-notes" class="care-item-notes">Notes
             <textarea id="care-item-notes" rows="2" maxlength="2000" placeholder="Details, prep, account numbers…"></textarea>
@@ -1161,6 +1164,7 @@
               <button type="button" class="btn ghost btn-sm plan-filter-btn" data-plan-filter="done">Done</button>
               <button type="button" class="btn ghost btn-sm plan-filter-btn" data-plan-filter="all">All</button>
             </div>
+            <div id="plan-action-alerts" class="tl-action-alerts hidden"></div>
             <p id="plan-selected-day" class="muted small plan-selected-day"></p>
             <div id="plan-items-list" class="plan-items-list">
               <p class="muted small">Select a patient to see planned items.</p>
@@ -1280,16 +1284,20 @@
               <button type="button" class="btn ghost btn-sm tl-action-filter" data-action-filter="done">Done</button>
             </div>
           </div>
-          <p class="muted small">Add one here, or we pull them from chats and visit notes. Tap a day to see what is due.</p>
+          <p class="muted small">Add one here, or we pull them from chats and visit notes. Tap a day to see what is due. Alert sends WhatsApp, text, or email using their preferred contact.</p>
           <form id="tl-action-add" class="tl-action-add" autocomplete="off">
             <label for="tl-action-add-title">Action
               <input type="text" id="tl-action-add-title" maxlength="160" required placeholder="e.g. Simon to FU with Internal Med re biopsy">
             </label>
             <label for="tl-action-add-who">Who
-              <input type="text" id="tl-action-add-who" maxlength="120" placeholder="Simon">
+              <input type="text" id="tl-action-add-who" list="tl-action-who-list" maxlength="120" placeholder="Simon">
+              <datalist id="tl-action-who-list"></datalist>
             </label>
-            <label for="tl-action-add-due">By
+            <label for="tl-action-add-due">Date
               <input type="date" id="tl-action-add-due">
+            </label>
+            <label for="tl-action-add-time">Time
+              <input type="time" id="tl-action-add-time">
             </label>
             <button type="submit" class="btn primary btn-sm" id="btn-tl-action-add">Add</button>
           </form>
@@ -1304,6 +1312,7 @@
               <div id="tl-action-calendar" class="plan-calendar" aria-label="Action calendar"></div>
             </div>
             <div class="timeline-actions-list-wrap">
+              <div id="tl-action-alerts" class="tl-action-alerts hidden"></div>
               <p id="tl-action-selected" class="muted small plan-selected-day"></p>
               <div id="tl-action-list" class="plan-items-list timeline-action-list">
                 <p class="muted small">Action items from chats and visit notes will show here.</p>
@@ -1354,6 +1363,9 @@
             </label>
             <label for="tl-next-due">By when
               <input type="date" id="tl-next-due" class="tl-action-due">
+            </label>
+            <label for="tl-next-time">Time
+              <input type="time" id="tl-next-time" class="tl-action-time">
             </label>
           </div>
           <details id="tl-extra-details" class="tl-extra-details">
@@ -1442,14 +1454,17 @@
               </datalist>
             </label>
             <fieldset class="team-avatar-picker">
-              <legend>Picture or emoji</legend>
+              <legend>Picture or icon</legend>
               <div class="team-avatar-photo-row">
                 <span class="team-avatar team-avatar-preview team-avatar-initials" id="fam-avatar-preview" aria-hidden="true">?</span>
+                <label class="team-avatar-letters-label" for="fam-avatar-initials">Letters
+                  <input type="text" id="fam-avatar-initials" maxlength="2" placeholder="HA" autocomplete="off" spellcheck="false" inputmode="text">
+                </label>
                 <label class="btn ghost btn-sm" for="fam-avatar-file">Add photo</label>
                 <input type="file" id="fam-avatar-file" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
                 <button type="button" class="btn ghost btn-sm hidden" id="fam-avatar-clear-photo">Remove photo</button>
               </div>
-              <p class="muted small">Or pick a Simpsons or Star Wars emoji</p>
+              <p class="muted small">Change the two letters, add a photo, or pick Doctor, Nurse, or an emoji</p>
               <div id="fam-avatar-picker" class="team-avatar-themes"></div>
               <input type="hidden" id="fam-avatar-key" value="">
             </fieldset>
@@ -1467,6 +1482,9 @@
             </label>
             <label for="fam-availability">Availability
               <input type="text" id="fam-availability" maxlength="200" placeholder="e.g. Local; evenings and weekends">
+            </label>
+            <label for="fam-notes" class="care-item-notes">Notes
+              <textarea id="fam-notes" rows="2" maxlength="400" placeholder="e.g. Works nights; has the spare key; call after 7pm"></textarea>
             </label>
             <label for="fam-role">Role <span class="muted small">(optional)</span>
               <input type="text" id="fam-role" maxlength="80" placeholder="Only if you want one — e.g. Point person">
@@ -1512,14 +1530,17 @@
               <span class="muted small">Separate several places with commas.</span>
             </label>
             <fieldset class="team-avatar-picker">
-              <legend>Picture or emoji</legend>
+              <legend>Picture or icon</legend>
               <div class="team-avatar-photo-row">
                 <span class="team-avatar team-avatar-preview team-avatar-initials" id="team-avatar-preview" aria-hidden="true">?</span>
+                <label class="team-avatar-letters-label" for="team-avatar-initials">Letters
+                  <input type="text" id="team-avatar-initials" maxlength="2" placeholder="DR" autocomplete="off" spellcheck="false" inputmode="text">
+                </label>
                 <label class="btn ghost btn-sm" for="team-avatar-file">Add photo</label>
                 <input type="file" id="team-avatar-file" accept="image/jpeg,image/png,image/webp,image/jpg" hidden>
                 <button type="button" class="btn ghost btn-sm hidden" id="team-avatar-clear-photo">Remove photo</button>
               </div>
-              <p class="muted small">Or pick a Simpsons or Star Wars emoji</p>
+              <p class="muted small">Change the two letters, add a photo, or pick Doctor, Nurse, or an emoji</p>
               <div id="team-avatar-picker" class="team-avatar-themes"></div>
               <input type="hidden" id="team-avatar-key" value="">
             </fieldset>
@@ -1537,6 +1558,9 @@
             </label>
             <label for="team-preferred">Preferred way to reach them
               <select id="team-preferred"><option value="">— Not set —</option></select>
+            </label>
+            <label for="team-notes" class="care-item-notes">Notes
+              <textarea id="team-notes" rows="2" maxlength="400" placeholder="e.g. Rounds 8am; best via the resident; clinic Thursday"></textarea>
             </label>
             <div class="care-item-form-actions">
               <button type="submit" class="btn primary" id="btn-team-save">Add to care team</button>

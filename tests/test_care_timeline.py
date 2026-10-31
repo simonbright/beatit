@@ -384,6 +384,17 @@ def test_team_contact_and_preferred_method(patient):
     assert team[0]["phone"].startswith("613") and team[0]["email"] == "drg@example.org"
 
 
+def test_avatar_doctor_nurse_and_initials():
+    from app.services.care_timeline import TEAM_AVATAR_PRESETS, normalize_avatar_fields, normalize_avatar_initials
+
+    keys = {p["key"]: p for p in TEAM_AVATAR_PRESETS}
+    assert keys["role-doctor"]["label"] == "Doctor" and keys["role-doctor"]["emoji"] == "🩺"
+    assert keys["role-nurse"]["label"] == "Nurse" and keys["role-nurse"]["emoji"] == "💉"
+    assert normalize_avatar_fields({"avatar_key": "role-nurse"}) == ("role-nurse", "💉")
+    assert normalize_avatar_initials({"avatar_initials": " dr!"}) == "DR"
+    assert normalize_avatar_initials({"avatar_initials": "nurse"}) == "NU"
+
+
 def test_team_whatsapp_and_avatar(patient):
     m = case_manager.add_patient_team_member(
         patient,
@@ -391,9 +402,11 @@ def test_team_whatsapp_and_avatar(patient):
         phone="416-555-0100",
         whatsapp="14165550100",
         preferred_contact="WhatsApp",
+        notes="Rounds 8am; best via resident",
         avatar_key="sw-yoda",
     )
     assert m["preferred_contact"] == "whatsapp"
+    assert m["notes"] == "Rounds 8am; best via resident"
     assert m["whatsapp"] == "14165550100"
     assert m["avatar_key"] == "sw-yoda"
     assert m["avatar_emoji"] == "🟢"
@@ -402,6 +415,18 @@ def test_team_whatsapp_and_avatar(patient):
     assert team[0]["avatar_emoji"] == "🟢"
     updated = case_manager.update_patient_team_member(patient, m["id"], avatar_key="simpsons-homer")
     assert updated["avatar_key"] == "simpsons-homer" and updated["avatar_emoji"] == "🍩"
+    doctor = case_manager.update_patient_team_member(
+        patient, m["id"], avatar_key="role-doctor", avatar_emoji="", avatar_initials="yg"
+    )
+    assert doctor["avatar_key"] == "role-doctor" and doctor["avatar_emoji"] == "🩺"
+    assert doctor["avatar_initials"] == "YG"
+    letters = case_manager.update_patient_team_member(
+        patient, m["id"], avatar_key="", avatar_emoji="", avatar_initials="dr"
+    )
+    assert letters["avatar_key"] == "" and letters["avatar_emoji"] == ""
+    assert letters["avatar_initials"] == "DR"
+    team = build_care_team([], [letters])
+    assert team[0]["avatar_initials"] == "DR"
 
 
 def test_family_whatsapp_avatar_and_photo(patient):
@@ -412,9 +437,13 @@ def test_family_whatsapp_avatar_and_photo(patient):
         phone="416-555-0199",
         whatsapp="14165550199",
         preferred_contact="whatsapp",
+        notes="Works evenings; has the spare key",
         avatar_key="simpsons-lisa",
     )
     assert hadas["whatsapp"] == "14165550199"
+    assert hadas["notes"] == "Works evenings; has the spare key"
+    hadas = case_manager.update_patient_family_member(patient, hadas["id"], notes="Call after 7pm")
+    assert hadas["notes"] == "Call after 7pm"
     assert hadas["avatar_key"] == "simpsons-lisa"
     assert hadas["avatar_emoji"] == "🎷"
     path = case_manager.save_member_avatar(

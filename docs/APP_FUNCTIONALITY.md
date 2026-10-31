@@ -277,7 +277,7 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 
 - A **role board** shows every family role at a glance — who holds it and since when. Unfilled roles are flagged *Unassigned*.
 - Preset roles: Point person, Bedside rotation, Medical liaison, Records keeper, Family communicator, Admin & insurance, Logistics, Emotional support. Custom roles can be added per person (e.g. *Pharmacy runs*).
-- Tap a role tile to reassign it (tick who covers it). Tap a person's card to edit their picture or Simpsons / Star Wars emoji, relationship, contact (phone, WhatsApp, email, best way to reach them), availability and roles.
+- Tap a role tile to reassign it (tick who covers it). Tap a person's card to edit their two-letter icon, photo, Doctor / Nurse icon, or a Simpsons / Star Wars emoji, plus relationship, contact (phone, WhatsApp, email, best way to reach them), availability, notes, and roles.
 - **Share with staff** builds a dated family contact list (as of today, or any date you pick) to copy or send to the hospital or clinic team.
 - **From the family chat**: people who posted in the imported WhatsApp group but aren't on the team yet appear as one-tap suggestions.
 - Every role change is recorded on the timeline (*Family role* entries: "Aron — Point person", "Hadas no longer Point person") with who made the change, and the **Family update** starts with the current roles.
@@ -285,8 +285,8 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 **Professional care team directory**
 
 - **+ Add person**: name, role, and where they work — one or several places (e.g. *Hospital — inpatient, Cancer centre, Home care*).
-- Each person can have a photo or a Simpsons / Star Wars / people emoji on their card.
-- Contact info (all optional): phone, WhatsApp, email, other (pager, portal, assistant, nurse station…), and **preferred way to reach them** — phone call, text message, WhatsApp, email, pager, patient portal message, through the nurse station, or in person / at rounds. The card shows the preferred method first; phone, WhatsApp, and email are tap-to-call / chat / email links.
+- Each person can have a photo, custom two-letter icon, Doctor or Nurse icon, or a Simpsons / Star Wars / people emoji on their card.
+- Contact info (all optional): phone, WhatsApp, email, other (pager, portal, assistant, nurse station…), **preferred way to reach them**, and notes (rounds time, best via the resident, clinic day…). The card shows the preferred method first; phone, WhatsApp, and email are tap-to-call / chat / email links.
 - **Share with family** builds a dated professional contact list to copy or send to the family.
 - Logging a visit with a new name adds that person automatically; their role fills in from the directory next time.
 - **Edit** on a card changes name, role or places. Renaming updates that person's past timeline entries. **Remove from team** keeps past entries as they are.
@@ -305,7 +305,9 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 - Filters: Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search.
 - Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
 - **Who has the ball** stays at the top of Timeline: one or more people, each with a since date (and optional until). Empty is shown as “nobody assigned.”
-- Staff visits can add an optional next action and date. The timeline opens on **Today**.
+- Staff visits can add an optional next action with a date and time. The timeline opens on **Today**.
+- Action items take a date and an optional time (Timeline row, visit close-out, and Advanced Plan).
+- **Alert** messages someone about their open tasks using their preferred contact (WhatsApp, text, or email) from the Family or care team card.
 - **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role, or **vitals check**) while keeping the original text and sender.
 - **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
 - **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added. The import panel hides when it finishes.

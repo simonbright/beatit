@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1732,14 +1733,27 @@ def _normalize_care_item_status(status: str | None) -> str:
 
 
 def _normalize_care_item_date(value: str | None) -> str | None:
-    raw = str(value or "").strip()[:10]
+    """Keep YYYY-MM-DD, or YYYY-MM-DDTHH:MM when a time is given."""
+    raw = str(value or "").strip()
     if not raw:
         return None
+    text = raw.replace("Z", "").replace(" ", "T", 1)
+    match = re.match(r"(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?", text)
+    if not match:
+        return None
+    day = match.group(1)
     try:
-        datetime.strptime(raw, "%Y-%m-%d")
+        datetime.strptime(day, "%Y-%m-%d")
     except ValueError:
         return None
-    return raw
+    time = match.group(2)
+    if not time:
+        return day
+    try:
+        datetime.strptime(time, "%H:%M")
+    except ValueError:
+        return day
+    return f"{day}T{time}"
 
 
 def _normalize_care_item_activity(raw: Any) -> list[dict[str, Any]]:
@@ -2333,6 +2347,7 @@ def add_patient_team_member(
     whatsapp: str | None = None,
     avatar_key: str | None = None,
     avatar_emoji: str | None = None,
+    avatar_initials: str | None = None,
 ) -> dict[str, Any] | None:
     from app.services.care_timeline import find_team_member, normalize_team_member
 
@@ -2352,6 +2367,7 @@ def add_patient_team_member(
             "notes": notes,
             "avatar_key": avatar_key,
             "avatar_emoji": avatar_emoji,
+            "avatar_initials": avatar_initials,
         }
     )
     if not member:
@@ -2396,6 +2412,7 @@ def update_patient_team_member(
         "notes",
         "avatar_key",
         "avatar_emoji",
+        "avatar_initials",
     ):
         if key in fields and fields[key] is not None:
             member[key] = fields[key]
@@ -2527,8 +2544,10 @@ def update_patient_family_member(
         "email",
         "preferred_contact",
         "availability",
+        "notes",
         "avatar_key",
         "avatar_emoji",
+        "avatar_initials",
     ):
         if key in fields and fields[key] is not None:
             member[key] = fields[key]

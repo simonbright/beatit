@@ -10626,6 +10626,36 @@ function careTodayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function careNowIso() {
+  const d = new Date();
+  return `${careTodayIso()}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function careDueDay(due) {
+  const raw = String(due || "");
+  return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : "";
+}
+
+function careDueTime(due) {
+  const match = String(due || "").match(/T(\d{2}:\d{2})/);
+  return match ? match[1] : "";
+}
+
+function careDueValue(date, time) {
+  const day = careDueDay(date);
+  const hm = String(time || "").slice(0, 5);
+  if (!day) return null;
+  if (/^\d{2}:\d{2}$/.test(hm)) return `${day}T${hm}`;
+  return day;
+}
+
+function formatCareDue(due) {
+  if (!due) return "No date";
+  const date = formatDiagDate(due);
+  const time = formatDiagTime(String(due).includes("T") ? due : "");
+  return time ? `${date} · ${time}` : date;
+}
+
 function careMonthStart(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
@@ -10674,7 +10704,8 @@ function fillCareItemForm(item) {
   document.getElementById("care-item-edit-id").value = item.id || "";
   document.getElementById("care-item-title").value = item.title || "";
   document.getElementById("care-item-kind").value = item.kind || "other";
-  document.getElementById("care-item-due").value = item.due_at || "";
+  document.getElementById("care-item-due").value = careDueDay(item.due_at);
+  document.getElementById("care-item-time").value = careDueTime(item.due_at);
   document.getElementById("care-item-contact").value = item.contact || "";
   document.getElementById("care-item-notes").value = item.notes || "";
   document.getElementById("btn-cancel-care-edit")?.classList.remove("hidden");
@@ -10689,14 +10720,18 @@ function careItemsFromProfile(profile) {
 
 function careItemIsOverdue(item, today = careTodayIso()) {
   if ((item.status || "open") !== "open") return false;
-  const due = item.due_at;
-  return Boolean(due && due < today);
+  const day = careDueDay(item.due_at);
+  if (!day) return false;
+  if (day < today) return true;
+  if (day > today) return false;
+  const time = careDueTime(item.due_at);
+  return Boolean(time && `${day}T${time}` < careNowIso());
 }
 
 function filterCareItems(items, filter, selectedDay) {
   let list = items.slice();
   if (selectedDay) {
-    list = list.filter((item) => (item.due_at || "") === selectedDay);
+    list = list.filter((item) => careDueDay(item.due_at) === selectedDay);
   }
   if (filter === "open") list = list.filter((item) => (item.status || "open") === "open");
   else if (filter === "done") list = list.filter((item) => item.status === "done");
@@ -10722,7 +10757,7 @@ function renderWeekCalendar(el, labelEl, weekStart, items, selectedDay, dayAttr)
     .join("");
   const byDay = new Map();
   for (const item of items) {
-    const due = item.due_at;
+    const due = careDueDay(item.due_at);
     if (!due) continue;
     if (!byDay.has(due)) byDay.set(due, []);
     byDay.get(due).push(item);
@@ -10786,7 +10821,7 @@ function renderCarePlanItem(item) {
   const today = careTodayIso();
   const overdue = careItemIsOverdue(item, today);
   const kind = CARE_KIND_LABELS[item.kind] || item.kind || "Other";
-  const due = item.due_at ? formatDiagDate(item.due_at) : "No date";
+  const due = formatCareDue(item.due_at);
   const contact = item.contact ? escapeHtml(item.contact) : "";
   const notes = item.notes ? `<p class="care-item-notes-text">${linkifyHtml(item.notes)}</p>` : "";
   const status = item.status || "open";
@@ -10806,6 +10841,7 @@ function renderCarePlanItem(item) {
       ${
         status === "open"
           ? `<button type="button" class="btn secondary btn-sm btn-care-done" data-id="${escapeHtml(item.id)}">Done</button>
+             ${tlAlertButton(item)}
              <button type="button" class="btn ghost btn-sm btn-care-sent" data-id="${escapeHtml(item.id)}">Log sent</button>
              <button type="button" class="btn ghost btn-sm btn-care-followup" data-id="${escapeHtml(item.id)}">Follow up</button>`
           : `<button type="button" class="btn ghost btn-sm btn-care-reopen" data-id="${escapeHtml(item.id)}">Reopen</button>`
@@ -10828,12 +10864,15 @@ function renderCarePlan(profile) {
     btn.classList.toggle("ghost", !active);
   });
   if (!profile || !state.activePatientId) {
+    renderTaskAlertBar(document.getElementById("plan-action-alerts"), []);
     renderPlanCalendar([]);
     listEl.innerHTML = `<p class="muted small">${escapeHtml(emptyPatientCopy("Select a patient to see the plan."))}</p>`;
     if (selectedEl) selectedEl.textContent = "";
     return;
   }
   const items = careItemsFromProfile(profile);
+  fillActionWhoList();
+  renderTaskAlertBar(document.getElementById("plan-action-alerts"), items);
   renderPlanCalendar(items);
   const filtered = filterCareItems(items, state.planFilter || "open", state.planSelectedDay);
   if (selectedEl) {
@@ -11105,7 +11144,7 @@ async function saveCareItemFromForm(event) {
   const body = {
     title,
     kind: document.getElementById("care-item-kind")?.value || "other",
-    due_at: document.getElementById("care-item-due")?.value || null,
+    due_at: careDueValue(document.getElementById("care-item-due")?.value, document.getElementById("care-item-time")?.value),
     contact: document.getElementById("care-item-contact")?.value?.trim() || "",
     notes: document.getElementById("care-item-notes")?.value?.trim() || "",
   };
@@ -18072,7 +18111,10 @@ async function saveTimelineAction(event) {
       body: JSON.stringify({
         title,
         kind: "follow_up",
-        due_at: document.getElementById("tl-action-add-due")?.value || careTodayIso(),
+        due_at: careDueValue(
+          document.getElementById("tl-action-add-due")?.value || careTodayIso(),
+          document.getElementById("tl-action-add-time")?.value
+        ),
         contact: document.getElementById("tl-action-add-who")?.value.trim() || "",
       }),
     });
@@ -18126,6 +18168,7 @@ document.querySelectorAll(".tl-action-filter").forEach((btn) => {
 document.getElementById("tl-action-list")?.addEventListener("click", async (event) => {
   const doneBtn = event.target.closest(".tl-action-done");
   const reopenBtn = event.target.closest(".tl-action-reopen");
+  const alertBtn = event.target.closest(".tl-action-alert");
   if (doneBtn) {
     await patchCareItem(doneBtn.dataset.id, { status: "done" });
     toast("Marked done");
@@ -18134,7 +18177,17 @@ document.getElementById("tl-action-list")?.addEventListener("click", async (even
   if (reopenBtn) {
     await patchCareItem(reopenBtn.dataset.id, { status: "open" });
     toast("Reopened");
+    return;
   }
+  if (alertBtn) alertPersonAboutTasks(alertBtn.dataset.who, alertBtn.dataset.id);
+});
+document.getElementById("tl-action-alerts")?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".tl-alert-person");
+  if (btn) alertPersonAboutTasks(btn.dataset.who);
+});
+document.getElementById("plan-action-alerts")?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".tl-alert-person");
+  if (btn) alertPersonAboutTasks(btn.dataset.who, "", careItemsFromProfile(state.patientProfile));
 });
 
 document.getElementById("plan-calendar")?.addEventListener("click", (event) => {
@@ -18157,6 +18210,11 @@ document.getElementById("plan-items-list")?.addEventListener("click", async (eve
   if (editBtn) {
     const item = careItemsFromProfile(state.patientProfile).find((row) => row.id === editBtn.dataset.id);
     if (item) fillCareItemForm(item);
+    return;
+  }
+  const alertBtn = event.target.closest(".tl-action-alert");
+  if (alertBtn) {
+    alertPersonAboutTasks(alertBtn.dataset.who, alertBtn.dataset.id, careItemsFromProfile(state.patientProfile));
     return;
   }
   if (doneBtn) {
@@ -18378,6 +18436,175 @@ function tlWhatsAppNumber(t) {
   return String(t?.whatsapp || t?.phone || "").trim();
 }
 
+function tlNameKey(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/\./g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tlDirectoryPeople() {
+  return [...(timelineState.data?.family_team || []), ...(timelineState.data?.team_members || [])];
+}
+
+function fillActionWhoList() {
+  const el = document.getElementById("tl-action-who-list");
+  if (!el) return;
+  const names = [];
+  for (const person of tlDirectoryPeople()) {
+    if (person.name && !names.includes(person.name)) names.push(person.name);
+  }
+  el.innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+}
+
+function tlPersonForAction(who) {
+  const key = tlNameKey(who);
+  if (!key) return null;
+  const people = tlDirectoryPeople();
+  const exact = people.find((person) => tlNameKey(person.name) === key);
+  if (exact) return exact;
+  const alias = people.find((person) => (person.aliases || []).some((a) => tlNameKey(a) === key));
+  if (alias) return alias;
+  const first = people.filter((person) => tlNameKey(person.name).split(" ")[0] === key.split(" ")[0]);
+  return first.length === 1 ? first[0] : null;
+}
+
+function tlMessageChannel(person) {
+  if (!person) return null;
+  const pref = person.preferred_contact || "";
+  const wa = tlWhatsAppNumber(person);
+  const email = String(person.email || "").trim();
+  const phone = String(person.phone || "").trim();
+  const pick = (kind) => {
+    if (kind === "whatsapp" && wa) return { kind: "whatsapp", value: wa, label: "WhatsApp" };
+    if (kind === "text" && (phone || wa)) return { kind: "text", value: phone || wa, label: "Text" };
+    if (kind === "email" && email) return { kind: "email", value: email, label: "Email" };
+    return null;
+  };
+  return pick(pref) || pick("whatsapp") || pick("text") || pick("email");
+}
+
+function tlFirstName(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  if (/^(dr|doctor)\.?\s+\S+/i.test(raw)) {
+    const parts = raw.replace(/^doctor\s+/i, "Dr. ").split(/\s+/);
+    return parts.slice(0, 2).join(" ");
+  }
+  return raw.split(/\s+/)[0];
+}
+
+function tlTaskAlertText(person, items) {
+  const who = tlFirstName(person?.name || items[0]?.contact || "there");
+  const patient = tlFirstName(state.activePatientLabel || "the patient");
+  const lines = items.map((item) => {
+    const due = item.due_at ? formatCareDue(item.due_at) : "no date";
+    return `• ${item.title} — by ${due}`;
+  });
+  const intro =
+    items.length === 1
+      ? `Hi ${who} — a task on ${patient}'s Bright Health list:`
+      : `Hi ${who} — ${items.length} tasks on ${patient}'s Bright Health list:`;
+  return [intro, "", ...lines, "", "Reply if you can take these, or if something changed."].join("\n");
+}
+
+function tlMessageHref(channel, body) {
+  if (!channel) return "";
+  if (channel.kind === "email") {
+    const subject = encodeURIComponent(`Tasks for ${tlFirstName(state.activePatientLabel || "the patient")}`);
+    return `mailto:${encodeURIComponent(channel.value).replace(/%40/g, "@")}?subject=${subject}&body=${encodeURIComponent(body)}`;
+  }
+  const digits = String(channel.value || "")
+    .split(/ext|x|,/i)[0]
+    .replace(/[^\d]/g, "");
+  if (digits.length < 8) return "";
+  if (channel.kind === "whatsapp") return `https://wa.me/${digits}?text=${encodeURIComponent(body)}`;
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+  return ios ? `sms:${digits}&body=${encodeURIComponent(body)}` : `sms:${digits}?body=${encodeURIComponent(body)}`;
+}
+
+function tlOpenMessage(href) {
+  if (!href) return false;
+  if (href.startsWith("https://")) {
+    window.open(href, "_blank", "noopener");
+    return true;
+  }
+  window.location.href = href;
+  return true;
+}
+
+function tlItemsForWho(who, itemId, items) {
+  const source = (items || tlActionItems()).filter((item) => (item.status || "open") === "open");
+  if (itemId) return source.filter((item) => item.id === itemId);
+  const person = tlPersonForAction(who);
+  return source.filter((item) => {
+    if (!item.contact) return false;
+    const other = tlPersonForAction(item.contact);
+    if (person && other) return (person.id || person.name) === (other.id || other.name);
+    return tlNameKey(item.contact) === tlNameKey(who);
+  });
+}
+
+function alertPersonAboutTasks(who, itemId, items) {
+  const person = tlPersonForAction(who);
+  const channel = tlMessageChannel(person);
+  if (!channel) {
+    toast(
+      person
+        ? `Add WhatsApp, a phone, or email on ${person.name}'s card to message them`
+        : `Add ${who || "this person"} to Family or the care team with WhatsApp, a phone, or email`,
+      "error"
+    );
+    return;
+  }
+  const tasks = tlItemsForWho(who, itemId, items);
+  if (!tasks.length) return toast("No open tasks for them", "error");
+  const href = tlMessageHref(channel, tlTaskAlertText(person, tasks));
+  if (!tlOpenMessage(href)) return toast("Could not open that message", "error");
+  toast(`Opening ${channel.label} for ${tlFirstName(person.name)}`);
+}
+
+function renderTaskAlertBar(el, items) {
+  if (!el) return;
+  const open = (items || []).filter((item) => (item.status || "open") === "open" && item.contact);
+  const groups = [];
+  for (const item of open) {
+    const person = tlPersonForAction(item.contact);
+    const key = person ? person.id || tlNameKey(person.name) : `who:${tlNameKey(item.contact)}`;
+    let group = groups.find((row) => row.key === key);
+    if (!group) {
+      group = { key, who: person?.name || item.contact, person, items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  if (!groups.length) {
+    el.innerHTML = "";
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = `<p class="muted small">Alert someone on their preferred message:</p>
+    <div class="tl-action-alert-chips">${groups
+      .map((group) => {
+        const channel = tlMessageChannel(group.person);
+        const count = group.items.length;
+        if (!channel) {
+          return `<span class="tl-action-alert-missing">${escapeHtml(tlFirstName(group.who))} has ${count} open — add WhatsApp, text, or email on their card.</span>`;
+        }
+        return `<button type="button" class="btn secondary btn-sm tl-alert-person" data-who="${escapeHtml(group.who)}">Alert ${escapeHtml(tlFirstName(group.who))} · ${escapeHtml(channel.label)}${count > 1 ? ` (${count})` : ""}</button>`;
+      })
+      .join("")}</div>`;
+}
+
+function tlAlertButton(item) {
+  if ((item.status || "open") !== "open" || !item.contact) return "";
+  const channel = tlMessageChannel(tlPersonForAction(item.contact));
+  if (!channel) return "";
+  return `<button type="button" class="btn ghost btn-sm tl-action-alert" data-id="${escapeHtml(item.id)}" data-who="${escapeHtml(item.contact)}">Alert · ${escapeHtml(channel.label)}</button>`;
+}
+
 function tlContactHtml(t) {
   const methods = Object.fromEntries((timelineState.data?.contact_methods || []).map((m) => [m.value, m.label]));
   const pref = t.preferred_contact || "";
@@ -18406,7 +18633,10 @@ function tlContactHtml(t) {
     others.push(escapeHtml(t.contact_other));
   }
   const otherLine = others.length ? `<span class="timeline-team-meta">${others.join(" · ")}</span>` : "";
-  return prefLine + otherLine;
+  const notes = t.notes
+    ? `<span class="timeline-team-notes">${linkifyHtml(t.notes)}</span>`
+    : "";
+  return prefLine + otherLine + notes;
 }
 
 function tlInitials(name) {
@@ -18416,6 +18646,17 @@ function tlInitials(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+function tlSanitizeInitials(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 2);
+}
+
+function tlPersonInitials(person, name = "") {
+  return tlSanitizeInitials(person?.avatar_initials) || tlInitials(name || person?.name);
+}
+
 function tlAvatarHtml(person) {
   if (person?.avatar_url) {
     return `<span class="team-avatar"><img src="${escapeHtml(person.avatar_url)}" alt=""></span>`;
@@ -18423,11 +18664,19 @@ function tlAvatarHtml(person) {
   if (person?.avatar_emoji) {
     return `<span class="team-avatar team-avatar-emoji" title="${escapeHtml(person.avatar_key || "")}">${escapeHtml(person.avatar_emoji)}</span>`;
   }
-  return `<span class="team-avatar team-avatar-initials">${escapeHtml(tlInitials(person?.name))}</span>`;
+  return `<span class="team-avatar team-avatar-initials">${escapeHtml(tlPersonInitials(person))}</span>`;
 }
 
 function tlAvatarPreset(key) {
   return (timelineState.data?.avatar_presets || []).find((p) => p.key === key) || null;
+}
+
+function tlAvatarChoiceButton(prefix, selectedKey, key, label, innerHtml) {
+  const on = (key || "") === (selectedKey || "");
+  return `<button type="button" class="team-avatar-choice${on ? " is-selected" : ""}" data-avatar-prefix="${escapeHtml(prefix)}" data-avatar-key="${escapeHtml(key)}" title="${escapeHtml(label)}" aria-pressed="${on ? "true" : "false"}">
+            ${innerHtml}
+            <span class="team-avatar-choice-name">${escapeHtml(label)}</span>
+          </button>`;
 }
 
 function renderAvatarPicker(prefix, selectedKey) {
@@ -18442,18 +18691,34 @@ function renderAvatarPicker(prefix, selectedKey) {
       themes.push({ theme: p.theme, label: p.theme_label || p.theme });
     }
   }
+  if (!themes.length) themes.push({ theme: "roles", label: "Roles" });
+  const name = document.getElementById(`${prefix}-name`)?.value || "";
+  const person = prefix === "fam" ? tlEditingFamily() : tlEditingTeam();
+  const initials = tlSanitizeInitials(document.getElementById(`${prefix}-avatar-initials`)?.value) || tlPersonInitials(person, name);
+  const lettersChoice = tlAvatarChoiceButton(
+    prefix,
+    selectedKey,
+    "",
+    "Letters",
+    `<span class="team-avatar-choice-letters">${escapeHtml(initials)}</span>`
+  );
   el.innerHTML = themes
-    .map((th) => {
+    .map((th, idx) => {
       const items = presets.filter((p) => p.theme === th.theme);
+      const extra = idx === 0 ? lettersChoice : "";
       return `<div class="team-avatar-theme">
         <span class="team-avatar-theme-label">${escapeHtml(th.label)}</span>
         <div class="team-avatar-grid">
+          ${extra}
           ${items
             .map(
-              (p) => `<button type="button" class="team-avatar-choice${p.key === selectedKey ? " is-selected" : ""}" data-avatar-prefix="${escapeHtml(prefix)}" data-avatar-key="${escapeHtml(p.key)}" title="${escapeHtml(p.label)}" aria-pressed="${p.key === selectedKey ? "true" : "false"}">
-            <span class="team-avatar-choice-emoji">${p.emoji}</span>
-            <span class="team-avatar-choice-name">${escapeHtml(p.label)}</span>
-          </button>`
+              (p) => tlAvatarChoiceButton(
+                prefix,
+                selectedKey,
+                p.key,
+                p.label,
+                `<span class="team-avatar-choice-emoji">${p.emoji}</span>`
+              )
             )
             .join("")}
         </div>
@@ -18475,10 +18740,14 @@ function updateAvatarPreview(prefix, person = null) {
   const pending = tlAvatarFormState(prefix);
   const name = document.getElementById(`${prefix}-name`)?.value || person?.name || "";
   const key = document.getElementById(`${prefix}-avatar-key`)?.value || "";
-  const emoji = tlAvatarPreset(key)?.emoji || person?.avatar_emoji || "";
+  const typed = tlSanitizeInitials(document.getElementById(`${prefix}-avatar-initials`)?.value);
+  const initials = typed || tlPersonInitials(person, name);
+  const emoji = key ? tlAvatarPreset(key)?.emoji || "" : "";
   const url = pending.objectUrl || (!pending.clear && person?.avatar_url) || "";
   const clearBtn = document.getElementById(`${prefix}-avatar-clear-photo`);
   clearBtn?.classList.toggle("hidden", !url);
+  const lettersMark = document.getElementById(`${prefix}-avatar-picker`)?.querySelector("[data-avatar-key=''] .team-avatar-choice-letters");
+  if (lettersMark) lettersMark.textContent = initials;
   if (url) {
     el.className = "team-avatar team-avatar-preview";
     el.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
@@ -18490,7 +18759,7 @@ function updateAvatarPreview(prefix, person = null) {
     return;
   }
   el.className = "team-avatar team-avatar-preview team-avatar-initials";
-  el.textContent = tlInitials(name);
+  el.textContent = initials;
 }
 
 function resetAvatarForm(prefix) {
@@ -18503,6 +18772,8 @@ function resetAvatarForm(prefix) {
   if (fileEl) fileEl.value = "";
   const keyEl = document.getElementById(`${prefix}-avatar-key`);
   if (keyEl) keyEl.value = "";
+  const initialsEl = document.getElementById(`${prefix}-avatar-initials`);
+  if (initialsEl) initialsEl.value = "";
   updateAvatarPreview(prefix);
 }
 
@@ -18633,8 +18904,10 @@ function openTeamForm(member = null, presetName = "") {
   document.getElementById("team-email").value = member?.email || "";
   document.getElementById("team-other").value = member?.contact_other || "";
   document.getElementById("team-preferred").value = member?.preferred_contact || "";
+  document.getElementById("team-notes").value = member?.notes || "";
   resetAvatarForm("team");
   document.getElementById("team-avatar-key").value = member?.avatar_key || "";
+  document.getElementById("team-avatar-initials").value = member?.avatar_initials || "";
   renderAvatarPicker("team", member?.avatar_key || "");
   updateAvatarPreview("team", member);
   document.getElementById("btn-team-save").textContent = member ? "Save" : "Add to care team";
@@ -18665,7 +18938,10 @@ async function saveTeamForm(event) {
     email: document.getElementById("team-email").value.trim(),
     contact_other: document.getElementById("team-other").value.trim(),
     preferred_contact: document.getElementById("team-preferred").value,
+    notes: document.getElementById("team-notes").value.trim(),
     avatar_key: document.getElementById("team-avatar-key").value,
+    avatar_emoji: tlAvatarPreset(document.getElementById("team-avatar-key").value)?.emoji || "",
+    avatar_initials: tlSanitizeInitials(document.getElementById("team-avatar-initials").value),
   };
   if (!body.name) return toast("Enter a name", "error");
   try {
@@ -18815,7 +19091,7 @@ function renderEventCloseout(ev) {
   }
   const items = rows
     .map((a) => {
-      const due = a.due_at ? ` by ${escapeHtml(a.due_at)}` : "";
+      const due = a.due_at ? ` by ${escapeHtml(formatCareDue(a.due_at))}` : "";
       const done = a.status === "done" ? " is-done" : "";
       return `<li class="${done}">${escapeHtml(a.title || "")}${due}</li>`;
     })
@@ -18923,6 +19199,7 @@ function populateTimelineForm() {
   if (envList) envList.innerHTML = (data.environment_presets || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
   const whoList = document.getElementById("tl-practitioner-list");
   if (whoList) whoList.innerHTML = (data.known_practitioners || []).map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
+  fillActionWhoList();
   const srcEl = document.getElementById("tl-source");
   if (srcEl) {
     const current = srcEl.value;
@@ -19015,12 +19292,14 @@ function openFamilyForm(member = null, presetName = "") {
   document.getElementById("fam-email").value = member?.email || "";
   document.getElementById("fam-preferred").value = member?.preferred_contact || "";
   document.getElementById("fam-availability").value = member?.availability || "";
+  document.getElementById("fam-notes").value = member?.notes || "";
   const roleLabel = Object.fromEntries((timelineState.data?.family_roles || []).map((r) => [r.key, r.label]));
   document.getElementById("fam-role").value = (member?.roles || [])
     .map((r) => roleLabel[r] || r)
     .join(", ");
   resetAvatarForm("fam");
   document.getElementById("fam-avatar-key").value = member?.avatar_key || "";
+  document.getElementById("fam-avatar-initials").value = member?.avatar_initials || "";
   renderAvatarPicker("fam", member?.avatar_key || "");
   updateAvatarPreview("fam", member);
   document.getElementById("btn-family-save").textContent = member ? "Save" : "Add to family team";
@@ -19071,7 +19350,10 @@ async function saveFamilyForm(event) {
     email: document.getElementById("fam-email").value.trim(),
     preferred_contact: document.getElementById("fam-preferred").value,
     availability: document.getElementById("fam-availability").value.trim(),
+    notes: document.getElementById("fam-notes").value.trim(),
     avatar_key: document.getElementById("fam-avatar-key").value,
+    avatar_emoji: tlAvatarPreset(document.getElementById("fam-avatar-key").value)?.emoji || "",
+    avatar_initials: tlSanitizeInitials(document.getElementById("fam-avatar-initials").value),
     roles,
   };
   if (!body.name) return toast("Enter a name", "error");
@@ -19264,7 +19546,7 @@ function renderTimelineActionRow(item) {
   const today = careTodayIso();
   const overdue = careItemIsOverdue(item, today);
   const kind = CARE_KIND_LABELS[item.kind] || item.kind || "Other";
-  const due = item.due_at ? formatDiagDate(item.due_at) : "No date";
+  const due = formatCareDue(item.due_at);
   const source = ACTION_SOURCE_LABEL[item.source_kind] || (item.source === "extracted" ? "Extracted" : "");
   const status = item.status || "open";
   return `<article class="care-item-row timeline-action-row status-${escapeHtml(status)}${overdue ? " is-overdue" : ""}" data-id="${escapeHtml(item.id || "")}">
@@ -19282,7 +19564,8 @@ function renderTimelineActionRow(item) {
     <div class="care-item-actions">
       ${
         status === "open"
-          ? `<button type="button" class="btn secondary btn-sm tl-action-done" data-id="${escapeHtml(item.id)}">Done</button>`
+          ? `<button type="button" class="btn secondary btn-sm tl-action-done" data-id="${escapeHtml(item.id)}">Done</button>
+             ${tlAlertButton(item)}`
           : `<button type="button" class="btn ghost btn-sm tl-action-reopen" data-id="${escapeHtml(item.id)}">Reopen</button>`
       }
     </div>
@@ -19303,6 +19586,8 @@ function renderTimelineActions() {
     btn.classList.toggle("ghost", !active);
   });
   const items = tlActionItems();
+  fillActionWhoList();
+  renderTaskAlertBar(document.getElementById("tl-action-alerts"), items);
   renderTimelineActionCalendar(items);
   const openCount = items.filter((item) => (item.status || "open") === "open").length;
   const overdueCount = items.filter((item) => careItemIsOverdue(item)).length;
@@ -19438,8 +19723,11 @@ async function saveBallHolders(event) {
 
 function collectVisitActions() {
   const title = document.getElementById("tl-next-title")?.value.trim() || "";
-  const due = document.getElementById("tl-next-due")?.value || "";
-  return title ? [{ title, due_at: due }] : [];
+  const due = careDueValue(
+    document.getElementById("tl-next-due")?.value || "",
+    document.getElementById("tl-next-time")?.value
+  );
+  return title ? [{ title, due_at: due || "" }] : [];
 }
 
 function professionalKindSelected() {
@@ -19465,8 +19753,10 @@ function fillCloseoutRows(ev) {
   const first = (ev?.closeout_actions || []).find((a) => a.status !== "done") || {};
   const titleEl = document.getElementById("tl-next-title");
   const dueEl = document.getElementById("tl-next-due");
+  const timeEl = document.getElementById("tl-next-time");
   if (titleEl) titleEl.value = first.title || "";
-  if (dueEl) dueEl.value = first.due_at || "";
+  if (dueEl) dueEl.value = careDueDay(first.due_at);
+  if (timeEl) timeEl.value = careDueTime(first.due_at);
 }
 
 async function loadTimeline({ quiet = false } = {}) {
@@ -19551,8 +19841,10 @@ function closeTimelineForm() {
   if (idEl) idEl.value = "";
   const nextTitle = document.getElementById("tl-next-title");
   const nextDue = document.getElementById("tl-next-due");
+  const nextTime = document.getElementById("tl-next-time");
   if (nextTitle) nextTitle.value = "";
   if (nextDue) nextDue.value = "";
+  if (nextTime) nextTime.value = "";
   const vitalsCheck = document.getElementById("tl-vitals-check");
   if (vitalsCheck) vitalsCheck.checked = false;
 }
@@ -19832,6 +20124,7 @@ function buildContactSheet(audience, asOf) {
       if (m.email) lines.push(`Email: ${m.email}`);
       if (m.preferred_contact) lines.push(`Prefers: ${methods[m.preferred_contact] || m.preferred_contact}`);
       if (m.availability) lines.push(`Availability: ${m.availability}`);
+      if (m.notes) lines.push(`Notes: ${m.notes}`);
       lines.push("");
     }
   } else {
@@ -20050,6 +20343,12 @@ function bindAvatarForm(prefix) {
     updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
   });
   document.getElementById(`${prefix}-name`)?.addEventListener("input", () => {
+    updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
+  });
+  document.getElementById(`${prefix}-avatar-initials`)?.addEventListener("input", (e) => {
+    const cleaned = tlSanitizeInitials(e.target.value);
+    if (e.target.value !== cleaned) e.target.value = cleaned;
+    selectAvatarChoice(prefix, "");
     updateAvatarPreview(prefix, prefix === "fam" ? tlEditingFamily() : tlEditingTeam());
   });
 }

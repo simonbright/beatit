@@ -62,6 +62,21 @@ def _day(value: Any) -> str:
         return ""
 
 
+def _due(value: Any) -> str:
+    """Date, or date plus time when one was recorded."""
+    text = str(value or "").strip().replace("Z", "").replace(" ", "T", 1)
+    day = _day(text)
+    if not day:
+        return ""
+    if len(text) >= 16 and text[10] == "T":
+        try:
+            datetime.strptime(text[:16], "%Y-%m-%dT%H:%M")
+        except ValueError:
+            return day
+        return text[:16]
+    return day
+
+
 def normalize_ball_holder(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -105,7 +120,7 @@ def normalize_visit_actions(raw: Any) -> list[dict[str, str]]:
         if not isinstance(row, dict):
             continue
         title = _clean(row.get("title") or row.get("action") or row.get("what"), 160)
-        due = _day(row.get("due_at") or row.get("due") or row.get("by"))
+        due = _due(row.get("due_at") or row.get("due") or row.get("by"))
         if not title:
             continue
         key = (title.lower(), due)

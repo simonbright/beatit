@@ -4453,7 +4453,7 @@ async def api_delete_patient_food_drink(patient_id: str, food_id: str):
 class PatientCareItemCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     kind: str | None = Field(default="other", max_length=40)
-    due_at: str | None = Field(default=None, max_length=10)
+    due_at: str | None = Field(default=None, max_length=32)
     notes: str | None = Field(default=None, max_length=2000)
     contact: str | None = Field(default=None, max_length=120)
 
@@ -4461,7 +4461,7 @@ class PatientCareItemCreateRequest(BaseModel):
 class PatientCareItemUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=160)
     kind: str | None = Field(default=None, max_length=40)
-    due_at: str | None = Field(default=None, max_length=10)
+    due_at: str | None = Field(default=None, max_length=32)
     notes: str | None = Field(default=None, max_length=2000)
     contact: str | None = Field(default=None, max_length=120)
     status: str | None = Field(default=None, max_length=20)
@@ -4470,7 +4470,7 @@ class PatientCareItemUpdateRequest(BaseModel):
 class PatientCareItemActivityRequest(BaseModel):
     note: str = Field(min_length=1, max_length=500)
     kind: str | None = Field(default="note", max_length=40)
-    follow_up_at: str | None = Field(default=None, max_length=10)
+    follow_up_at: str | None = Field(default=None, max_length=32)
 
 
 def _care_item_profile_payload(patient_id: str, entry: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -5008,6 +5008,7 @@ class PatientTeamMemberRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=400)
     avatar_key: str | None = Field(default=None, max_length=40)
     avatar_emoji: str | None = Field(default=None, max_length=16)
+    avatar_initials: str | None = Field(default=None, max_length=8)
 
 
 def _validate_team_contact(body: "PatientTeamMemberRequest") -> None:
@@ -5043,6 +5044,7 @@ async def api_add_team_member(patient_id: str, body: PatientTeamMemberRequest, r
             notes=body.notes,
             avatar_key=body.avatar_key,
             avatar_emoji=body.avatar_emoji,
+            avatar_initials=body.avatar_initials,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -5109,8 +5111,10 @@ class PatientFamilyMemberRequest(BaseModel):
     email: str | None = Field(default=None, max_length=120)
     preferred_contact: str | None = Field(default=None, max_length=30)
     availability: str | None = Field(default=None, max_length=200)
+    notes: str | None = Field(default=None, max_length=400)
     avatar_key: str | None = Field(default=None, max_length=40)
     avatar_emoji: str | None = Field(default=None, max_length=16)
+    avatar_initials: str | None = Field(default=None, max_length=8)
     roles: list[str] | None = Field(default=None, max_length=12)
 
 

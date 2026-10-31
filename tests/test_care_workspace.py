@@ -115,7 +115,19 @@ def test_visit_actions_are_optional():
 def test_normalize_visit_actions_needs_title():
     assert normalize_visit_actions([{"title": "  ", "due_at": "2026-11-01"}]) == []
     items = normalize_visit_actions([{"title": "Send CT", "due_at": "2026-11-01T15:00:00"}])
-    assert items[0]["due_at"] == "2026-11-01"
+    assert items[0]["due_at"] == "2026-11-01T15:00"
+
+
+def test_care_item_keeps_due_time(patient):
+    item = case_manager.add_patient_care_item(
+        patient,
+        title="Call internist",
+        due_at="2026-11-01 16:30",
+        contact="Simon",
+    )
+    assert item["due_at"] == "2026-11-01T16:30"
+    updated = case_manager.update_patient_care_item(patient, item["id"], due_at="2026-11-01")
+    assert updated["due_at"] == "2026-11-01"
 
 
 def test_internal_medicine_without_attending_name():

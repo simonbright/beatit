@@ -9031,6 +9031,13 @@ body.app-updating-active {
 #btn-team-add, #btn-family-add, #btn-family-share-staff, #btn-team-share-family { white-space: nowrap; flex: 0 0 auto; }
 .timeline-team-head-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
 .timeline-contact-pref { font-size: 0.78rem; color: var(--text); }
+.timeline-team-notes {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .timeline-contact-link { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 .timeline-contact-link:hover { text-decoration: underline; }
 #panel-timeline input[type="tel"], #panel-timeline input[type="email"] { width: 100%; box-sizing: border-box; }
@@ -9062,6 +9069,29 @@ body.app-updating-active {
 }
 .team-avatar-picker legend { font-weight: 650; padding: 0 0.25rem; }
 .team-avatar-photo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; margin-bottom: 0.45rem; }
+.team-avatar-letters-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--muted);
+}
+.team-avatar-letters-label input {
+  width: 3.2rem;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.team-avatar-choice-letters {
+  min-height: 1.25rem;
+  display: flex;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
 .team-avatar-themes { display: flex; flex-direction: column; gap: 0.55rem; }
 .team-avatar-theme-label { display: block; font-size: 0.76rem; font-weight: 700; color: var(--muted); margin-bottom: 0.25rem; }
 .team-avatar-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; }
@@ -9289,7 +9319,7 @@ body.app-updating-active {
 .tl-vitals-check input { width: auto; }
 .tl-closeout {
   display: grid;
-  grid-template-columns: minmax(10rem, 1.4fr) minmax(8rem, 0.7fr);
+  grid-template-columns: minmax(10rem, 1.4fr) minmax(8rem, 0.7fr) minmax(6.5rem, 0.55fr);
   gap: 0.5rem 0.7rem;
   margin: 0.2rem 0 0.1rem;
   padding: 0;
@@ -9324,7 +9354,7 @@ body.app-updating-active {
 }
 .tl-action-add {
   display: grid;
-  grid-template-columns: minmax(10rem, 1.6fr) minmax(6rem, 0.8fr) minmax(7rem, 0.7fr) auto;
+  grid-template-columns: minmax(10rem, 1.6fr) minmax(6rem, 0.8fr) minmax(7.5rem, 0.7fr) minmax(6rem, 0.55fr) auto;
   gap: 0.45rem 0.6rem;
   align-items: end;
   margin: 0.55rem 0 0.85rem;
@@ -9351,6 +9381,22 @@ body.app-updating-active {
   .timeline-actions-layout { grid-template-columns: 1fr; }
 }
 .timeline-action-list { max-height: 22rem; overflow: auto; }
+.tl-action-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0 0 0.55rem;
+}
+.tl-action-alert-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.tl-action-alert-missing {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
 .care-source-pill {
   font-size: 0.7rem;
   font-weight: 650;

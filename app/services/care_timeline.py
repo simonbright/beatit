@@ -79,6 +79,8 @@ CONTACT_METHODS: dict[str, str] = {
 }
 
 TEAM_AVATAR_PRESETS: list[dict[str, str]] = [
+    {"key": "role-doctor", "theme": "roles", "theme_label": "Roles", "label": "Doctor", "emoji": "🩺"},
+    {"key": "role-nurse", "theme": "roles", "theme_label": "Roles", "label": "Nurse", "emoji": "💉"},
     {"key": "person-woman", "theme": "people", "theme_label": "People", "label": "Woman", "emoji": "👩"},
     {"key": "person-man", "theme": "people", "theme_label": "People", "label": "Man", "emoji": "👨"},
     {"key": "person", "theme": "people", "theme_label": "People", "label": "Person", "emoji": "🧑"},
@@ -122,6 +124,13 @@ def normalize_avatar_fields(raw: dict[str, Any] | None) -> tuple[str, str]:
     if emoji and len(emoji) <= 16 and "<" not in emoji and ">" not in emoji:
         return "", emoji
     return "", ""
+
+
+def normalize_avatar_initials(raw: dict[str, Any] | None) -> str:
+    """Optional 2-letter icon override. Empty means derive from the name."""
+    data = raw if isinstance(raw, dict) else {}
+    text = str(data.get("avatar_initials") or "").strip().upper()
+    return "".join(ch for ch in text if ch.isalnum())[:2]
 
 
 def avatar_label(key: str) -> str:
@@ -196,8 +205,10 @@ def normalize_family_member(raw: dict[str, Any]) -> dict[str, Any] | None:
         "email": _clean(raw.get("email"), 120),
         "preferred_contact": normalize_contact_method(raw.get("preferred_contact")),
         "availability": _clean(raw.get("availability"), 200),
+        "notes": _clean(raw.get("notes"), 400),
         "avatar_key": avatar_key,
         "avatar_emoji": avatar_emoji,
+        "avatar_initials": normalize_avatar_initials(raw),
         "roles": roles[:12],
         "role_since": role_since,
         "aliases": [a for a in (_clean(x, 120) for x in (raw.get("aliases") or [])) if a][:6],
@@ -330,6 +341,7 @@ def normalize_team_member(raw: dict[str, Any]) -> dict[str, Any] | None:
         "notes": _clean(raw.get("notes"), 400),
         "avatar_key": avatar_key,
         "avatar_emoji": avatar_emoji,
+        "avatar_initials": normalize_avatar_initials(raw),
         "created_at": str(raw.get("created_at") or _now_iso()),
         "updated_at": str(raw.get("updated_at") or "") or None,
     }
@@ -900,6 +912,7 @@ def build_care_team(
             "notes": m.get("notes") or "",
             "avatar_key": m.get("avatar_key") or "",
             "avatar_emoji": m.get("avatar_emoji") or "",
+            "avatar_initials": m.get("avatar_initials") or "",
             "contacts": 0,
             "events": 0,
             "first_at": None,
@@ -926,6 +939,7 @@ def build_care_team(
                 "notes": "",
                 "avatar_key": "",
                 "avatar_emoji": "",
+                "avatar_initials": "",
                 "contacts": 0,
                 "events": 0,
                 "first_at": None,
@@ -1218,9 +1232,21 @@ def build_gaps(
 
     # 4) Plan items past due
     for item in profile.get("care_items") or []:
-        due = item.get("due_at")
-        if (item.get("status") or "open") == "open" and due and due < today.isoformat():
-            add("warn", "overdue", f"Overdue from the plan: {item.get('title')} (due {_fmt_day(datetime.fromisoformat(due).date())})", action="open_plan")
+        due = str(item.get("due_at") or "")
+        if (item.get("status") or "open") != "open" or not due:
+            continue
+        due_day = due[:10]
+        past = due_day < today.isoformat()
+        if not past and due_day == today.isoformat() and "T" in due:
+            past = due[:16] < datetime.now().strftime("%Y-%m-%dT%H:%M")
+        if past:
+            try:
+                due_label = _fmt_day(datetime.fromisoformat(due_day).date())
+            except ValueError:
+                due_label = due_day
+            if "T" in due and len(due) >= 16:
+                due_label = f"{due_label} {due[11:16]}"
+            add("warn", "overdue", f"Overdue from the plan: {item.get('title')} (due {due_label})", action="open_plan")
 
     # Warnings first; within each, standing issues before per-day ones, newest day first.
     order = {"warn": 0, "info": 1}
