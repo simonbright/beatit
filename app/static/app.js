@@ -18052,11 +18052,55 @@ document.getElementById("doctor-questions-list")?.addEventListener("focusout", (
   );
 });
 
+function syncTlActionAddDue() {
+  const due = document.getElementById("tl-action-add-due");
+  if (due) due.value = timelineState.actionSelectedDay || careTodayIso();
+}
+
+async function saveTimelineAction(event) {
+  event?.preventDefault?.();
+  if (!state.activePatientId) return toast("Select a patient first", "error");
+  const title = document.getElementById("tl-action-add-title")?.value.trim() || "";
+  if (!title) return toast("Enter the action", "error");
+  const btn = document.getElementById("btn-tl-action-add");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/patients/${state.activePatientId}/care-items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        title,
+        kind: "follow_up",
+        due_at: document.getElementById("tl-action-add-due")?.value || careTodayIso(),
+        contact: document.getElementById("tl-action-add-who")?.value.trim() || "",
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Could not save");
+    }
+    applyProfileResponse(await res.json());
+    const titleEl = document.getElementById("tl-action-add-title");
+    const whoEl = document.getElementById("tl-action-add-who");
+    if (titleEl) titleEl.value = "";
+    if (whoEl) whoEl.value = "";
+    syncTlActionAddDue();
+    toast("Action added");
+  } catch (err) {
+    toast(err.message || "Could not save", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+document.getElementById("tl-action-add")?.addEventListener("submit", saveTimelineAction);
 document.getElementById("tl-action-calendar")?.addEventListener("click", (event) => {
   const cell = event.target.closest("[data-tl-action-day]");
   if (!cell) return;
   const day = cell.dataset.tlActionDay;
   timelineState.actionSelectedDay = timelineState.actionSelectedDay === day ? null : day;
+  syncTlActionAddDue();
   renderTimelineActions();
 });
 document.getElementById("btn-tl-action-prev")?.addEventListener("click", () => {
@@ -18070,6 +18114,7 @@ document.getElementById("btn-tl-action-next")?.addEventListener("click", () => {
 document.getElementById("btn-tl-action-today")?.addEventListener("click", () => {
   timelineState.actionMonth = startOfWeek(new Date());
   timelineState.actionSelectedDay = careTodayIso();
+  syncTlActionAddDue();
   renderTimelineActions();
 });
 document.querySelectorAll(".tl-action-filter").forEach((btn) => {
@@ -18217,7 +18262,7 @@ const TIMELINE_CAT_FILTER = {
 var timelineState = {
   data: null,
   patientId: null,
-  range: "7d",
+  range: "today",
   cat: "all",
   search: "",
   showChatter: false,
@@ -19245,6 +19290,8 @@ function renderTimelineActionRow(item) {
 }
 
 function renderTimelineActions() {
+  const dueEl = document.getElementById("tl-action-add-due");
+  if (dueEl && !dueEl.value) syncTlActionAddDue();
   const listEl = document.getElementById("tl-action-list");
   const countEl = document.getElementById("tl-action-count");
   const selectedEl = document.getElementById("tl-action-selected");
@@ -19389,21 +19436,10 @@ async function saveBallHolders(event) {
   }
 }
 
-function closeoutRowHtml(action = {}) {
-  return `<div class="tl-closeout-row">
-    <label>Action<input type="text" class="tl-action-title" maxlength="160" value="${escapeHtml(action.title || "")}" placeholder="e.g. Send CT to Dr. Gupta"></label>
-    <label>By when<input type="date" class="tl-action-due" value="${escapeHtml(action.due_at || "")}"></label>
-    <button type="button" class="btn ghost btn-sm tl-action-remove">Remove</button>
-  </div>`;
-}
-
 function collectVisitActions() {
-  return [...document.querySelectorAll("#tl-closeout-rows .tl-closeout-row")]
-    .map((row) => ({
-      title: row.querySelector(".tl-action-title")?.value.trim() || "",
-      due_at: row.querySelector(".tl-action-due")?.value || "",
-    }))
-    .filter((a) => a.title);
+  const title = document.getElementById("tl-next-title")?.value.trim() || "";
+  const due = document.getElementById("tl-next-due")?.value || "";
+  return title ? [{ title, due_at: due }] : [];
 }
 
 function professionalKindSelected() {
@@ -19423,17 +19459,14 @@ function syncTimelineCloseoutAndVitals() {
   if (check && kindEl) check.checked = kindEl.value === "vitals";
   const showCloseout = professionalKindSelected() && kindEl?.value !== "vitals";
   closeout?.classList.toggle("hidden", !showCloseout);
-  const rows = document.getElementById("tl-closeout-rows");
-  if (showCloseout && rows && !rows.children.length) rows.innerHTML = closeoutRowHtml();
 }
 
 function fillCloseoutRows(ev) {
-  const rows = document.getElementById("tl-closeout-rows");
-  if (!rows) return;
-  const existing = ev?.closeout_actions || [];
-  rows.innerHTML = existing.length
-    ? existing.filter((a) => a.status !== "done").map((a) => closeoutRowHtml(a)).join("") || closeoutRowHtml()
-    : closeoutRowHtml();
+  const first = (ev?.closeout_actions || []).find((a) => a.status !== "done") || {};
+  const titleEl = document.getElementById("tl-next-title");
+  const dueEl = document.getElementById("tl-next-due");
+  if (titleEl) titleEl.value = first.title || "";
+  if (dueEl) dueEl.value = first.due_at || "";
 }
 
 async function loadTimeline({ quiet = false } = {}) {
@@ -19472,8 +19505,12 @@ function tlToLocalInput(dt) {
 function openTimelineForm(ev = null, preset = null) {
   const form = document.getElementById("timeline-form");
   if (!form) return;
+  document.getElementById("timeline-import")?.classList.add("hidden");
+  document.getElementById("timeline-update")?.classList.add("hidden");
   populateTimelineForm();
   form.classList.remove("hidden");
+  const extraDetails = document.getElementById("tl-extra-details");
+  if (extraDetails) extraDetails.open = false;
   document.getElementById("tl-edit-id").value = ev?.care_event_id || "";
   document.getElementById("tl-kind").value = ev ? ev.kind : preset?.kind || "visit";
   let dt = ev ? tlParseAt(ev.at) : new Date();
@@ -19495,7 +19532,7 @@ function openTimelineForm(ev = null, preset = null) {
   if (status) status.textContent = "";
   const srcEl = document.getElementById("tl-source");
   if (srcEl) srcEl.value = ev?.source === "whatsapp" ? "" : ev?.source_document_id || "";
-  document.getElementById("btn-tl-save").textContent = ev ? "Save changes" : "Add to timeline";
+  document.getElementById("btn-tl-save").textContent = ev ? "Save changes" : "Save";
   form.dataset.source = ev?.source || "";
   const vitalsCheck = document.getElementById("tl-vitals-check");
   if (vitalsCheck) vitalsCheck.checked = ev?.kind === "vitals";
@@ -19512,8 +19549,10 @@ function closeTimelineForm() {
   if (form) form.dataset.source = "";
   const idEl = document.getElementById("tl-edit-id");
   if (idEl) idEl.value = "";
-  const rows = document.getElementById("tl-closeout-rows");
-  if (rows) rows.innerHTML = "";
+  const nextTitle = document.getElementById("tl-next-title");
+  const nextDue = document.getElementById("tl-next-due");
+  if (nextTitle) nextTitle.value = "";
+  if (nextDue) nextDue.value = "";
   const vitalsCheck = document.getElementById("tl-vitals-check");
   if (vitalsCheck) vitalsCheck.checked = false;
 }
@@ -19536,16 +19575,6 @@ async function saveTimelineForm(event) {
     summary: document.getElementById("tl-summary").value.trim(),
     actions: collectVisitActions(),
   };
-  if (professionalKindSelected() && body.kind !== "vitals") {
-    const complete = body.actions.filter((a) => a.title && a.due_at);
-    const existingCloseout = editId
-      ? (timelineState.data?.events || []).find((e) => e.care_event_id === editId)?.closeout_actions || []
-      : [];
-    if (!complete.length && !existingCloseout.some((a) => a.status !== "done" && a.due_at)) {
-      syncTimelineCloseoutAndVitals();
-      return toast("Add what happens next — an action and a date", "error");
-    }
-  }
   const existing = editId ? (timelineState.data?.events || []).find((e) => e.care_event_id === editId) : null;
   if (!existing || existing.source !== "whatsapp" || srcId) {
     body.source_document_id = srcId || null;
@@ -19883,17 +19912,6 @@ document.getElementById("tl-vitals-check")?.addEventListener("change", () => {
   if (kindEl && document.getElementById("tl-vitals-check")?.checked) kindEl.value = "vitals";
   syncTimelineCloseoutAndVitals();
 });
-document.getElementById("btn-tl-add-action")?.addEventListener("click", () => {
-  document.getElementById("tl-closeout-rows")?.insertAdjacentHTML("beforeend", closeoutRowHtml());
-});
-document.getElementById("tl-closeout-rows")?.addEventListener("click", (e) => {
-  const btn = e.target.closest(".tl-action-remove");
-  if (!btn) return;
-  btn.closest(".tl-closeout-row")?.remove();
-  if (!document.querySelector("#tl-closeout-rows .tl-closeout-row")) {
-    document.getElementById("tl-closeout-rows").innerHTML = closeoutRowHtml();
-  }
-});
 document.getElementById("btn-ball-edit")?.addEventListener("click", openBallForm);
 document.getElementById("btn-ball-cancel")?.addEventListener("click", closeBallForm);
 document.getElementById("btn-ball-add")?.addEventListener("click", () => {
@@ -19927,7 +19945,11 @@ document.getElementById("tl-import-file")?.addEventListener("change", () => {
   }
   if (file) runWhatsAppImport();
 });
-document.getElementById("tl-file")?.addEventListener("change", renderTrFileList);
+document.getElementById("tl-file")?.addEventListener("change", () => {
+  const extra = document.getElementById("tl-extra-details");
+  if (extra) extra.open = true;
+  renderTrFileList();
+});
 document.getElementById("btn-tl-update-copy")?.addEventListener("click", async () => {
   const text = document.getElementById("tl-update-text")?.value || "";
   try {

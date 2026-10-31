@@ -10,11 +10,11 @@ from app.services import case_manager
 from app.services.care_timeline import CARE_EVENT_KINDS, kinds_payload, normalize_care_event_kind
 from app.services.care_workspace import (
     build_care_workspace_brief,
+    complete_visit_actions,
     find_internal_medicine_team,
     is_professional_visit_kind,
     normalize_ball_holders,
     normalize_visit_actions,
-    require_visit_closeout,
 )
 
 
@@ -100,14 +100,14 @@ def test_normalize_ball_holders_keeps_people_and_dates():
     assert holders[1]["until"] == "2026-11-02"
 
 
-def test_professional_visit_requires_action_and_date():
-    with pytest.raises(ValueError, match="action"):
-        require_visit_closeout("visit", [])
-    with pytest.raises(ValueError, match="action"):
-        require_visit_closeout("visit", [{"title": "Call the internist"}])
-    require_visit_closeout("visit", [{"title": "Call the internist", "due_at": "2026-11-01"}])
-    require_visit_closeout("vitals", [])
-    require_visit_closeout("note", [])
+def test_visit_actions_are_optional():
+    assert complete_visit_actions([]) == []
+    assert complete_visit_actions([{"title": "Call the internist"}]) == [
+        {"title": "Call the internist"}
+    ]
+    assert complete_visit_actions(
+        [{"title": "Call the internist", "due_at": "2026-11-01"}]
+    ) == [{"title": "Call the internist", "due_at": "2026-11-01"}]
     assert is_professional_visit_kind("transcript")
     assert not is_professional_visit_kind("vitals")
 

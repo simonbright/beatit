@@ -1229,7 +1229,7 @@
         <div class="row-between wrap timeline-head">
           <div>
             <h3>Family timeline</h3>
-            <p class="muted small">Add a visit, test, or note — attach files if you have them. Links stay clickable; every entry shows its source.</p>
+            <p class="muted small">Today’s visits, tests, and notes. Add a visit in one place — files are optional.</p>
           </div>
           <div class="timeline-head-actions">
             <button type="button" class="btn primary btn-sm" id="btn-timeline-log">+ Add</button>
@@ -1280,7 +1280,19 @@
               <button type="button" class="btn ghost btn-sm tl-action-filter" data-action-filter="done">Done</button>
             </div>
           </div>
-          <p class="muted small">Pulled from chats and doctor notes — tap a day to see what is due.</p>
+          <p class="muted small">Add one here, or we pull them from chats and visit notes. Tap a day to see what is due.</p>
+          <form id="tl-action-add" class="tl-action-add" autocomplete="off">
+            <label for="tl-action-add-title">Action
+              <input type="text" id="tl-action-add-title" maxlength="160" required placeholder="e.g. Simon to FU with Internal Med re biopsy">
+            </label>
+            <label for="tl-action-add-who">Who
+              <input type="text" id="tl-action-add-who" maxlength="120" placeholder="Simon">
+            </label>
+            <label for="tl-action-add-due">By
+              <input type="date" id="tl-action-add-due">
+            </label>
+            <button type="submit" class="btn primary btn-sm" id="btn-tl-action-add">Add</button>
+          </form>
           <div class="timeline-actions-layout">
             <div class="plan-calendar-wrap">
               <div class="plan-calendar-header">
@@ -1327,34 +1339,39 @@
             <datalist id="tl-practitioner-list"></datalist>
           </label>
           <label for="tl-role">Role / specialty
-            <input type="text" id="tl-role" list="tl-role-list" maxlength="80" placeholder="e.g. Oncology">
+            <input type="text" id="tl-role" list="tl-role-list" maxlength="80" placeholder="e.g. Internal medicine">
             <datalist id="tl-role-list"></datalist>
           </label>
           <label for="tl-location">Where
             <input type="text" id="tl-location" list="tl-env-list" maxlength="120" placeholder="Unit, room, clinic">
           </label>
-          <label for="tl-source">Source (optional)
-            <select id="tl-source"><option value="">— None —</option></select>
+          <label for="tl-summary" class="care-item-notes">What happened
+            <textarea id="tl-summary" rows="4" maxlength="4000" placeholder="What was said or done. e.g. Switching to oral antibiotics tomorrow. Biotype still pending."></textarea>
           </label>
-          <label for="tl-summary" class="care-item-notes">What happened / what was said
-            <textarea id="tl-summary" rows="4" maxlength="4000" placeholder="Stick to what was said or done. e.g. Blood cultures still pending. Continuing IV antibiotics. CT abdomen ordered for tomorrow."></textarea>
-          </label>
-          <label for="tl-file" class="care-item-notes">Notes or files <span class="muted small">(optional)</span>
-            <input type="file" id="tl-file" multiple>
-            <span class="muted small">txt, md, docx, pdf — we’ll summarize them onto the timeline.</span>
-          </label>
-          <p id="tl-file-list" class="muted small tr-file-list"></p>
-          <label for="tl-extra" class="care-item-notes">…or paste longer notes
-            <textarea id="tl-extra" rows="4" placeholder="Paste visit notes or a transcript if you have them"></textarea>
-          </label>
-          <fieldset id="tl-closeout" class="tl-closeout hidden">
-            <legend>What happens next</legend>
-            <p class="muted small">Every staff visit ends with at least one action and a date.</p>
-            <div id="tl-closeout-rows" class="tl-closeout-rows"></div>
-            <button type="button" class="btn ghost btn-sm" id="btn-tl-add-action">+ Add action</button>
-          </fieldset>
+          <div id="tl-closeout" class="tl-closeout hidden">
+            <label for="tl-next-title">Next action <span class="muted small">(optional)</span>
+              <input type="text" id="tl-next-title" class="tl-action-title" maxlength="160" placeholder="e.g. Follow up on biopsy booking">
+            </label>
+            <label for="tl-next-due">By when
+              <input type="date" id="tl-next-due" class="tl-action-due">
+            </label>
+          </div>
+          <details id="tl-extra-details" class="tl-extra-details">
+            <summary>Files or longer notes <span class="muted small">(optional)</span></summary>
+            <label for="tl-file" class="care-item-notes">Notes or files
+              <input type="file" id="tl-file" multiple>
+              <span class="muted small">txt, md, docx, pdf — we’ll summarize them onto the timeline.</span>
+            </label>
+            <p id="tl-file-list" class="muted small tr-file-list"></p>
+            <label for="tl-extra" class="care-item-notes">Paste notes
+              <textarea id="tl-extra" rows="4" placeholder="Paste visit notes or a transcript if you have them"></textarea>
+            </label>
+            <label for="tl-source">Link a library file
+              <select id="tl-source"><option value="">— None —</option></select>
+            </label>
+          </details>
           <div class="care-item-form-actions">
-            <button type="submit" class="btn primary" id="btn-tl-save">Add to timeline</button>
+            <button type="submit" class="btn primary" id="btn-tl-save">Save</button>
             <button type="button" class="btn ghost" id="btn-tl-cancel">Cancel</button>
             <span id="tl-status" class="muted small"></span>
           </div>
@@ -1550,9 +1567,9 @@
 
         <div class="timeline-filters">
           <div class="timeline-filter-group" role="group" aria-label="Time range">
-            <button type="button" class="btn ghost btn-sm tl-range" data-range="today">Today</button>
+            <button type="button" class="btn secondary btn-sm tl-range active" data-range="today">Today</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="3d">3 days</button>
-            <button type="button" class="btn secondary btn-sm tl-range active" data-range="7d">7 days</button>
+            <button type="button" class="btn ghost btn-sm tl-range" data-range="7d">7 days</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="30d">30 days</button>
             <button type="button" class="btn ghost btn-sm tl-range" data-range="all">All</button>
           </div>

@@ -122,12 +122,8 @@ def normalize_visit_actions(raw: Any) -> list[dict[str, str]]:
     return out[:12]
 
 
-def require_visit_closeout(kind: str | None, actions: list[dict[str, str]]) -> None:
-    if not is_professional_visit_kind(kind):
-        return
-    complete = [a for a in actions if a.get("title") and a.get("due_at")]
-    if not complete:
-        raise ValueError("Every staff visit needs at least one next action and a date")
+def complete_visit_actions(actions: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    return [a for a in (actions or []) if a.get("title")]
 
 
 def _role_is_internal_medicine(role: str) -> bool:

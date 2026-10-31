@@ -217,7 +217,6 @@ from app.services.case_manager import (
     delete_patient_care_event,
     set_patient_ball_holders,
     attach_event_actions,
-    event_closeout_items,
     import_patient_care_events,
     add_patient_team_member,
     update_patient_team_member,
@@ -4850,7 +4849,6 @@ async def api_dismiss_patient_gap(patient_id: str, body: PatientGapDismissReques
     return await _timeline_payload(patient_id)
 
 
-@router.post("/patients/{patient_id}/care-events")
 def _closeout_dicts(actions: list[VisitActionRequest] | None) -> list[dict[str, Any]]:
     return [a.model_dump() for a in (actions or [])]
 
@@ -4862,38 +4860,24 @@ def _apply_visit_closeout(
     *,
     existing_ok: bool = False,
 ) -> None:
-    from app.services.care_workspace import (
-        is_professional_visit_kind,
-        normalize_visit_actions,
-        require_visit_closeout,
-    )
+    from app.services.care_workspace import complete_visit_actions, normalize_visit_actions
 
-    kind = (entry or {}).get("kind")
-    cleaned = normalize_visit_actions(_closeout_dicts(actions))
+    if not entry:
+        return
+    cleaned = complete_visit_actions(normalize_visit_actions(_closeout_dicts(actions)))
     if cleaned:
-        attach_event_actions(patient_id, entry["id"], cleaned, source_kind=kind or "visit")
+        attach_event_actions(patient_id, entry["id"], cleaned, source_kind=entry.get("kind") or "visit")
         return
-    if not is_professional_visit_kind(kind):
-        return
-    if existing_ok and event_closeout_items(get_patient_profile(patient_id), entry["id"]):
-        return
-    require_visit_closeout(kind, cleaned)
+    _ = existing_ok
 
 
+@router.post("/patients/{patient_id}/care-events")
 async def api_add_patient_care_event(
     patient_id: str,
     body: PatientCareEventCreateRequest,
     request: Request,
 ):
     try:
-        from app.services.care_workspace import (
-            is_professional_visit_kind,
-            normalize_visit_actions,
-            require_visit_closeout,
-        )
-
-        if is_professional_visit_kind(body.kind):
-            require_visit_closeout(body.kind, normalize_visit_actions(_closeout_dicts(body.actions)))
         entry = add_patient_care_event(
             patient_id,
             kind=body.kind,
@@ -5328,12 +5312,6 @@ async def api_import_visit_transcript(
             status_code=400,
             detail="Switch to this patient (and a case) first — the files are saved to that case's Library.",
         )
-    try:
-        from app.services.care_workspace import normalize_visit_actions, require_visit_closeout
-
-        require_visit_closeout("transcript", normalize_visit_actions(_closeout_dicts(body.actions)))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     attachments = list(body.files or [])
     if body.file_base64:
         attachments.append(

@@ -294,7 +294,7 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 
 **Visit transcripts**
 
-- **Record a visit**: pick who was in, when and where, then attach one or more `.txt`, `.md`, `.docx`, `.pdf`, `.vtt` or `.srt` files — and/or paste text.
+- **+ Add**: one form for a visit, test, or note. Files and a next action are optional.
 - Each file is saved **word for word** to the active case's Library (timing cues removed, speaker labels kept) and linked to one *Visit transcript* entry on the timeline. PDFs keep the original file; a scan with no extractable text is still stored so it can be opened from the Library.
 - Notes are summarized into a few factual bullets on the timeline. *Key points for the timeline* is optional — leave it blank to auto-summarize, or write your own.
 - Requires the patient (and a case) to be active, because the files are stored in that case's Library.
@@ -305,7 +305,7 @@ Deterministic checks over what has been recorded — no AI. Every flag says *not
 - Filters: Today / 3 / 7 / 30 days / All; Care team, Tests & results, Moves & procedures, Meds, Family updates, Plan, Documents; free-text search.
 - Short chat replies ("thanks", "ok") are imported but hidden by default — **Show chat replies** reveals them.
 - **Who has the ball** stays at the top of Timeline: one or more people, each with a since date (and optional until). Empty is shown as “nobody assigned.”
-- Every staff visit (practitioner visit, call, family meeting, procedure, recorded notes) must close with at least one next action and a date.
+- Staff visits can add an optional next action and date. The timeline opens on **Today**.
 - **Classify** a WhatsApp message to turn it into a structured fact (e.g. *Result shared*, practitioner, role, or **vitals check**) while keeping the original text and sender.
 - **Family update**: builds a plain-text digest (Today / 24h / 3 days / 7 days) from timeline entries only — Copy or Share into the family chat. Questions and older chat messages are left out of the digest.
 - **Import WhatsApp**: on a phone, group → name → *Export Chat → Without Media*; upload the `.txt` or `.zip`. A full re-export is fine — messages already on the timeline are skipped (same sender, minute, and wording), and only new ones are added. The import panel hides when it finishes.
