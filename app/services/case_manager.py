@@ -2710,6 +2710,10 @@ def add_patient_care_event(
     summary_source: str | None = None,
     recorded_by: str | None = None,
     source: str = "manual",
+    source_ref: str | None = None,
+    needs_capture: bool = False,
+    omitted_kind: str | None = None,
+    shared_urls: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Record a fact on the family timeline (visit, test, transfer, note…)."""
     from uuid import uuid4
@@ -2743,6 +2747,10 @@ def add_patient_care_event(
             "summary_source": summary_source,
             "recorded_by": recorded_by,
             "source": source or "manual",
+            "source_ref": source_ref,
+            "needs_capture": needs_capture,
+            "omitted_kind": omitted_kind,
+            "shared_urls": shared_urls or [],
             "created_at": _now_iso(),
         }
     )
@@ -2791,6 +2799,9 @@ def update_patient_care_event(
         "source_document_title",
         "source_documents",
         "summary_source",
+        "needs_capture",
+        "omitted_kind",
+        "shared_urls",
     }
     for key, value in fields.items():
         if key not in allowed:
@@ -2866,6 +2877,8 @@ def import_patient_care_events(
             )
     added = 0
     skipped = 0
+    capture_needed = 0
+    urls_found = 0
     now = _now_iso()
     for raw in incoming or []:
         incoming_keys = whatsapp_dedupe_keys(
@@ -2884,6 +2897,9 @@ def import_patient_care_events(
         events.append(entry)
         seen |= incoming_keys
         added += 1
+        if entry.get("needs_capture"):
+            capture_needed += 1
+        urls_found += len(entry.get("shared_urls") or [])
     chat_name = next(
         (str(row.get("source_document_title") or "").strip() for row in incoming or [] if row.get("source_document_title")),
         "",
@@ -2899,7 +2915,13 @@ def import_patient_care_events(
             harvest_unscanned_events(patient_id)
         except Exception:
             pass
-    return {"added": added, "skipped": skipped, "total": len(events)}
+    return {
+        "added": added,
+        "skipped": skipped,
+        "total": len(events),
+        "capture_needed": capture_needed,
+        "urls_found": urls_found,
+    }
 
 
 def _normalize_log_tile_label(label: str) -> str:

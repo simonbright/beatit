@@ -412,6 +412,25 @@ def _clean_block(text: Any, limit: int) -> str:
     return out[:limit]
 
 
+def _normalize_shared_urls(raw: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    extra = raw.get("shared_urls")
+    items = extra if isinstance(extra, list) else []
+    for item in items:
+        url = " ".join(str(item or "").split())
+        if not url.lower().startswith("http"):
+            continue
+        key = url.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(url[:500])
+        if len(found) >= 8:
+            break
+    return found
+
+
 def _normalize_source_documents(raw: dict[str, Any]) -> list[dict[str, str]]:
     """One or more Library files attached to a care event. First item is primary."""
     docs: list[dict[str, str]] = []
@@ -461,6 +480,10 @@ def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         occurred = str(raw.get("created_at") or _now_iso())
     source_documents = _normalize_source_documents(raw)
     primary = source_documents[0] if source_documents else {}
+    omitted = _clean(raw.get("omitted_kind"), 20)
+    if omitted not in {"photo", "document", "file", "video"}:
+        omitted = ""
+    needs_capture = bool(raw.get("needs_capture")) and not source_documents
     return {
         "id": event_id,
         "kind": kind,
@@ -477,6 +500,9 @@ def normalize_care_event(raw: dict[str, Any]) -> dict[str, Any] | None:
         "source": _clean(raw.get("source"), 20) or "manual",
         "source_ref": _clean(raw.get("source_ref"), 80) or None,
         "minor": bool(raw.get("minor")),
+        "needs_capture": needs_capture,
+        "omitted_kind": omitted or None,
+        "shared_urls": _normalize_shared_urls(raw),
         "actions_scanned": bool(raw.get("actions_scanned")),
         "readings_scanned": bool(raw.get("readings_scanned")),
         "created_at": str(raw.get("created_at") or _now_iso()),
@@ -623,6 +649,9 @@ def care_event_rows(
                 source_document_title=ev.get("source_document_title"),
                 source_documents=ev.get("source_documents") or [],
                 summary_source=ev.get("summary_source"),
+                needs_capture=bool(ev.get("needs_capture")),
+                omitted_kind=ev.get("omitted_kind") or None,
+                shared_urls=list(ev.get("shared_urls") or []),
                 closeout_actions=[
                     {
                         "id": a.get("id"),
@@ -893,6 +922,7 @@ def plan_rows(care_items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
                     detail=contact,
                     provenance="From the Plan",
                     provenance_type="plan",
+                    care_item_id=item.get("id"),
                 )
             )
         elif status == "open" and item.get("due_at"):
@@ -908,6 +938,7 @@ def plan_rows(care_items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
                     provenance="From the Plan (scheduled, not yet done)",
                     provenance_type="plan",
                     upcoming=True,
+                    care_item_id=item.get("id"),
                 )
             )
         for idx, act in enumerate(item.get("activity") or []):

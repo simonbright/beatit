@@ -4671,6 +4671,8 @@ class PatientCareEventCreateRequest(BaseModel):
     summary: str | None = Field(default=None, max_length=4000)
     source_document_id: str | None = Field(default=None, max_length=80)
     source_document_title: str | None = Field(default=None, max_length=200)
+    needs_capture: bool | None = None
+    shared_urls: list[str] | None = None
     actions: list[VisitActionRequest] | None = None
 
 
@@ -4683,6 +4685,8 @@ class PatientCareEventUpdateRequest(BaseModel):
     summary: str | None = Field(default=None, max_length=4000)
     source_document_id: str | None = Field(default=None, max_length=80)
     source_document_title: str | None = Field(default=None, max_length=200)
+    needs_capture: bool | None = None
+    shared_urls: list[str] | None = None
     actions: list[VisitActionRequest] | None = None
 
 
@@ -5682,6 +5686,180 @@ async def api_import_whatsapp_care_events(patient_id: str, request: Request):
     return await _import_whatsapp_text(
         patient_id, request, text=text, chat_name=chat_name, tz_name=tz_name
     )
+
+
+@router.post("/patients/{patient_id}/care-events/capture")
+async def api_capture_chat_item(patient_id: str, request: Request):
+    """Save a WhatsApp link or photo that a text-only export dropped."""
+    ctx = get_active_context()
+    if ctx.get("patient_id") != patient_id or not ctx.get("case_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Switch to this patient (and a case) first — the file is saved to that case's Library.",
+        )
+    if not any(p["id"] == patient_id for p in list_patients()):
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    event_id = ""
+    url = ""
+    note = ""
+    kind = ""
+    chat_name = ""
+    filename = "chat-photo.jpg"
+    content: bytes | None = None
+    ctype = (request.headers.get("content-type") or "").lower()
+    if ctype.startswith("multipart/"):
+        form = await request.form()
+        event_id = str(form.get("event_id") or "").strip()
+        url = str(form.get("url") or "").strip()
+        note = str(form.get("note") or "").strip()
+        kind = str(form.get("kind") or "").strip()
+        chat_name = str(form.get("chat_name") or "").strip()
+        upload = form.get("file")
+        if upload is not None and hasattr(upload, "read"):
+            content = await upload.read()
+            filename = str(getattr(upload, "filename", "") or filename)
+    else:
+        try:
+            body = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="Paste a link or add a photo") from exc
+        event_id = str(body.get("event_id") or "").strip()
+        url = str(body.get("url") or "").strip()
+        note = str(body.get("note") or "").strip()
+        kind = str(body.get("kind") or "").strip()
+        chat_name = str(body.get("chat_name") or "").strip()
+        raw_b64 = str(body.get("file_base64") or "").strip()
+        filename = str(body.get("filename") or filename).strip() or filename
+        if raw_b64:
+            import base64
+
+            try:
+                content = base64.b64decode(raw_b64, validate=False)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail="Could not read that photo") from exc
+
+    if not url and not content:
+        raise HTTPException(status_code=400, detail="Paste a link or add a photo")
+    if content is not None and len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="That file is too large (max 20 MB)")
+
+    db, store, _, _, _ = await _get_services()
+    actor = _timeline_actor(request)
+    created: list[dict[str, Any]] = []
+    ingest_error = ""
+
+    if content:
+        try:
+            doc = await ingest_pdf_file(
+                store,
+                filename=filename,
+                content=content,
+                title=note or filename or "Photo from chat",
+                content_type=None,
+                defer_heavy=True,
+                metadata={"kind": "whatsapp_capture", "recorded_by": actor},
+            )
+            created.append(doc)
+            await _audit(
+                db,
+                request,
+                DOCUMENT_CREATED,
+                resource_type="document",
+                resource_id=doc["id"],
+                metadata={"title": doc.get("title"), "source_type": doc.get("source_type"), "kind": "whatsapp_capture"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if url:
+        try:
+            doc = await ingest_url(
+                store,
+                url=url,
+                title=note or None,
+                metadata={"kind": "whatsapp_capture", "recorded_by": actor},
+            )
+            created.append(doc)
+            await _audit(
+                db,
+                request,
+                DOCUMENT_CREATED,
+                resource_type="document",
+                resource_id=doc["id"],
+                metadata={"title": doc.get("title"), "source_type": "url", "kind": "whatsapp_capture"},
+            )
+        except Exception as exc:  # noqa: BLE001 — portals often need a login
+            ingest_error = str(exc)[:200]
+
+    profile = get_patient_profile(patient_id)
+    existing = next((e for e in (profile.get("care_events") or []) if e.get("id") == event_id), None)
+    source_documents = list(existing.get("source_documents") or []) if existing else []
+    for doc in created:
+        source_documents.append({"id": doc["id"], "title": doc.get("title") or ""})
+    primary = created[0] if created else None
+    bits = [note]
+    if url and (not existing or url not in str(existing.get("summary") or "")):
+        bits.append(url)
+    extra = "\n".join(b for b in bits if b).strip()
+    event_kind = kind or ("result" if content else "visit")
+    try:
+        if existing:
+            summary = str(existing.get("summary") or "").strip()
+            if extra and extra not in summary:
+                summary = f"{summary}\n{extra}".strip() if summary else extra
+            urls = list(existing.get("shared_urls") or [])
+            if url and url not in urls:
+                urls.append(url)
+            fields: dict[str, Any] = {
+                "summary": summary or extra or "Saved from chat",
+                "needs_capture": False,
+                "shared_urls": urls,
+            }
+            if primary:
+                fields["source_document_id"] = primary["id"]
+                fields["source_document_title"] = primary.get("title")
+                fields["source_documents"] = source_documents
+            if kind:
+                fields["kind"] = event_kind
+            entry = update_patient_care_event(patient_id, event_id, updated_by=actor, **fields)
+        else:
+            entry = add_patient_care_event(
+                patient_id,
+                kind=event_kind,
+                occurred_at=None,
+                summary=extra or (primary or {}).get("title") or "Saved from chat",
+                source_document_id=(primary or {}).get("id"),
+                source_document_title=(primary or {}).get("title") or (chat_name or None),
+                source_documents=source_documents,
+                recorded_by=actor,
+                source="whatsapp" if chat_name else "manual",
+                shared_urls=[url] if url else [],
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Could not save that capture")
+    await _timeline_audit(
+        request,
+        TIMELINE_EVENT_UPDATED if existing else TIMELINE_EVENT_ADDED,
+        resource_type="care_event",
+        resource_id=entry["id"],
+        metadata={
+            "patient_id": patient_id,
+            "kind": entry.get("kind"),
+            "capture": "photo" if content else "url",
+            "document_id": (primary or {}).get("id"),
+        },
+    )
+    payload = await _timeline_payload(patient_id)
+    payload["care_event"] = entry
+    payload["documents"] = [{"id": doc["id"], "title": doc.get("title")} for doc in created]
+    if ingest_error and not created:
+        payload["ingest_warning"] = "Saved the link on the timeline. The page itself needs a login, so it is not in the Library."
+    _queue_family_push(request, patient_id, body=extra or "Saved from chat")
+    return payload
 
 
 class PatientWhatsAppMacImportRequest(BaseModel):

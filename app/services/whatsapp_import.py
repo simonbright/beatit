@@ -32,22 +32,38 @@ SKIP_PATTERNS = (
     "changed the subject",
     "changed this group",
     "changed the group",
-    "<media omitted>",
     "this message was deleted",
     "you deleted this message",
-    "image omitted",
-    "video omitted",
-    "sticker omitted",
-    "gif omitted",
-    "audio omitted",
-    "document omitted",
     "missed voice call",
     "missed video call",
+    "waiting for this message",
+    "contact card omitted",
     "null",
 )
 
+# Text-only exports replace photos and files with these placeholders.
+# Keep them so the family can attach the picture or link afterwards.
+_MEDIA_MARKERS = (
+    ("<media omitted>", "file"),
+    ("image omitted", "photo"),
+    ("video omitted", "video"),
+    ("document omitted", "document"),
+    ("sticker omitted", "sticker"),
+    ("gif omitted", "gif"),
+    ("audio omitted", "audio"),
+)
+_CAPTURE_KINDS = frozenset({"photo", "document", "file", "video"})
+_SKIP_MEDIA_KINDS = frozenset({"audio", "sticker", "gif"})
+_MEDIA_PLACEHOLDERS = {
+    "photo": "Photo shared — not in this text-only export",
+    "document": "File shared — not in this text-only export",
+    "video": "Video shared — not in this text-only export",
+    "file": "Media shared — not in this text-only export",
+}
 
 _EDITED = re.compile(r"\s*<This message was edited>\s*$", re.I)
+_ATTACHED = re.compile(r"<attached:\s*([^>]+)>", re.I)
+_URL = re.compile(r"https?://[^\s<>\]\)\"']+", re.I)
 
 # Words that mark a message as carrying care information rather than chatter.
 _SIGNAL_WORDS = re.compile(
@@ -68,6 +84,67 @@ def is_substantive(text: str) -> bool:
     if len(t) < 12:
         return False
     return bool(_SIGNAL_WORDS.search(t) or re.search(r"\d", t))
+
+
+def extract_shared_urls(text: str) -> list[str]:
+    """http(s) links WhatsApp left in the export (visit summaries, portals)."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for raw in _URL.findall(text or ""):
+        url = raw.rstrip(").,;!?'\"")
+        key = url.casefold()
+        if not url or key in seen:
+            continue
+        seen.add(key)
+        found.append(url)
+        if len(found) >= 8:
+            break
+    return found
+
+
+def _attached_kind(filename: str) -> str | None:
+    name = (filename or "").casefold()
+    if any(tok in name for tok in ("sticker", ".gif", "gif-")):
+        return "gif"
+    if any(tok in name for tok in ("audio", ".opus", ".ogg", ".m4a", ".mp3", ".aac", ".wav")):
+        return "audio"
+    if any(tok in name for tok in ("video", ".mp4", ".mov", ".avi")):
+        return "video"
+    if any(tok in name for tok in (".pdf", ".doc", ".xls", ".ppt", "document")):
+        return "document"
+    if any(tok in name for tok in ("photo", "img", "image", ".jpg", ".jpeg", ".png", ".heic", ".webp")):
+        return "photo"
+    return "file"
+
+
+def split_media_placeholders(text: str) -> tuple[str, str | None, str]:
+    """Strip omitted/attached markers. Returns (remaining text, omitted kind, attached name)."""
+    attached_name = ""
+    omitted: str | None = None
+    cleaned = text or ""
+    for match in _ATTACHED.finditer(cleaned):
+        attached_name = (match.group(1) or "").strip() or attached_name
+        kind = _attached_kind(attached_name)
+        if kind and omitted not in _CAPTURE_KINDS:
+            omitted = kind
+    cleaned = _ATTACHED.sub("", cleaned)
+    low = cleaned.lower()
+    for marker, kind in _MEDIA_MARKERS:
+        if marker in low:
+            if omitted not in _CAPTURE_KINDS:
+                omitted = kind
+            cleaned = re.sub(re.escape(marker), "", cleaned, flags=re.I)
+            low = cleaned.lower()
+    cleaned = "\n".join(line.strip() for line in cleaned.splitlines() if line.strip()).strip()
+    return cleaned, omitted, attached_name
+
+
+def media_placeholder(kind: str, attached_name: str = "") -> str:
+    base = _MEDIA_PLACEHOLDERS.get(kind) or _MEDIA_PLACEHOLDERS["file"]
+    name = " ".join((attached_name or "").split())
+    if name and kind in _CAPTURE_KINDS:
+        return f"{base} ({name[:80]})"
+    return base
 
 
 def _clean_line(line: str) -> str:
@@ -154,20 +231,40 @@ def parse_whatsapp_export(text: str, *, tz_name: str = "America/Toronto") -> lis
         sender = sm.group("sender").strip()
         msg = _EDITED.sub("", sm.group("text")).strip()
         low = msg.lower()
-        if not msg or any(p in low for p in SKIP_PATTERNS) or low.startswith("<attached:"):
+        if not msg or any(p in low for p in SKIP_PATTERNS):
+            continue
+        remaining, omitted, attached_name = split_media_placeholders(msg)
+        urls = extract_shared_urls(msg)
+        if omitted in _SKIP_MEDIA_KINDS and not remaining and not urls:
+            continue
+        if not remaining and not omitted and not urls:
+            continue
+        if omitted in _SKIP_MEDIA_KINDS:
+            omitted = None
+        needs_capture = bool(omitted in _CAPTURE_KINDS and not urls)
+        if remaining:
+            text = remaining
+        elif urls:
+            text = urls[0]
+        elif omitted in _CAPTURE_KINDS:
+            text = media_placeholder(omitted or "file", attached_name)
+        else:
             continue
         dt = _parse_dt(m.group("date"), m.group("time"), order, tz)
         if not dt:
             continue
         iso = dt.isoformat()
-        ref = whatsapp_fingerprint(sender, iso, msg)
+        ref = whatsapp_fingerprint(sender, iso, text)
         messages.append(
             {
                 "sender": sender,
                 "sent_at": iso,
-                "text": msg,
+                "text": text,
                 "ref": ref,
-                "substantive": is_substantive(msg),
+                "substantive": is_substantive(text) or bool(urls) or needs_capture,
+                "needs_capture": needs_capture,
+                "omitted_kind": omitted if needs_capture else None,
+                "shared_urls": urls,
             }
         )
     return messages
@@ -218,6 +315,7 @@ def whatsapp_dedupe_keys(sender: str, sent_at: str, text: str, *, source_ref: st
 def messages_to_care_events(messages: list[dict[str, Any]], *, chat_name: str = "") -> list[dict[str, Any]]:
     events = []
     for msg in messages:
+        urls = [u for u in (msg.get("shared_urls") or []) if isinstance(u, str) and u.strip()][:8]
         events.append(
             {
                 "kind": "family_update",
@@ -229,6 +327,9 @@ def messages_to_care_events(messages: list[dict[str, Any]], *, chat_name: str = 
                 "source_ref": f"wa:{msg['ref']}",
                 "source_document_title": chat_name or None,
                 "minor": not msg.get("substantive", True),
+                "needs_capture": bool(msg.get("needs_capture")),
+                "omitted_kind": msg.get("omitted_kind") or None,
+                "shared_urls": urls,
             }
         )
     return events

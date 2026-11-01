@@ -86,6 +86,42 @@ def test_iphone_utf16_and_raw_zip_bytes():
     assert "catheter" in text_from_export_bytes(buf.getvalue())
 
 
+TEXT_ONLY_EXPORT = """[2026-10-31, 2:14:22 PM] Dov Brightman: https://hospital.example/visit-summary
+<Media omitted>
+[2026-10-31, 2:15:01 PM] Dov Brightman: image omitted
+[2026-10-31, 2:16:00 PM] YS: thanks
+[2026-10-31, 2:17:10 PM] Dov Brightman: <attached: 00001234-PHOTO-2026-10-31-14-17-10.jpg>
+[2026-10-31, 2:18:00 PM] Dov Brightman: <attached: 00003076-AUDIO-2026-10-31-14-18-00.opus>
+"""
+
+
+def test_text_only_export_keeps_url_and_photo_stubs():
+    msgs = parse_whatsapp_export(TEXT_ONLY_EXPORT)
+    texts = [m["text"] for m in msgs]
+    assert any("hospital.example/visit-summary" in t for t in texts)
+    photo = next(m for m in msgs if m.get("needs_capture") and "PHOTO" in m["text"])
+    assert photo["omitted_kind"] == "photo"
+    assert photo["sender"] == "Dov Brightman"
+    omitted = [m for m in msgs if m.get("needs_capture")]
+    assert len(omitted) == 2  # image omitted + attached photo
+    assert all(m["sender"] != "Dov Brightman" or "AUDIO" not in m["text"] for m in msgs)
+    url_msg = next(m for m in msgs if m.get("shared_urls"))
+    assert url_msg["shared_urls"][0].startswith("https://hospital.example/")
+    assert url_msg.get("needs_capture") is False  # link preview image is not a missing photo
+
+
+def test_import_capture_needed_count(patient):
+    events = messages_to_care_events(parse_whatsapp_export(TEXT_ONLY_EXPORT), chat_name="Susan Health")
+    result = case_manager.import_patient_care_events(patient, events)
+    assert result["capture_needed"] == 2
+    assert result["urls_found"] >= 1
+    profile = case_manager.get_patient_profile(patient)
+    stubs = [e for e in profile["care_events"] if e.get("needs_capture")]
+    assert all(e["source"] == "whatsapp" for e in stubs)
+    linked = next(e for e in profile["care_events"] if e.get("shared_urls"))
+    assert "hospital.example" in linked["summary"]
+
+
 def test_import_is_idempotent(patient):
     events = messages_to_care_events(parse_whatsapp_export(IOS_EXPORT), chat_name="Susan Health Updates")
     first = case_manager.import_patient_care_events(patient, events)
@@ -143,6 +179,9 @@ def test_manual_event_and_timeline_merge(patient):
     visit = next(r for r in rows if r["kind"] == "visit")
     assert visit["provenance"] == "Recorded by simon"
     assert visit["editable"] is True
+    plan = next(r for r in rows if r["kind"] == "plan_due")
+    assert plan["care_item_id"] == "c1"
+    assert plan["title"] == "CT abdomen"
     team = build_care_team(profile["care_events"])
     assert team[0]["name"] == "Dr. Gupta" and team[0]["contacts"] == 1
 

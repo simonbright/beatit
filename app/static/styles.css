@@ -8774,6 +8774,17 @@ body.app-updating-active {
 .timeline-card { margin-bottom: 1rem; }
 .timeline-head { gap: 0.75rem; align-items: flex-start; }
 .timeline-head-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.tl-add-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.55rem 0 0.85rem;
+}
+.tl-add-menu.hidden { display: none; }
+.tl-add-menu .btn {
+  flex: 1 1 8.5rem;
+  min-height: 2.6rem;
+}
 .push-prompt {
   display: flex;
   flex-wrap: wrap;
@@ -8818,6 +8829,27 @@ body.app-updating-active {
   font-size: 1rem;
 }
 .timeline-import-stack .btn { width: 100%; }
+.tl-capture-missing { display: flex; flex-direction: column; gap: 0.65rem; margin-top: 0.85rem; }
+.tl-capture-missing h5 { margin: 0.15rem 0 0; font-size: 0.86rem; }
+.tl-capture-card {
+  padding: 0.7rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.tl-capture-card p { margin: 0 0 0.35rem; }
+.tl-capture-card-actions,
+.tl-capture-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+#btn-timeline-capture.is-capture-needed {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
 .timeline-update-text {
   width: 100%;
   box-sizing: border-box;
@@ -9701,10 +9733,23 @@ body.app-updating-active {
   font-size: 0.78rem;
   font-weight: 650;
 }
+.tl-action-add-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+.tl-action-add.is-editing {
+  padding: 0.7rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
 @media (max-width: 720px) {
   .tl-action-add { grid-template-columns: 1fr 1fr; }
   .tl-action-add-who,
-  .tl-action-add #btn-tl-action-add { grid-column: 1 / -1; }
+  .tl-action-add .tl-action-add-actions { grid-column: 1 / -1; }
 }
 @media (min-width: 721px) {
   .tl-filters-fold { display: none !important; }
